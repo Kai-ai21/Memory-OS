@@ -1,3 +1,5 @@
+name: memoryos
+
 services:
   postgres:
     image: pgvector/pgvector:pg17
