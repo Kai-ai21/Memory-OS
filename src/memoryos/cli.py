@@ -24,6 +24,8 @@ from memoryos.application.backfill import (
     find_unembedded,
     gather_stats,
 )
+from memoryos.application.evaluation import format_table, measure_recall
+from memoryos.application.ports import SearchFilters
 from memoryos.application.rechunk import enqueue_rechunk, find_stale
 from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
@@ -162,6 +164,75 @@ async def run_embed(
     return 0
 
 
+async def run_search(
+    settings: Settings, *, query: str, k: int, source: str | None, exact: bool
+) -> int:
+    container = Container.build(settings)
+    try:
+        filters = SearchFilters()
+        if source is not None:
+            async with container.database.session_factory() as session:
+                source_ids = list(
+                    (
+                        await session.execute(
+                            select(models.Source.id).where(models.Source.name == source)
+                        )
+                    ).scalars()
+                )
+            if not source_ids:
+                print(f"no source named {source!r}")
+                return 1
+            filters = SearchFilters(source_ids=source_ids)
+
+        result = await container.search()(query, k=k, filters=filters, exact=exact)
+
+        mode = "exact" if exact else f"ann (ef_search={settings.hnsw_ef_search})"
+        print(f'query: {result.query!r}   [{mode}]')
+        print(
+            f"timing: embed {result.timing.embed_ms}ms  "
+            f"search {result.timing.search_ms}ms  total {result.timing.total_ms}ms\n"
+        )
+        if not result.hits:
+            print("no results")
+        for rank, hit in enumerate(result.hits, start=1):
+            best = max(hit.matched_chunks, key=lambda chunk: chunk.score)
+            excerpt = " ".join(best.text.split())[:160]
+            print(f"{rank}. {hit.score:.4f}  {hit.external_key}")
+            print(f"     chunks matched: {len(hit.matched_chunks)}  best: #{best.ordinal}")
+            print(f"     {excerpt}\n")
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_eval_recall(
+    settings: Settings, *, queries: int, k: int, ef_search_values: list[int]
+) -> int:
+    container = Container.build(settings)
+    try:
+        rows = await measure_recall(
+            container.database.session_factory,
+            container.embedder,
+            container.vectors,
+            queries=queries,
+            k=k,
+            ef_search_values=ef_search_values,
+        )
+        if not rows:
+            print("no embedded chunks to evaluate")
+            return 1
+        print(f"queries: {rows[0].queries}   k: {k}\n")
+        print(format_table(rows, k))
+        print(
+            "\nself@1 is the fraction of queries where the chunk used as the query "
+            "came back first;\nanything well below 1.0 points at the pipeline, not the "
+            "index."
+        )
+    finally:
+        await container.dispose()
+    return 0
+
+
 async def run_stats(settings: Settings) -> int:
     container = Container.build(settings)
     try:
@@ -273,6 +344,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     commands.add_parser("stats", help="report corpus and embedding coverage")
+
+    search = commands.add_parser("search", help="semantic search over memories")
+    search.add_argument("query")
+    search.add_argument("-k", type=int, default=10, help="how many memories to return")
+    search.add_argument("--source", help="limit to one source by name")
+    search.add_argument(
+        "--exact",
+        action="store_true",
+        help="sequential scan instead of the index, for spot-checking what it missed",
+    )
+
+    evaluate = commands.add_parser(
+        "eval-recall", help="measure index recall against an exhaustive scan"
+    )
+    evaluate.add_argument("--queries", type=int, default=50)
+    evaluate.add_argument("-k", "--k", dest="k", type=int, default=10)
+    evaluate.add_argument(
+        "--ef-search",
+        dest="ef_search",
+        default="40,100,200,400",
+        help="comma-separated ef_search values to compare",
+    )
     return parser
 
 
@@ -313,6 +406,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "stats":
         return asyncio.run(run_stats(settings))
+
+    if args.command == "search":
+        return asyncio.run(
+            run_search(
+                settings,
+                query=args.query,
+                k=args.k,
+                source=args.source,
+                exact=args.exact,
+            )
+        )
+
+    if args.command == "eval-recall":
+        values = [int(value) for value in args.ef_search.split(",") if value.strip()]
+        return asyncio.run(
+            run_eval_recall(settings, queries=args.queries, k=args.k, ef_search_values=values)
+        )
 
     if args.command == "rechunk":
         return asyncio.run(

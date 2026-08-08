@@ -274,3 +274,52 @@ class EmbeddingCache(Protocol):
     async def get_many(self, keys: Sequence[str]) -> dict[str, list[float]]: ...
 
     async def put_many(self, entries: Sequence[CacheEntry]) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SearchFilters:
+    source_ids: Sequence[UUID] | None = None
+    kinds: Sequence[MemoryKind] | None = None
+    occurred_after: datetime | None = None
+    occurred_before: datetime | None = None
+    # Off by default. A tombstoned memory's chunks resurfacing in results is
+    # the exact failure the ON DELETE CASCADE and the deletion guardrail exist
+    # to prevent.
+    include_deleted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ScoredChunk:
+    chunk_id: UUID
+    memory_id: UUID
+    ordinal: int
+    text: str
+    # Similarity, higher is better, in [0, 1] for unit vectors. pgvector's
+    # `<#>` returns *negative* inner product, so the adapter negates it. A sign
+    # error here returns the least similar chunks and looks entirely plausible
+    # until somebody reads the results.
+    score: float
+    char_start: int
+    char_end: int
+
+
+class VectorStore(Protocol):
+    async def search(
+        self,
+        vector: Sequence[float],
+        *,
+        k: int,
+        filters: SearchFilters,
+        ef_search: int | None = None,
+    ) -> list[ScoredChunk]: ...
+
+    async def search_exact(
+        self, vector: Sequence[float], *, k: int, filters: SearchFilters
+    ) -> list[ScoredChunk]:
+        """Sequential scan, bypassing the index.
+
+        Ground truth for recall measurement, and nothing else. There is no way
+        to know what the approximate index traded away without something
+        exhaustive to compare it against.
+        """
+        ...

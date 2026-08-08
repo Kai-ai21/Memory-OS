@@ -11,6 +11,7 @@ from memoryos.adapters.connectors.filesystem import FilesystemConnector
 from memoryos.adapters.db.embedding_cache import PostgresEmbeddingCache
 from memoryos.adapters.db.engine import Database
 from memoryos.adapters.db.job_queue import PostgresJobQueue
+from memoryos.adapters.db.vector_store import PgVectorStore
 from memoryos.adapters.embedding.sentence_transformers import (
     SentenceTransformerEmbedder,
     build_embedder,
@@ -21,6 +22,7 @@ from memoryos.application.embed import EmbedMemory
 from memoryos.application.jobs.handlers import build_default_registry
 from memoryos.application.jobs.registry import HandlerRegistry
 from memoryos.application.normalize import NormalizeMemory
+from memoryos.application.search import SearchMemories
 from memoryos.application.sync import SyncSource
 from memoryos.config import Settings
 
@@ -35,11 +37,13 @@ class Container:
     parsers: ParserRegistry
     embedder: SentenceTransformerEmbedder
     cache: PostgresEmbeddingCache
+    vectors: PgVectorStore
 
     @classmethod
     def build(cls, settings: Settings) -> "Container":
         database = Database.from_url(settings.database_url, echo=settings.db_echo)
         blobs = FilesystemBlobStore(settings.blob_root)
+        embedder = build_embedder(settings)
         return cls(
             settings=settings,
             database=database,
@@ -47,8 +51,13 @@ class Container:
             connector=FilesystemConnector(blobs),
             queue=PostgresJobQueue(database.session_factory),
             parsers=build_parser_registry(),
-            embedder=build_embedder(settings),
+            embedder=embedder,
             cache=PostgresEmbeddingCache(database.session_factory),
+            vectors=PgVectorStore(
+                database.session_factory,
+                embedder,
+                default_ef_search=settings.hnsw_ef_search,
+            ),
         )
 
     def registry(self) -> HandlerRegistry:
@@ -66,6 +75,9 @@ class Container:
 
     def normalize(self) -> NormalizeMemory:
         return NormalizeMemory(self.database.session_factory, self.blobs, self.parsers)
+
+    def search(self) -> SearchMemories:
+        return SearchMemories(self.database.session_factory, self.embedder, self.vectors)
 
     def embed(self) -> EmbedMemory:
         return EmbedMemory(

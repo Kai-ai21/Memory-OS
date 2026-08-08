@@ -6,15 +6,15 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 
 ## Status
 
-**Phase 1, Milestone 1.5 — embedding pipeline.**
+**Phase 1, Milestone 1.6 — vector store and search.**
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, and splits
 that text into chunks sized for an embedding model.
 
-Chunks now carry real vectors from a local sentence-transformers model, batched and cached.
-There is no vector index and no search endpoint yet — that is M1.6, and until then a query is
-a sequential scan.
+Chunks carry real vectors, an HNSW index sits over them, and `/search` returns memories with
+the chunks that matched. Semantic search only — BM25, fusion, reranking, and synthesis are
+Phase 2.
 
 ## Architecture
 
@@ -171,6 +171,38 @@ make test-slow    # the one test that loads the real model
 That test is the only thing standing between this pipeline and one that fills the column with
 plausible-looking garbage: every other test runs against a deterministic fake, which cannot
 tell you whether the vectors mean anything.
+
+## Search
+
+```bash
+memoryos search "how does the job queue claim work" -k 5
+memoryos search "..." --exact          # sequential scan, to see what the index missed
+memoryos eval-recall --queries 50 --ef-search 40,100,200,400
+```
+
+```
+GET  /search?q=...&k=10&source=NAME&kind=note&after=...&before=...
+POST /search                            # same, for long queries
+```
+
+Chunks are what match; memories are what come back, each carrying the chunks that matched it.
+A memory scores as its **best** chunk, not its mean — a long document with one perfectly
+relevant paragraph should outrank a short one that is vaguely on-topic throughout. Ties break
+on the mean.
+
+The index uses `vector_ip_ops` because the embedder normalizes: for unit vectors, inner
+product and cosine similarity are the same number and inner product skips a division. The
+adapter refuses to construct against a non-normalizing embedder, because that combination does
+not error — it silently ranks wrongly.
+
+`ef_search` is set with `SET LOCAL` per query. A session-level `SET` would ride the pooled
+connection into every later query on it.
+
+**Measure before tuning.** `eval-recall` samples chunks, uses each as its own query, and
+compares the index against an exhaustive scan across several `ef_search` values. Measured on a
+20,000-chunk corpus: recall@10 rises 0.94 → 1.00 as `ef_search` goes 40 → 400, and p50 latency
+rises 2.2ms → 6.3ms. Below roughly 2,000 chunks Postgres correctly ignores the index
+altogether and scans, so the numbers there say nothing about HNSW.
 
 ## Migrations
 

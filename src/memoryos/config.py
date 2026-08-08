@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     hf_home: Path = Path("./var/hf")
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_batch_size: int = 32
+    # HNSW search width per query. Higher recall, higher latency; measured
+    # rather than guessed by `memoryos eval-recall`.
+    hnsw_ef_search: int = 100
     log_level: str = "INFO"
     log_json: bool = False
 
