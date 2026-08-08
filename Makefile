@@ -2,7 +2,7 @@
 
 up:        ; docker compose up -d
 down:      ; docker compose down
-install:   ; pip install -e ".[dev]"
+install:   ; uv sync --frozen --extra dev
 test:      ; pytest
 test-unit: ; pytest -m "not integration"
 lint:      ; ruff check .

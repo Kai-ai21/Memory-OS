@@ -11,6 +11,9 @@ dependencies = [
   "uvicorn[standard]>=0.32",
   "sqlalchemy[asyncio]>=2.0.36",
   "asyncpg>=0.30",
+  "alembic>=1.14",
+  "pgvector>=0.3.6",
+  "uuid-utils>=0.10",
   "pydantic>=2.9",
   "pydantic-settings>=2.6",
   "structlog>=24.4",
@@ -37,17 +40,9 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "ANN"]
 ignore = ["ANN401"]
 
 [tool.ruff.lint.per-file-ignores]
-# SIM117: the client fixture enters lifespan_context as a separate, deliberate step.
-"tests/*" = ["ANN", "SIM117"]
+"tests/*" = ["ANN"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src", "tests"]
-
-# Mirrors the ruff ANN exemption above: test signatures need not be annotated.
-# Bodies are still type-checked, since strict leaves check_untyped_defs on.
-[[tool.mypy.overrides]]
-module = "tests.*"
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
+files = ["src", "tests", "migrations"]
