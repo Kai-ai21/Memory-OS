@@ -11,6 +11,9 @@ dependencies = [
   "uvicorn[standard]>=0.32",
   "sqlalchemy[asyncio]>=2.0.36",
   "asyncpg>=0.30",
+  "alembic>=1.14",
+  "pgvector>=0.3.6",
+  "uuid-utils>=0.10",
   "pydantic>=2.9",
   "pydantic-settings>=2.6",
   "structlog>=24.4",
@@ -42,4 +45,4 @@ ignore = ["ANN401"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "migrations"]

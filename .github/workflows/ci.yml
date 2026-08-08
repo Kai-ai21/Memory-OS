@@ -29,7 +29,9 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
       - run: uv sync --frozen --extra dev
-      - run: psql "postgresql://memos:memos@localhost:5432/memos" -c "CREATE EXTENSION IF NOT EXISTS vector;"
+      # The initial migration creates the `vector` extension, so this is also
+      # what installs it for the readiness check.
+      - run: uv run alembic upgrade head
       - run: uv run ruff check .
       - run: uv run mypy
       - run: uv run pytest
