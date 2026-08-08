@@ -6,14 +6,14 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 
 ## Status
 
-**Phase 1, Milestone 1.3 — filesystem connector.**
+**Phase 1, Milestone 1.4 — normalization and chunking.**
 
-Point it at a directory and it walks the tree, hashes every file, stores the bytes in a
-content-addressed blob store, records artifacts and ingestion events, creates or versions
-memories, detects deletions on a full sweep, and enqueues follow-up work.
+Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
+artifacts and events, versions memories, parses each artifact into normalized text, and splits
+that text into chunks sized for an embedding model.
 
-It does not parse, chunk, or embed. Those are M1.4 and M1.5, and the follow-up job it enqueues
-is a logging stub until then.
+It does not embed. Chunks land with `embedding IS NULL` and a `chunker_version` stamp; M1.5
+fills the vectors.
 
 ## Architecture
 
@@ -93,6 +93,44 @@ Three mechanics carry the design:
 
 Retries back off exponentially with jitter. The jitter is not decoration: without it, a
 thousand jobs that failed together retry together, and keep a recovering dependency down.
+
+## Normalization and chunking
+
+Every artifact is parsed into one shape — plain text, a title, metadata, and the structural
+markers the format already carried — so nothing downstream needs a branch per file type.
+Markdown contributes headings, Python contributes top-level definitions via `ast`, PDFs
+contribute page boundaries.
+
+Text is then normalized: NFC, LF line endings, no trailing whitespace, runs of blank lines
+collapsed, leading BOM removed. **`normalized_hash` is the second hash level and the point of
+the whole step.** A file saved with CRLF endings is genuinely different bytes, so it is
+genuinely a new artifact and a new memory version — but its normalized text is identical, so
+its existing chunks simply move to the new version. No re-chunking, and in M1.5 no
+re-embedding, because the vectors travel with the rows.
+
+Chunking splits on structure first, because the author already said where the topic changes.
+Oversized sections are filled sentence-aware; undersized ones merge with their neighbour; each
+chunk carries an overlap prefix from the one before it, because boundaries are arbitrary and a
+concept spanning one would otherwise appear in neither chunk in full. `char_start`/`char_end`
+index exactly into the stored text, which is what will let a citation highlight the matched
+span.
+
+**Code is special-cased**: it splits only on definition boundaries and never mid-function, even
+when that leaves a chunk over the ceiling. Half a function embeds as neither a function nor a
+coherent statement; size variance is the lesser cost.
+
+The chunker version encodes its parameters:
+
+```
+structural-v1:target=640:overlap=80:min=120:max=1024
+```
+
+which makes improving the chunker a query rather than a corpus rebuild:
+
+```bash
+memoryos rechunk --dry-run          # what is stale?
+memoryos rechunk --source notes     # enqueue those, and only those
+```
 
 ## Migrations
 

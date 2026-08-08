@@ -5,7 +5,10 @@ from uuid import UUID
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from memoryos.adapters.blobs.filesystem import BlobNotFound
+from memoryos.adapters.parsers.registry import build_default_registry as build_parser_registry
 from memoryos.application.jobs.registry import Handler, HandlerRegistry, JobContext
+from memoryos.application.normalize import NormalizeMemory
 from memoryos.application.ports import BlobStore, Connector
 from memoryos.application.sync import SyncSource
 from memoryos.domain.jobs import JobType, PermanentError, TransientError
@@ -13,18 +16,40 @@ from memoryos.domain.jobs import JobType, PermanentError, TransientError
 logger = structlog.get_logger(__name__)
 
 
-async def handle_normalize_memory(ctx: JobContext) -> None:
-    """A stub until M1.4.
+async def handle_embed_memory(ctx: JobContext) -> None:
+    """A stub until M1.5.
 
-    It exists now so the connector's enqueue path is exercised end to end —
-    memory and job committing together, dedupe holding, the worker claiming and
-    completing it — without dragging normalization into this milestone.
+    Chunks land with `embedding IS NULL`; this is what will fill them. It is
+    enqueued now so the normalize-to-embed wiring is exercised end to end
+    without pulling embeddings into this milestone.
     """
     logger.info(
-        "normalize.stub",
-        job_id=str(ctx.job.id),
-        memory_id=ctx.job.payload.get("memory_id"),
+        "embed.stub", job_id=str(ctx.job.id), memory_id=ctx.job.payload.get("memory_id")
     )
+
+
+def make_normalize_handler(
+    session_factory: async_sessionmaker[AsyncSession], blob_store: BlobStore
+) -> Handler:
+    """Build the `NORMALIZE_MEMORY` handler."""
+
+    normalize = NormalizeMemory(session_factory, blob_store, build_parser_registry())
+
+    async def handle_normalize_memory(ctx: JobContext) -> None:
+        raw_id = ctx.job.payload.get("memory_id")
+        if not raw_id:
+            raise PermanentError("normalize_memory job has no memory_id in its payload")
+
+        try:
+            report = await normalize(UUID(str(raw_id)))
+        except BlobNotFound as exc:
+            # The artifact row promises bytes that are not in the store. That
+            # is a broken invariant, not a passing failure.
+            raise PermanentError(f"blob missing for memory {raw_id}: {exc}") from exc
+
+        logger.info("normalize.job_finished", job_id=str(ctx.job.id), **report.as_dict())
+
+    return handle_normalize_memory
 
 
 def make_sync_handler(
@@ -79,16 +104,21 @@ def build_default_registry(
 ) -> HandlerRegistry:
     """The registry a worker runs with.
 
-    `SYNC_SOURCE` needs collaborators the test types do not, so it is only
-    registered when they are supplied. A worker built without them simply has
-    no handler for that type, and the worker already treats an unregistered
-    type as permanent rather than retrying forever.
+    `SYNC_SOURCE` and `NORMALIZE_MEMORY` need collaborators the test types do
+    not, so they are only registered when those are supplied. A worker built
+    without them simply has no handler for that type, and the worker already
+    treats an unregistered type as permanent rather than retrying forever.
     """
     registry = HandlerRegistry()
     registry.register(JobType.NOOP, handle_noop)
     registry.register(JobType.FAIL_TRANSIENT, handle_fail_transient)
     registry.register(JobType.FAIL_PERMANENT, handle_fail_permanent)
-    registry.register(JobType.NORMALIZE_MEMORY, handle_normalize_memory)
+    registry.register(JobType.EMBED_MEMORY, handle_embed_memory)
+
+    if session_factory is not None and blob_store is not None:
+        registry.register(
+            JobType.NORMALIZE_MEMORY, make_normalize_handler(session_factory, blob_store)
+        )
 
     if session_factory is not None and connector is not None and blob_store is not None:
         registry.register(

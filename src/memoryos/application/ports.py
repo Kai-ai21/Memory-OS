@@ -12,7 +12,7 @@ from uuid import UUID
 
 from memoryos.domain.entities import IngestionEvent, Memory, RawArtifact, Source
 from memoryos.domain.jobs import Job, JobSpec
-from memoryos.domain.values import ContentHash, SourceKind, TimeProvenance
+from memoryos.domain.values import ContentHash, MemoryKind, SourceKind, TimeProvenance
 
 
 class SourceRepository(Protocol):
@@ -151,3 +151,68 @@ class Connector(Protocol):
         memory flat whether there are fifty files or five hundred thousand.
         """
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class StructureMarker:
+    """A place in the text where the author signalled a boundary."""
+
+    # "heading" | "code_block" | "definition"
+    kind: str
+    # Heading depth, or 0 where depth is meaningless.
+    level: int
+    char_offset: int
+    label: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedDocument:
+    """One format's content, expressed the way every format expresses it.
+
+    Everything downstream is format-blind. That is what stops the pipeline
+    growing a branch per file type, and it is why the chunker can be written
+    once rather than once per parser.
+    """
+
+    text: str
+    title: str | None
+    metadata: dict[str, Any]
+    # What the parser already knew about where topics change. Without it the
+    # chunker is guessing at boundaries somebody had already marked.
+    structure: list[StructureMarker]
+    kind: MemoryKind = MemoryKind.OTHER
+
+
+class Parser(Protocol):
+    def can_parse(self, media_type: str | None, external_key: str) -> bool: ...
+
+    def parse(
+        self, data: bytes, *, media_type: str | None, external_key: str
+    ) -> ParsedDocument: ...
+
+
+@dataclass(frozen=True, slots=True)
+class TextChunk:
+    """A retrievable span, with offsets into the document it came from."""
+
+    ordinal: int
+    text: str
+    char_start: int
+    char_end: int
+    token_count: int
+
+
+class Chunker(Protocol):
+    @property
+    def version(self) -> str:
+        """Identifies the algorithm *and its parameters*.
+
+        Encoding the parameters is what turns "improve the chunker" into a
+        query — select the memories whose chunks carry the old version and
+        re-chunk only those — instead of a full corpus rebuild. It also means
+        that six months from now, a stamp on a chunk that retrieved badly says
+        exactly what produced it.
+        """
+        ...
+
+    def chunk(self, doc: ParsedDocument) -> list[TextChunk]: ...
