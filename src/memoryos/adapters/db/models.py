@@ -135,9 +135,10 @@ class IngestionEvent(Base):
     __tablename__ = "ingestion_events"
 
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
-    # Replay order. BY DEFAULT rather than ALWAYS so a replay or an import can
-    # supply its own sequence when reconstructing the log.
-    seq: Mapped[int] = mapped_column(BigInteger, Identity(always=False), nullable=False)
+    # Replay order, and the database's alone to assign. Replay reads these
+    # events to rebuild projections; it never re-inserts them, so nothing has a
+    # legitimate reason to supply its own sequence.
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(always=True), nullable=False)
     # Today's events will still be replayed after the payload shape changes.
     schema_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
     event_type: Mapped[str] = mapped_column(Text, nullable=False)
@@ -168,6 +169,13 @@ class IngestionEvent(Base):
         _enum_check("event_type", EventType, "ck_ingestion_events_event_type"),
         _enum_check(
             "occurred_at_source", TimeProvenance, "ck_ingestion_events_occurred_at_source"
+        ),
+        # The same pairing `memories` enforces. The system never fabricates a
+        # timestamp anywhere. A deletion event carrying 'unknown' is correct: we
+        # know when we noticed the absence (recorded_at), not when it happened.
+        CheckConstraint(
+            "(occurred_at IS NULL) = (occurred_at_source = 'unknown')",
+            name="ck_ingestion_events_occurred_at_provenance",
         ),
         Index("ix_ingestion_events_source_id_external_key", "source_id", "external_key"),
         Index("ix_ingestion_events_recorded_at", "recorded_at"),
@@ -278,6 +286,9 @@ class MemoryChunk(Base):
 
     __table_args__ = (
         UniqueConstraint("memory_id", "ordinal", name="uq_memory_chunks_memory_ordinal"),
+        CheckConstraint(
+            f"content_hash ~ '{HEX64_PATTERN}'", name="ck_memory_chunks_content_hash_hex"
+        ),
         CheckConstraint("ordinal >= 0", name="ck_memory_chunks_ordinal_non_negative"),
         CheckConstraint("token_count > 0", name="ck_memory_chunks_token_count_positive"),
         CheckConstraint("char_start >= 0", name="ck_memory_chunks_char_start_non_negative"),
