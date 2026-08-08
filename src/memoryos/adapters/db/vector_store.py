@@ -17,7 +17,12 @@ logger = structlog.get_logger(__name__)
 # filter or filter-then-scan depending on how selective it believes the
 # predicates are; in the first case a restrictive filter can leave far fewer
 # than `k` rows standing.
-OVER_FETCH = 4
+#
+# 2x rather than 4x: the search use case already asks for k*5 chunks to get k
+# memories, so the two multipliers compound. At 4x a k=100 request scanned
+# 2,000 candidates; at 2x it scans 1,000. The warning below is what catches
+# the case where 2x was not enough.
+OVER_FETCH = 2
 
 
 class NotNormalized(RuntimeError):

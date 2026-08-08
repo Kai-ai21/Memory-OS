@@ -7,6 +7,7 @@ run against the same wiring rather than three slightly different versions of it.
 from dataclasses import dataclass
 
 from memoryos.adapters.blobs.filesystem import FilesystemBlobStore
+from memoryos.adapters.chunking.structural import StructuralChunker
 from memoryos.adapters.connectors.filesystem import FilesystemConnector
 from memoryos.adapters.db.embedding_cache import PostgresEmbeddingCache
 from memoryos.adapters.db.engine import Database
@@ -22,6 +23,7 @@ from memoryos.application.embed import EmbedMemory
 from memoryos.application.jobs.handlers import build_default_registry
 from memoryos.application.jobs.registry import HandlerRegistry
 from memoryos.application.normalize import NormalizeMemory
+from memoryos.application.ports import Chunker, Embedder
 from memoryos.application.search import SearchMemories
 from memoryos.application.sync import SyncSource
 from memoryos.config import Settings
@@ -38,12 +40,16 @@ class Container:
     embedder: SentenceTransformerEmbedder
     cache: PostgresEmbeddingCache
     vectors: PgVectorStore
+    chunker: StructuralChunker
 
     @classmethod
     def build(cls, settings: Settings) -> "Container":
         database = Database.from_url(settings.database_url, echo=settings.db_echo)
         blobs = FilesystemBlobStore(settings.blob_root)
         embedder = build_embedder(settings)
+        # Sized from the model's real window, not from a number somebody chose.
+        chunker = StructuralChunker(embedder)
+        _assert_window_alignment(chunker, embedder)
         return cls(
             settings=settings,
             database=database,
@@ -53,6 +59,7 @@ class Container:
             parsers=build_parser_registry(),
             embedder=embedder,
             cache=PostgresEmbeddingCache(database.session_factory),
+            chunker=chunker,
             vectors=PgVectorStore(
                 database.session_factory,
                 embedder,
@@ -67,6 +74,7 @@ class Container:
             blob_store=self.blobs,
             embedder=self.embedder,
             cache=self.cache,
+            chunker=self.chunker,
             batch_size=self.settings.embedding_batch_size,
         )
 
@@ -74,7 +82,9 @@ class Container:
         return SyncSource(self.database.session_factory, self.connector, self.blobs)
 
     def normalize(self) -> NormalizeMemory:
-        return NormalizeMemory(self.database.session_factory, self.blobs, self.parsers)
+        return NormalizeMemory(
+            self.database.session_factory, self.blobs, self.parsers, self.chunker
+        )
 
     def search(self) -> SearchMemories:
         return SearchMemories(self.database.session_factory, self.embedder, self.vectors)
@@ -89,3 +99,28 @@ class Container:
 
     async def dispose(self) -> None:
         await self.database.dispose()
+
+
+class WindowMisalignment(RuntimeError):
+    """Chunks can be larger than the model will read."""
+
+
+def _assert_window_alignment(chunker: Chunker, embedder: Embedder) -> None:
+    """Refuse to start if chunks could exceed what the model reads.
+
+    The most important line in this milestone. Parameters drift, models get
+    swapped, and neither the chunker nor the embedder complains when they stop
+    agreeing — the text past the window is simply discarded, silently, and
+    retrieval degrades in a way that looks like a model quality problem.
+
+    An assertion does not drift. A future swap to a smaller-window model breaks
+    the build instead.
+    """
+    if chunker.max_tokens > embedder.max_sequence_tokens:
+        raise WindowMisalignment(
+            f"chunker produces up to {chunker.max_tokens} tokens but "
+            f"{embedder.model_id} reads only {embedder.max_sequence_tokens}. "
+            f"Everything past the window would be discarded before embedding. "
+            f"Size the chunker from the model: "
+            f"ChunkerConfig.for_window({embedder.max_sequence_tokens})."
+        )

@@ -9,11 +9,14 @@ exactly what the one slow test exists to check.
 
 import hashlib
 import math
+import re
 from collections.abc import Sequence
 
 from memoryos.application.ports import Embedder
 
 FAKE_MODEL_ID = "fake/deterministic@1"
+
+_TOKEN = re.compile(r"\w+|[^\w\s]")
 
 
 class FakeEmbedder(Embedder):
@@ -31,9 +34,13 @@ class FakeEmbedder(Embedder):
         dimension: int = 384,
         *,
         broken_dimension: int | None = None,
+        max_sequence_tokens: int = 512,
     ) -> None:
         self._model_id = model_id
         self._dimension = dimension
+        # Configurable so tests can drive the window boundary — including a
+        # deliberately tiny one — without loading a model.
+        self._window = max_sequence_tokens
         # When set, `embed` returns vectors of this width instead — for the
         # test that a mismatch is caught before anything is written.
         self._broken_dimension = broken_dimension
@@ -50,6 +57,21 @@ class FakeEmbedder(Embedder):
     @property
     def normalizes(self) -> bool:
         return True
+
+    @property
+    def max_sequence_tokens(self) -> int:
+        return self._window
+
+    def count_tokens(self, text: str) -> int:
+        """A deterministic stand-in for WordPiece.
+
+        Words and punctuation, plus an extra token per long word, so that the
+        fake overcounts dense identifiers roughly the way a real tokenizer
+        does. It does not need to match any model; it needs to be stable and
+        to punish long tokens.
+        """
+        pieces = _TOKEN.findall(text)
+        return sum(1 + len(piece) // 8 for piece in pieces)
 
     @property
     def texts_embedded(self) -> int:

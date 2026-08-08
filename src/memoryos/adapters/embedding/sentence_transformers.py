@@ -15,7 +15,11 @@ if TYPE_CHECKING:  # pragma: no cover
 
 logger = structlog.get_logger(__name__)
 
-DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# Measured, not assumed: bge-small-en-v1.5 reports a 512-token window against
+# MiniLM-L6-v2's 256, at the same 384 dimensions — so the VECTOR(384) column
+# and the HNSW index are unchanged while twice as much of each chunk actually
+# reaches the model.
+DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
 
 # Matches the VECTOR(384) column fixed in M1.1. That column is a declared
 # width, so this is a compatibility constraint rather than a preference.
@@ -25,6 +29,11 @@ DEFAULT_DIMENSION = 384
 # pinned revision change, a different fine-tune. The cache key contains this
 # string, so a stale value means silently reusing vectors from another model.
 REVISION = "1"
+
+# Fallback if the tokenizer reports something implausible. Some tokenizers ship
+# model_max_length as a sentinel like 1e30 meaning "unset".
+FALLBACK_WINDOW = 512
+_IMPLAUSIBLE_WINDOW = 100_000
 
 
 class DimensionMismatch(RuntimeError):
@@ -50,6 +59,11 @@ class SentenceTransformerEmbedder(Embedder):
         self._dimension = dimension
         self._cache_dir = cache_dir
         self._model: SentenceTransformer | None = None
+        # Counting tokens must not require the full model. Normalization needs
+        # to size chunks the way the model reads them, and loading several
+        # hundred megabytes of weights to count words would make chunking as
+        # expensive as embedding.
+        self._tokenizer: Any | None = None
         # The worker may embed from more than one task; two threads racing to
         # load the same model would allocate it twice.
         self._lock = threading.Lock()
@@ -68,6 +82,26 @@ class SentenceTransformerEmbedder(Embedder):
         # inner product is cheaper. M1.6's index will rely on that.
         return True
 
+    @property
+    def max_sequence_tokens(self) -> int:
+        """Tokens the model actually reads. Text beyond this is discarded."""
+        window = getattr(self._load_tokenizer(), "model_max_length", None)
+        if not isinstance(window, int) or window <= 0 or window > _IMPLAUSIBLE_WINDOW:
+            return FALLBACK_WINDOW
+        return window
+
+    def count_tokens(self, text: str) -> int:
+        """Count with the model's own tokenizer.
+
+        Not an approximation: a words-and-punctuation heuristic undercounts
+        code by roughly 2.7x, because identifiers split into several
+        WordPieces. Sizing chunks against the wrong unit is exactly what let
+        text past the window unnoticed.
+        """
+        if not text:
+            return 0
+        return len(self._load_tokenizer().encode(text, add_special_tokens=False))
+
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:
             return []
@@ -79,6 +113,21 @@ class SentenceTransformerEmbedder(Embedder):
             show_progress_bar=False,
         )
         return [[float(value) for value in vector] for vector in vectors]
+
+    def _load_tokenizer(self) -> Any:
+        if self._tokenizer is not None:
+            return self._tokenizer
+        with self._lock:
+            if self._tokenizer is None:
+                if self._cache_dir is not None:
+                    os.environ.setdefault("HF_HOME", str(self._cache_dir))
+                from transformers import AutoTokenizer
+
+                self._tokenizer = AutoTokenizer.from_pretrained(
+                    self._model_name,
+                    cache_dir=str(self._cache_dir) if self._cache_dir else None,
+                )
+            return self._tokenizer
 
     def _load(self) -> "SentenceTransformer":
         if self._model is not None:

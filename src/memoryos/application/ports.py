@@ -5,7 +5,7 @@ dependency arrow points inward: adapters implement these, never the reverse.
 """
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 from uuid import UUID
@@ -200,9 +200,23 @@ class TextChunk:
     char_start: int
     char_end: int
     token_count: int
+    # What the chunker knew about where this came from. A definition split
+    # across several chunks records its name here, so a citation can still say
+    # which function the span belongs to.
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class Chunker(Protocol):
+    @property
+    def max_tokens(self) -> int:
+        """The hard ceiling, in model tokens.
+
+        A hard invariant rather than a preference: exceeding it means text is
+        silently discarded before embedding, which is data loss that nothing
+        reports.
+        """
+        ...
+
     @property
     def version(self) -> str:
         """Identifies the algorithm *and its parameters*.
@@ -218,7 +232,31 @@ class Chunker(Protocol):
     def chunk(self, doc: ParsedDocument) -> list[TextChunk]: ...
 
 
-class Embedder(Protocol):
+class TokenCounter(Protocol):
+    """How a model counts, and where it stops reading.
+
+    Deliberately narrower than `Embedder`. The chunker needs to size text the
+    way the model will read it; it has no business producing vectors, and a
+    port that let it would be an invitation. It also means the chunker can be
+    tested against a counter without loading a model.
+    """
+
+    @property
+    def max_sequence_tokens(self) -> int:
+        """Tokens the model actually reads. Text beyond this is discarded."""
+        ...
+
+    def count_tokens(self, text: str) -> int:
+        """Count using the model's own tokenizer, not an approximation.
+
+        M1.4 counted words and punctuation, which is within ~25% on prose and
+        out by 2.7x on code, where identifiers split into several WordPieces.
+        Sizing chunks against the wrong unit is what let text past the window.
+        """
+        ...
+
+
+class Embedder(TokenCounter, Protocol):
     """Turns text into vectors.
 
     The clearest case in Phase 1 for a port. Phase 2's evaluation harness will
@@ -294,10 +332,12 @@ class ScoredChunk:
     memory_id: UUID
     ordinal: int
     text: str
-    # Similarity, higher is better, in [0, 1] for unit vectors. pgvector's
-    # `<#>` returns *negative* inner product, so the adapter negates it. A sign
-    # error here returns the least similar chunks and looks entirely plausible
-    # until somebody reads the results.
+    # Similarity, higher is better. For unit vectors the range is [-1, 1]:
+    # anti-correlated vectors score negative. Real embeddings of real text are
+    # rarely negative against a real query, but the type does not promise it.
+    # pgvector's `<#>` returns *negative* inner product, so the adapter negates
+    # it — a sign error there returns the least similar chunks and looks
+    # entirely plausible until somebody reads the results.
     score: float
     char_start: int
     char_end: int

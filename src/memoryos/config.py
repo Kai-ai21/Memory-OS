@@ -3,6 +3,10 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from memoryos.adapters.embedding.sentence_transformers import (
+    DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL,
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -19,7 +23,9 @@ class Settings(BaseSettings):
     # run and a CI run agree on the location, which is what makes the CI cache
     # key mean anything.
     hf_home: Path = Path("./var/hf")
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    # Sourced from the adapter rather than repeated here. Two copies of a
+    # model name is how the CLI ended up on a different model from the tests.
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
     embedding_batch_size: int = 32
     # HNSW search width per query. Higher recall, higher latency; measured
     # rather than guessed by `memoryos eval-recall`.

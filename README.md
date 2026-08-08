@@ -141,9 +141,16 @@ memoryos reembed --model NEW_ID       # after a model change
 memoryos stats                        # coverage and cache size
 ```
 
-`all-MiniLM-L6-v2` runs locally, 384 dimensions to match the column fixed in M1.1. Vectors are
-unit length, which makes cosine similarity and inner product the same number and lets M1.6 use
-the cheaper one. Embedding runs on a thread — it is CPU-bound matrix multiplication, and on the
+`BAAI/bge-small-en-v1.5` runs locally: 384 dimensions to match the column fixed in M1.1, and a
+**512-token window**. Vectors are unit length, which makes cosine similarity and inner product
+the same number and lets M1.6 use the cheaper one.
+
+**Chunk sizes are derived from that window, not chosen**, and counted with the model's own
+tokenizer. M1.4 targeted 640 heuristic words against a model that read 256 WordPieces, so 89%
+of chunks were silently truncated before embedding — distinct chunks sharing a prefix embedded
+identically and search returned confident nonsense. The composition root now refuses to start
+if the chunker can emit more tokens than the model reads, and `memoryos doctor` reports the
+same condition for data already written. Embedding runs on a thread — it is CPU-bound matrix multiplication, and on the
 event loop it would stall every other coroutine including health checks.
 
 **The model id is part of the cache key, and that is a correctness requirement rather than an
@@ -165,7 +172,8 @@ roughly 900MB, and the model weights are a further ~90MB downloaded on first use
 `MEMOS_HF_HOME` (default `./var/hf`).
 
 ```bash
-make test-slow    # the one test that loads the real model
+memoryos doctor   # oversized chunks, stale models, unembedded or empty memories
+make test-slow    # the tests that load the real model
 ```
 
 That test is the only thing standing between this pipeline and one that fills the column with

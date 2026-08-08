@@ -16,7 +16,6 @@ import structlog
 from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from memoryos.adapters.chunking.structural import StructuralChunker
 from memoryos.adapters.db import models
 from memoryos.adapters.db.job_queue import enqueue_in
 from memoryos.adapters.parsers.registry import ParserRegistry
@@ -58,12 +57,12 @@ class NormalizeMemory:
         session_factory: async_sessionmaker[AsyncSession],
         blob_store: BlobStore,
         parsers: ParserRegistry,
-        chunker: Chunker | None = None,
+        chunker: Chunker,
     ) -> None:
         self._sessions = session_factory
         self._blobs = blob_store
         self._parsers = parsers
-        self._chunker = chunker or StructuralChunker()
+        self._chunker = chunker
 
     @property
     def chunker_version(self) -> str:
