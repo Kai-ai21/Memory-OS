@@ -37,8 +37,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "ANN"]
 ignore = ["ANN401"]
 
 [tool.ruff.lint.per-file-ignores]
-# SIM117: the client fixture enters lifespan_context as a separate, deliberate step.
-"tests/*" = ["ANN", "SIM117"]
+"tests/*" = ["ANN"]
 
 [tool.mypy]
 python_version = "3.12"
