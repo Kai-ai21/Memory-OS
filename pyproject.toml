@@ -16,6 +16,8 @@ dependencies = [
   "uuid-utils>=0.10",
   "pypdf>=5.1",
   "python-frontmatter>=1.1",
+  "sentence-transformers>=3.3",
+  "torch>=2.5",
   "pydantic>=2.9",
   "pydantic-settings>=2.6",
   "structlog>=24.4",
@@ -40,8 +42,11 @@ packages = ["src/memoryos"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-q --strict-markers"
-markers = ["integration: requires a running Postgres"]
+addopts = "-q --strict-markers -m 'not slow'"
+markers = [
+  "integration: requires a running Postgres",
+  "slow: downloads and loads the real embedding model",
+]
 
 [tool.ruff]
 line-length = 100

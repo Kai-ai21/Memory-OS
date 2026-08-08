@@ -398,3 +398,42 @@ Index("ix_jobs_lease", Job.lease_expires_at, postgresql_where=text("status = 'ru
 
 # Observability. `SELECT status, count(*) FROM jobs GROUP BY 1` and its friends.
 Index("ix_jobs_status_type", Job.status, Job.job_type)
+
+
+class EmbeddingCacheEntry(Base):
+    """Text-to-vector memoisation, keyed by (model, text).
+
+    A table of its own rather than a column on `memory_chunks`, because
+    identical text in different memories should be embedded once. M1.4's smoke
+    test found five identical empty files in this repository alone.
+
+    The model identity is inside the key, and that is a correctness
+    requirement rather than an optimisation: without it, upgrading the model
+    would silently reuse vectors from the old one. Nothing would error — the
+    index would simply hold two incompatible coordinate systems, and
+    similarity between them is arithmetically valid and semantically
+    meaningless. That is a very hard failure to trace back to its cause.
+    """
+
+    __tablename__ = "embedding_cache"
+
+    cache_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    model_id: Mapped[str] = mapped_column(Text, nullable=False)
+    dimension: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(
+        Vector(EMBEDDING_DIMENSIONS), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            f"cache_key ~ '{HEX64_PATTERN}'", name="ck_embedding_cache_key_hex"
+        ),
+        CheckConstraint("dimension > 0", name="ck_embedding_cache_dimension_positive"),
+    )
+
+
+# Model lookups during a re-embed scan by model rather than by key.
+Index("ix_embedding_cache_model", EmbeddingCacheEntry.model_id)

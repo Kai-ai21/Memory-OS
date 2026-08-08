@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     # Where artifact bytes live. Local directory for now; the BlobStore port is
     # what lets this become object storage without a use case changing.
     blob_root: Path = Path("./var/blobs")
+    # Where HuggingFace caches model weights. Pinned explicitly so that a local
+    # run and a CI run agree on the location, which is what makes the CI cache
+    # key mean anything.
+    hf_home: Path = Path("./var/hf")
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_batch_size: int = 32
     log_level: str = "INFO"
     log_json: bool = False
 

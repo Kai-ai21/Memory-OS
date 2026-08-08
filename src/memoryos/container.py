@@ -8,10 +8,16 @@ from dataclasses import dataclass
 
 from memoryos.adapters.blobs.filesystem import FilesystemBlobStore
 from memoryos.adapters.connectors.filesystem import FilesystemConnector
+from memoryos.adapters.db.embedding_cache import PostgresEmbeddingCache
 from memoryos.adapters.db.engine import Database
 from memoryos.adapters.db.job_queue import PostgresJobQueue
+from memoryos.adapters.embedding.sentence_transformers import (
+    SentenceTransformerEmbedder,
+    build_embedder,
+)
 from memoryos.adapters.parsers.registry import ParserRegistry
 from memoryos.adapters.parsers.registry import build_default_registry as build_parser_registry
+from memoryos.application.embed import EmbedMemory
 from memoryos.application.jobs.handlers import build_default_registry
 from memoryos.application.jobs.registry import HandlerRegistry
 from memoryos.application.normalize import NormalizeMemory
@@ -27,6 +33,8 @@ class Container:
     connector: FilesystemConnector
     queue: PostgresJobQueue
     parsers: ParserRegistry
+    embedder: SentenceTransformerEmbedder
+    cache: PostgresEmbeddingCache
 
     @classmethod
     def build(cls, settings: Settings) -> "Container":
@@ -39,6 +47,8 @@ class Container:
             connector=FilesystemConnector(blobs),
             queue=PostgresJobQueue(database.session_factory),
             parsers=build_parser_registry(),
+            embedder=build_embedder(settings),
+            cache=PostgresEmbeddingCache(database.session_factory),
         )
 
     def registry(self) -> HandlerRegistry:
@@ -46,6 +56,9 @@ class Container:
             session_factory=self.database.session_factory,
             connector=self.connector,
             blob_store=self.blobs,
+            embedder=self.embedder,
+            cache=self.cache,
+            batch_size=self.settings.embedding_batch_size,
         )
 
     def sync(self) -> SyncSource:
@@ -53,6 +66,14 @@ class Container:
 
     def normalize(self) -> NormalizeMemory:
         return NormalizeMemory(self.database.session_factory, self.blobs, self.parsers)
+
+    def embed(self) -> EmbedMemory:
+        return EmbedMemory(
+            self.database.session_factory,
+            self.embedder,
+            self.cache,
+            self.settings.embedding_batch_size,
+        )
 
     async def dispose(self) -> None:
         await self.database.dispose()
