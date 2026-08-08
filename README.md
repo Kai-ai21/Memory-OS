@@ -6,13 +6,14 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 
 ## Status
 
-**Phase 1, Milestone 1.2 — job queue and worker.**
+**Phase 1, Milestone 1.3 — filesystem connector.**
 
-There are still no product features. What exists is the application factory, the database
-engine wiring, two health endpoints, the domain entities and value objects, the Postgres
-schema with its migrations, the repository ports and their adapters, and a durable job queue
-drained by a worker process. Nothing chunks, embeds, or ingests yet; the connector arrives in
-M1.3 and will enqueue into this queue.
+Point it at a directory and it walks the tree, hashes every file, stores the bytes in a
+content-addressed blob store, records artifacts and ingestion events, creates or versions
+memories, detects deletions on a full sweep, and enqueues follow-up work.
+
+It does not parse, chunk, or embed. Those are M1.4 and M1.5, and the follow-up job it enqueues
+is a logging stub until then.
 
 ## Architecture
 
@@ -104,12 +105,53 @@ The URL comes from `Settings`, not from `alembic.ini`. Migrations are written by
 constraint names and CHECK expressions are explicit; `alembic revision --autogenerate` is then
 run as a check that the migration and the models agree, and must produce an empty revision.
 
+## Ingestion
+
+```bash
+memoryos source add --kind filesystem --name notes --root ~/notes
+memoryos source list
+memoryos sync --source notes --full
+```
+
+A sync walks, hashes, stores, records, and enqueues. Nothing else — every source has a
+different walking problem and an identical downstream pipeline, and keeping that line sharp is
+what makes the second connector cheap.
+
+**Re-running a sync is free.** If the artifact is already known and the current memory has the
+same content hash, the item is skipped: no blob write, no artifact, no event, no version, no
+job. That is what makes running it often reasonable.
+
+**Change detection is two-tiered.** `(mtime, size)` decides *which* files are worth hashing;
+the content hash decides whether anything actually changed. mtime alone is not trustworthy —
+copying resets it, some editors preserve it, sync tools rewrite it — so it is a cheap filter
+and never the authority.
+
+**Deletion needs a full sweep.** An incremental sync cannot detect deletions: a deleted file
+produces no observation at all, and absence is not an event. Only comparing the complete
+observed set against the complete known set reveals it, which is why `--full` exists and why
+`sources` carries `last_full_sync_at` separately from `last_sync_at`. A deletion records an
+`ITEM_DELETED` event with `occurred_at_source = unknown`, because what we know is when we
+noticed the absence, not when it happened.
+
+Bytes live in a content-addressed blob store under `MEMOS_BLOB_ROOT` (default `./var/blobs`),
+fanned out as `ab/cd/abcdef…`. Writes go to a temp file and are moved into place with
+`os.replace`, so a crash can never leave a partial file at a path that claims to be a specific
+hash.
+
 ## Endpoints
 
-| Endpoint        | Purpose                                                          |
-| --------------- | ---------------------------------------------------------------- |
-| `/health/live`  | Liveness. Never touches external dependencies.                    |
-| `/health/ready` | Readiness. Reports database connectivity and the pgvector version. |
+| Endpoint                   | Purpose                                                    |
+| -------------------------- | ---------------------------------------------------------- |
+| `/health/live`             | Liveness. Never touches external dependencies.              |
+| `/health/ready`            | Readiness. Reports database connectivity and pgvector.      |
+| `POST /sources`            | Register a source.                                          |
+| `GET /sources`             | List registered sources.                                    |
+| `POST /sources/{id}/sync`  | Enqueue a sync. Returns `202` with the job id.              |
+| `GET /memories`            | Current memories, filterable by `source_id`, paginated.     |
+
+`POST /sources/{id}/sync` enqueues and never runs the sync inline. A large directory takes
+minutes to walk; doing it in the request would blow the HTTP timeout, and whatever it managed
+would have no retry, no progress, and no way to resume.
 
 Liveness stays dependency-free on purpose: a database blip should not cause an orchestrator to
 kill otherwise-healthy containers. Readiness is the endpoint that checks dependencies, and

@@ -1,12 +1,11 @@
 """The worker end to end, against a real queue."""
 
 import asyncio
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import delete, func, select, update
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
 from memoryos.adapters.db.job_queue import PostgresJobQueue
@@ -23,16 +22,6 @@ FAST = WorkerConfig(
     poll_max_seconds=0.05,
     idle_polls_before_drain_stop=2,
 )
-
-
-@pytest.fixture
-async def sessions(engine: AsyncEngine) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory.begin() as session:
-        await session.execute(delete(models.Job))
-    yield factory
-    async with factory.begin() as session:
-        await session.execute(delete(models.Job))
 
 
 @pytest.fixture

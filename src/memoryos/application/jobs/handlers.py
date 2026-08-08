@@ -1,12 +1,63 @@
-"""Test handlers.
+"""Job handlers, and the registry the worker looks them up in."""
 
-These exist so the worker's success, retry, and dead-letter paths can be
-exercised end to end before there is any real work to do. The first real job
-types arrive with the connector in M1.3.
-"""
+from uuid import UUID
 
-from memoryos.application.jobs.registry import HandlerRegistry, JobContext
+import structlog
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from memoryos.application.jobs.registry import Handler, HandlerRegistry, JobContext
+from memoryos.application.ports import BlobStore, Connector
+from memoryos.application.sync import SyncSource
 from memoryos.domain.jobs import JobType, PermanentError, TransientError
+
+logger = structlog.get_logger(__name__)
+
+
+async def handle_normalize_memory(ctx: JobContext) -> None:
+    """A stub until M1.4.
+
+    It exists now so the connector's enqueue path is exercised end to end —
+    memory and job committing together, dedupe holding, the worker claiming and
+    completing it — without dragging normalization into this milestone.
+    """
+    logger.info(
+        "normalize.stub",
+        job_id=str(ctx.job.id),
+        memory_id=ctx.job.payload.get("memory_id"),
+    )
+
+
+def make_sync_handler(
+    session_factory: async_sessionmaker[AsyncSession],
+    connector: Connector,
+    blob_store: BlobStore,
+) -> Handler:
+    """Build the `SYNC_SOURCE` handler.
+
+    Syncs are themselves queued work, which is what lets the HTTP endpoint
+    return immediately and lets a failed sync retry with backoff like anything
+    else.
+    """
+
+    async def handle_sync_source(ctx: JobContext) -> None:
+        raw_id = ctx.job.payload.get("source_id")
+        if not raw_id:
+            # Nothing to retry towards: this job can never become valid.
+            raise PermanentError("sync_source job has no source_id in its payload")
+
+        sync = SyncSource(session_factory, connector, blob_store)
+        try:
+            report = await sync(UUID(str(raw_id)), full=bool(ctx.job.payload.get("full")))
+        except LookupError as exc:
+            raise PermanentError(str(exc)) from exc
+        except OSError as exc:
+            # An unmounted volume or a disappearing root is exactly the kind of
+            # thing that is fixed by the time the retry runs.
+            raise TransientError(str(exc)) from exc
+
+        logger.info("sync.job_finished", job_id=str(ctx.job.id), **report.as_dict())
+
+    return handle_sync_source
 
 
 async def handle_noop(ctx: JobContext) -> None:
@@ -21,9 +72,27 @@ async def handle_fail_permanent(ctx: JobContext) -> None:
     raise PermanentError("permanent failure; retrying cannot help")
 
 
-def build_default_registry() -> HandlerRegistry:
+def build_default_registry(
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    connector: Connector | None = None,
+    blob_store: BlobStore | None = None,
+) -> HandlerRegistry:
+    """The registry a worker runs with.
+
+    `SYNC_SOURCE` needs collaborators the test types do not, so it is only
+    registered when they are supplied. A worker built without them simply has
+    no handler for that type, and the worker already treats an unregistered
+    type as permanent rather than retrying forever.
+    """
     registry = HandlerRegistry()
     registry.register(JobType.NOOP, handle_noop)
     registry.register(JobType.FAIL_TRANSIENT, handle_fail_transient)
     registry.register(JobType.FAIL_PERMANENT, handle_fail_permanent)
+    registry.register(JobType.NORMALIZE_MEMORY, handle_normalize_memory)
+
+    if session_factory is not None and connector is not None and blob_store is not None:
+        registry.register(
+            JobType.SYNC_SOURCE,
+            make_sync_handler(session_factory, connector, blob_store),
+        )
     return registry

@@ -1,16 +1,16 @@
 """The queue against a real Postgres.
 
-These use the engine directly rather than the rolled-back `session` fixture:
-the queue owns its own transactions, and a claim that never commits proves
-nothing about whether two workers can take the same row.
+These drive a real session factory rather than a wrapped one: the queue owns
+its own transactions, and a claim that never commits proves nothing about
+whether two workers can take the same row. Isolation comes from the shared
+`clean_database` fixture, which truncates before every test.
 """
 
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import delete, func, select, text, update
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy import func, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
 from memoryos.adapters.db.job_queue import PostgresJobQueue, enqueue_in
@@ -19,21 +19,6 @@ from memoryos.domain.jobs import JobSpec, JobStatus, JobType
 pytestmark = pytest.mark.integration
 
 LEASE = timedelta(seconds=30)
-
-
-@pytest.fixture
-async def sessions(engine: AsyncEngine) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
-    """A real session factory, plus a truncate so tests stay order-independent.
-
-    The queue commits, so the outer-transaction trick the other integration
-    tests use does not apply here.
-    """
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory.begin() as session:
-        await session.execute(delete(models.Job))
-    yield factory
-    async with factory.begin() as session:
-        await session.execute(delete(models.Job))
 
 
 @pytest.fixture

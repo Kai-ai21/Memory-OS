@@ -4,14 +4,15 @@ Protocols only. No implementations, no imports from `memoryos.adapters`. The
 dependency arrow points inward: adapters implement these, never the reverse.
 """
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 from uuid import UUID
 
 from memoryos.domain.entities import IngestionEvent, Memory, RawArtifact, Source
 from memoryos.domain.jobs import Job, JobSpec
-from memoryos.domain.values import ContentHash, SourceKind
+from memoryos.domain.values import ContentHash, SourceKind, TimeProvenance
 
 
 class SourceRepository(Protocol):
@@ -79,3 +80,62 @@ class JobQueue(Protocol):
     async def dead_letter(self, job_id: UUID, worker_id: str, error: str, tb: str) -> bool: ...
 
     async def reclaim_expired(self, limit: int = 100) -> int: ...
+
+
+class BlobStore(Protocol):
+    """Where artifact bytes live.
+
+    M1.1 stored only hashes, on the grounds that identity is a function of
+    content. The bytes still have to go somewhere, and this is the seam that
+    lets them go to a local directory now and to object storage later without
+    a use case noticing.
+    """
+
+    async def put(self, content_hash: ContentHash, data: bytes) -> None:
+        """Idempotent. Writing the same hash twice is a no-op."""
+
+    async def get(self, content_hash: ContentHash) -> bytes: ...
+
+    async def exists(self, content_hash: ContentHash) -> bool: ...
+
+    async def delete(self, content_hash: ContentHash) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ObservedItem:
+    """One thing a connector found, described without reading it."""
+
+    # Relative to the source root, POSIX-normalised. Never absolute: an
+    # absolute path stops being a stable identity the moment the folder moves.
+    external_key: str
+    content_hash: ContentHash
+    byte_size: int
+    media_type: str | None
+    occurred_at: datetime | None
+    occurred_at_source: TimeProvenance
+    # Lazy on purpose. Most files on most syncs are unchanged, and reading
+    # every byte of every file to discover that would defeat the point of
+    # having a change filter at all.
+    read_bytes: Callable[[], Awaitable[bytes]]
+    # Whatever the connector wants remembered about this item so that the next
+    # sync can cheaply decide whether to look at it again — `(mtime_ns, size)`
+    # for the filesystem. The sync use case stores it verbatim in the source
+    # cursor and never interprets it; only the connector that wrote it knows
+    # what it means.
+    fingerprint: list[Any] | None = None
+
+
+class Connector(Protocol):
+    """Walks a source and reports what it finds."""
+
+    kind: SourceKind
+
+    def observe(self, source: Source, *, full: bool) -> AsyncIterator[ObservedItem]:
+        """Yield items, streaming.
+
+        An async iterator rather than a list, because sources get large.
+        Materialising every item before processing any of them works on a
+        fixture directory and fails on the first real corpus; streaming keeps
+        memory flat whether there are fifty files or five hundred thousand.
+        """
+        ...
