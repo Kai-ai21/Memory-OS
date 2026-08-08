@@ -1,4 +1,7 @@
-async def test_liveness_does_not_touch_the_database(client):
+from httpx import AsyncClient
+
+
+async def test_liveness_does_not_touch_the_database(client: AsyncClient) -> None:
     response = await client.get("/health/live")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}

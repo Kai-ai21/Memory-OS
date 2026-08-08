@@ -43,10 +43,3 @@ ignore = ["ANN401"]
 python_version = "3.12"
 strict = true
 files = ["src", "tests"]
-
-# Mirrors the ruff ANN exemption above: test signatures need not be annotated.
-# Bodies are still type-checked, since strict leaves check_untyped_defs on.
-[[tool.mypy.overrides]]
-module = "tests.*"
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
