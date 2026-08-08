@@ -19,6 +19,7 @@ from memoryos.adapters.connectors.filesystem import (
 )
 from memoryos.adapters.db import models
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
+from memoryos.application.rechunk import enqueue_rechunk, find_stale
 from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
 from memoryos.container import Container
@@ -93,6 +94,37 @@ async def list_sources(settings: Settings) -> int:
     return 0
 
 
+async def run_rechunk(
+    settings: Settings, *, source: str | None, stale_version: str | None, dry_run: bool
+) -> int:
+    container = Container.build(settings)
+    try:
+        current = container.normalize().chunker_version
+        stale = await find_stale(
+            container.database.session_factory,
+            current_version=current,
+            source=source,
+            stale_version=stale_version,
+        )
+
+        print(f"current chunker: {current}")
+        print(f"stale memories:  {len(stale)}")
+        for memory in stale[:20]:
+            print(f"  {memory.external_key}")
+        if len(stale) > 20:
+            print(f"  ... and {len(stale) - 20} more")
+
+        if dry_run:
+            print("dry run; nothing enqueued")
+            return 0
+
+        enqueued = await enqueue_rechunk(container.database.session_factory, stale)
+        print(f"enqueued: {enqueued}")
+    finally:
+        await container.dispose()
+    return 0
+
+
 async def run_sync(settings: Settings, *, name: str, full: bool) -> int:
     container = Container.build(settings)
     try:
@@ -145,6 +177,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="walk everything and reconcile deletions, rather than only what changed",
     )
+
+    rechunk = commands.add_parser(
+        "rechunk", help="re-normalize memories whose chunks are stale"
+    )
+    rechunk.add_argument("--source", help="limit to one source by name")
+    rechunk.add_argument(
+        "--chunker-version",
+        dest="chunker_version",
+        help="target this exact version instead of everything that is not current",
+    )
+    rechunk.add_argument(
+        "--dry-run", action="store_true", help="report what would be enqueued"
+    )
     return parser
 
 
@@ -168,6 +213,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "sync":
         return asyncio.run(run_sync(settings, name=args.source, full=args.full))
+
+    if args.command == "rechunk":
+        return asyncio.run(
+            run_rechunk(
+                settings,
+                source=args.source,
+                stale_version=args.chunker_version,
+                dry_run=args.dry_run,
+            )
+        )
 
     return 0
 

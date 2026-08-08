@@ -7,7 +7,6 @@ keeping that line sharp is what makes the second connector cheap.
 
 import asyncio
 import fnmatch
-import hashlib
 import mimetypes
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
@@ -18,15 +17,14 @@ from typing import Any
 
 import structlog
 
-from memoryos.application.ports import Connector, ObservedItem
+from memoryos.application.ports import BlobStore, Connector, ObservedItem
 from memoryos.domain.entities import Source
-from memoryos.domain.values import ContentHash, SourceKind, TimeProvenance
+from memoryos.domain.values import SourceKind, TimeProvenance
 
 logger = structlog.get_logger(__name__)
 
-# Files are hashed in chunks so that memory use is independent of file size. A
-# 2GB file must not become a 2GB allocation just to learn its digest.
-_HASH_CHUNK_BYTES = 64 * 1024
+# Files are read in chunks so that memory use is independent of file size.
+_READ_CHUNK_BYTES = 64 * 1024
 
 DEFAULT_INCLUDE = ["**/*.md", "**/*.txt", "**/*.py", "**/*.pdf"]
 DEFAULT_EXCLUDE = [
@@ -104,15 +102,18 @@ def escapes_root(path: Path, root: Path) -> bool:
     return False
 
 
-def hash_file(path: Path) -> tuple[ContentHash, int]:
-    """Stream the file through BLAKE2b, returning the digest and byte size."""
-    digest = hashlib.blake2b(digest_size=32)
-    size = 0
-    with path.open("rb") as stream:
-        while chunk := stream.read(_HASH_CHUNK_BYTES):
-            digest.update(chunk)
-            size += len(chunk)
-    return ContentHash(digest.hexdigest()), size
+async def stream_file(path: Path) -> AsyncIterator[bytes]:
+    """Yield a file in chunks, off the event loop.
+
+    Memory use is independent of file size: a 2GB file must not become a 2GB
+    allocation just to pass through here.
+    """
+    handle = await asyncio.to_thread(path.open, "rb")
+    try:
+        while chunk := await asyncio.to_thread(handle.read, _READ_CHUNK_BYTES):
+            yield chunk
+    finally:
+        await asyncio.to_thread(handle.close)
 
 
 def fingerprint(stat: os.stat_result) -> list[Any]:
@@ -127,7 +128,18 @@ def fingerprint(stat: os.stat_result) -> list[Any]:
 
 
 class FilesystemConnector(Connector):
+    """Walks a tree, storing and hashing each candidate file in one pass.
+
+    The blob store is a collaborator rather than something further downstream
+    because hashing and storing read the same bytes. Doing them separately
+    meant opening every changed file twice, and normalization would have made
+    it three times.
+    """
+
     kind: SourceKind = SourceKind.FILESYSTEM
+
+    def __init__(self, blob_store: BlobStore) -> None:
+        self._blobs = blob_store
 
     async def observe(self, source: Source, *, full: bool) -> AsyncIterator[ObservedItem]:
         config = FilesystemConfig.from_dict(source.config)
@@ -147,7 +159,10 @@ class FilesystemConnector(Connector):
                 continue
 
             try:
-                content_hash, byte_size = await asyncio.to_thread(hash_file, path)
+                # One pass: the bytes are hashed as they flow into the blob
+                # store, so the file is opened once and the content is already
+                # local by the time anything downstream wants it.
+                content_hash, byte_size = await self._blobs.put_stream(stream_file(path))
             except OSError as exc:
                 log.warning("file.skipped", key=external_key, reason=str(exc))
                 continue

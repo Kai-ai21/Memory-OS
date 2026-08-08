@@ -26,6 +26,10 @@ class JobType(StrEnum):
     # now is what proves the connector-to-queue wiring end to end without
     # pulling normalization forward into this milestone.
     NORMALIZE_MEMORY = auto()
+    # A stub in M1.4: it logs and returns. M1.5 fills the vectors. Enqueuing it
+    # now proves the normalize-to-embed wiring without pulling embeddings
+    # forward into this milestone.
+    EMBED_MEMORY = auto()
 
     # Test types. The worker's success, retry, and dead-letter paths are
     # exercised through these rather than through real work.

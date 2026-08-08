@@ -1,6 +1,7 @@
 """The blob store. No database, so this lives in the fast tier."""
 
 import os
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
@@ -116,3 +117,78 @@ async def test_distinct_content_lands_in_distinct_paths(
     assert store.path_for(DIGEST) != store.path_for(other)
     assert await store.get(DIGEST) == HELLO
     assert await store.get(other) == b"different bytes"
+
+
+# --------------------------------------------------------------------------
+# Streaming writes
+# --------------------------------------------------------------------------
+
+
+async def chunks_of(data: bytes, size: int = 4) -> AsyncIterator[bytes]:
+    for start in range(0, len(data), size):
+        yield data[start : start + size]
+
+
+async def test_put_stream_returns_the_hash_and_size(store: FilesystemBlobStore) -> None:
+    content_hash, byte_size = await store.put_stream(chunks_of(HELLO))
+
+    # The same digest the one-shot path would have produced: the hash is a
+    # function of the bytes, not of how they arrived.
+    assert content_hash == DIGEST
+    assert byte_size == len(HELLO)
+    assert await store.get(content_hash) == HELLO
+
+
+async def test_put_stream_handles_an_empty_stream(store: FilesystemBlobStore) -> None:
+    content_hash, byte_size = await store.put_stream(chunks_of(b""))
+
+    assert byte_size == 0
+    assert content_hash == ContentHash.of(b"")
+    assert await store.get(content_hash) == b""
+
+
+async def test_put_stream_is_idempotent(store: FilesystemBlobStore) -> None:
+    first_hash, _ = await store.put_stream(chunks_of(HELLO))
+    mtime = store.path_for(first_hash).stat().st_mtime_ns
+
+    second_hash, _ = await store.put_stream(chunks_of(HELLO))
+
+    assert second_hash == first_hash
+    # Already stored, so the streamed copy was discarded rather than replacing
+    # a file that already holds exactly these bytes.
+    assert store.path_for(first_hash).stat().st_mtime_ns == mtime
+
+
+async def test_put_stream_leaves_no_staging_files_behind(
+    store: FilesystemBlobStore,
+) -> None:
+    await store.put_stream(chunks_of(HELLO))
+    await store.put_stream(chunks_of(HELLO))
+    await store.put_stream(chunks_of(b"other content"))
+
+    staging = store.root / "incoming"
+    assert list(staging.iterdir()) == []
+
+
+async def test_a_failure_mid_stream_stores_nothing(store: FilesystemBlobStore) -> None:
+    async def explodes() -> AsyncIterator[bytes]:
+        yield b"partial"
+        raise OSError("disk went away")
+
+    with pytest.raises(OSError, match="disk went away"):
+        await store.put_stream(explodes())
+
+    # Nothing was committed, because the name is only known once every byte has
+    # been seen — a partial stream never produces a path to write to.
+    assert list((store.root / "incoming").iterdir()) == []
+    assert list(store.root.rglob("*")) == [store.root / "incoming"]
+
+
+async def test_chunk_boundaries_do_not_affect_the_hash(
+    store: FilesystemBlobStore,
+) -> None:
+    data = b"a" * 1000
+    first, _ = await store.put_stream(chunks_of(data, size=7))
+    second, _ = await store.put_stream(chunks_of(data, size=999))
+
+    assert first == second == ContentHash.of(data)
