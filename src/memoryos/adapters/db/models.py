@@ -279,8 +279,9 @@ class MemoryChunk(Base):
     # subset without rewriting everything.
     chunker_version: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    # No HNSW index here. That is M1.6, and it is built after bulk loading
-    # rather than maintained incrementally through every insert.
+    # The HNSW index over this column arrives in migration 0005, declared
+    # below the class. It is built after the pipeline that fills the column
+    # rather than maintained through every insert from an empty table.
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
     embedding_model: Mapped[str | None] = mapped_column(Text)
     embedded_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
@@ -437,3 +438,16 @@ class EmbeddingCacheEntry(Base):
 
 # Model lookups during a re-embed scan by model rather than by key.
 Index("ix_embedding_cache_model", EmbeddingCacheEntry.model_id)
+
+# Approximate nearest neighbour over chunk embeddings. `vector_ip_ops` because
+# the embedder normalizes to unit length, which makes inner product and cosine
+# similarity the same number and inner product the cheaper one. `m` and
+# `ef_construction` are fixed at build time; `hnsw.ef_search` is the knob the
+# adapter sets per query.
+Index(
+    "ix_memory_chunks_embedding_hnsw",
+    MemoryChunk.embedding,
+    postgresql_using="hnsw",
+    postgresql_with={"m": 16, "ef_construction": 64},
+    postgresql_ops={"embedding": "vector_ip_ops"},
+)

@@ -51,12 +51,24 @@ async def test_embedding_column_is_a_384_dimension_vector(engine: AsyncEngine) -
         assert result.scalar_one() == "vector(384)"
 
 
-async def test_no_index_exists_on_the_embedding_column(engine: AsyncEngine) -> None:
-    # The HNSW index is M1.6, built once after bulk loading rather than
-    # maintained through every insert.
+async def test_the_embedding_column_has_an_hnsw_inner_product_index(
+    engine: AsyncEngine,
+) -> None:
+    """Arrives in M1.6, after the pipeline that fills the column.
+
+    `vector_ip_ops` is load-bearing: the embedder normalizes to unit length, so
+    inner product and cosine similarity are the same number and inner product
+    is the cheaper one. A different operator class here would not error — it
+    would quietly rank by the wrong measure.
+    """
     async with engine.connect() as connection:
         result = await connection.execute(
             text("SELECT indexdef FROM pg_indexes WHERE tablename = 'memory_chunks'")
         )
         definitions = [row[0] for row in result]
-    assert not [d for d in definitions if "embedding" in d]
+
+    (hnsw,) = [d for d in definitions if "embedding" in d]
+    assert "USING hnsw" in hnsw
+    assert "vector_ip_ops" in hnsw
+    assert "m='16'" in hnsw
+    assert "ef_construction='64'" in hnsw
