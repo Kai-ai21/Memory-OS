@@ -112,6 +112,11 @@ class SqlAlchemyMemoryRepository(MemoryRepository):
     async def add_version(self, memory: Memory) -> None:
         """Supersede the current version and insert the next one.
 
+        The version number is the repository's to assign: whatever `memory.version`
+        holds is discarded and replaced with one past the current row's version
+        (or 1 if there is none). Versions come from what is already stored, not
+        from what the caller believes is stored.
+
         Both statements run in the caller's transaction, so either both land or
         neither does. They are flushed in two steps on purpose: the partial
         unique index on `(source_id, external_key) WHERE is_current` is not

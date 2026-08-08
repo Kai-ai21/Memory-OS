@@ -1,6 +1,6 @@
 import pytest
 from sqlalchemy import delete, func, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memoryos.adapters.db import models
@@ -135,6 +135,62 @@ async def test_known_occurred_at_with_unknown_provenance_violates_the_check(
                 "occurred_at": OCCURRED_AT,
             },
         )
+
+
+async def test_events_enforce_the_same_occurred_at_pairing_as_memories(
+    session: AsyncSession, source: Source
+) -> None:
+    # The invariant is universal: nothing in this system fabricates a timestamp,
+    # so a null occurred_at has to declare itself unknown wherever it appears.
+    with pytest.raises(IntegrityError, match="ck_ingestion_events_occurred_at_provenance"):
+        await session.execute(
+            text(
+                "INSERT INTO ingestion_events "
+                "(id, event_type, source_id, external_key, occurred_at, occurred_at_source) "
+                "VALUES (:id, 'item_deleted', :source_id, 'notes/gone.md', NULL, 'declared')"
+            ),
+            {"id": new_id(), "source_id": source.id},
+        )
+
+
+async def test_event_seq_cannot_be_supplied_by_a_writer(
+    session: AsyncSession, source: Source
+) -> None:
+    # GENERATED ALWAYS. Replay reads events to rebuild projections; it never
+    # re-inserts them, so nothing gets to choose its own position in the log.
+    with pytest.raises(ProgrammingError, match="GENERATED ALWAYS"):
+        await session.execute(
+            text(
+                "INSERT INTO ingestion_events "
+                "(id, seq, event_type, source_id, external_key, occurred_at_source) "
+                "VALUES (:id, 999, 'item_deleted', :source_id, 'notes/gone.md', 'unknown')"
+            ),
+            {"id": new_id(), "source_id": source.id},
+        )
+
+
+async def test_chunk_content_hash_must_be_hex(
+    session: AsyncSession, source: Source, artifact: RawArtifact
+) -> None:
+    memory = build_memory(source, artifact)
+    session.add(to_memory_row(memory))
+    await session.flush()
+
+    session.add(
+        models.MemoryChunk(
+            id=new_id(),
+            memory_id=memory.id,
+            ordinal=0,
+            content="hello",
+            token_count=1,
+            char_start=0,
+            char_end=5,
+            chunker_version="test-v1",
+            content_hash="NOT-A-HASH",
+        )
+    )
+    with pytest.raises(IntegrityError, match="ck_memory_chunks_content_hash_hex"):
+        await session.flush()
 
 
 async def test_importance_outside_the_unit_interval_violates_the_check(
