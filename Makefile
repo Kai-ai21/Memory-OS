@@ -1,4 +1,4 @@
-.PHONY: up down install test test-unit lint fmt typecheck check run
+.PHONY: up down install test test-unit lint fmt typecheck check run worker
 
 up:        ; docker compose up -d
 down:      ; docker compose down
@@ -10,3 +10,4 @@ fmt:       ; ruff format . && ruff check --fix .
 typecheck: ; mypy
 check: lint typecheck test
 run:       ; uvicorn "memoryos.api.app:create_app" --factory --reload
+worker:    ; memoryos worker

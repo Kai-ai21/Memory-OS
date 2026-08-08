@@ -34,6 +34,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from memoryos.domain.jobs import DEFAULT_MAX_ATTEMPTS, JobStatus
 from memoryos.domain.values import (
     HEX64_PATTERN,
     EventType,
@@ -296,3 +297,104 @@ class MemoryChunk(Base):
         Index("ix_memory_chunks_chunker_version", "chunker_version"),
         Index("ix_memory_chunks_content_hash", "content_hash"),
     )
+
+
+class Job(Base):
+    """Durable work queue.
+
+    A table rather than a broker, for two reasons that are not convenience.
+
+    Enqueueing a job and writing the data it refers to happen in one
+    transaction, so there is no window in which one committed and the other did
+    not. With a broker that window is real, and the standard fix — the
+    transactional outbox — is a jobs table in the database anyway.
+
+    And `SELECT status, count(*) FROM jobs GROUP BY 1` is the whole monitoring
+    story. Every failure's error and traceback are queryable with SQL.
+
+    The ceiling is low thousands of jobs per second. Embedding throughput will
+    be orders of magnitude under that, and if Phase 6 ever needs more, the
+    `JobQueue` port swaps out without a use case noticing.
+    """
+
+    __tablename__ = "jobs"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    job_type: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=_EMPTY_JSONB
+    )
+    # Collapses duplicate enqueues of the same logical work. Null opts out.
+    dedupe_key: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text(f"'{JobStatus.PENDING.value}'")
+    )
+    # Higher runs first.
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # Incremented when a job is claimed, not when it fails. A worker that
+    # segfaults never reaches its failure handler, so counting on failure would
+    # let a job that reliably kills the process retry forever with attempts
+    # stuck at zero. Counting on claim guarantees every job exhausts its budget.
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    max_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text(str(DEFAULT_MAX_ATTEMPTS))
+    )
+    run_after: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    locked_by: Mapped[str | None] = mapped_column(Text)
+    locked_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_traceback: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+
+    __table_args__ = (
+        _enum_check("status", JobStatus, "ck_jobs_status"),
+        CheckConstraint("attempts >= 0", name="ck_jobs_attempts_non_negative"),
+        CheckConstraint("max_attempts >= 1", name="ck_jobs_max_attempts_positive"),
+        # A running job without a lease can never be reclaimed: the sweeper
+        # finds expired leases, and a null one never expires.
+        CheckConstraint(
+            "status <> 'running' OR (locked_by IS NOT NULL AND lease_expires_at IS NOT NULL)",
+            name="ck_jobs_running_requires_lease",
+        ),
+    )
+
+
+# Declared outside the class so the claim index can use a real column object for
+# `priority DESC`; `__table_args__` runs before the attributes are bound.
+
+# The claim index. Its columns and predicate mirror the claim query's ORDER BY
+# and WHERE exactly, which is the only way the planner can satisfy the ordering
+# from the index instead of sorting. Partial, because in a mature queue almost
+# every row is 'succeeded' and indexing those would be permanently growing dead
+# weight.
+Index(
+    "ix_jobs_claim",
+    Job.priority.desc(),
+    Job.run_after,
+    postgresql_where=text("status = 'pending'"),
+)
+
+# Idempotent enqueue: the same logical work cannot be queued twice while it is
+# still in flight. Once it finishes, the key is free again.
+Index(
+    "uq_jobs_dedupe",
+    Job.job_type,
+    Job.dedupe_key,
+    unique=True,
+    postgresql_where=text("dedupe_key IS NOT NULL AND status IN ('pending', 'running')"),
+)
+
+# The sweeper's index: find running jobs whose lease has expired.
+Index("ix_jobs_lease", Job.lease_expires_at, postgresql_where=text("status = 'running'"))
+
+# Observability. `SELECT status, count(*) FROM jobs GROUP BY 1` and its friends.
+Index("ix_jobs_status_type", Job.status, Job.job_type)
