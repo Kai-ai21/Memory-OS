@@ -35,37 +35,11 @@ jobs:
       - run: uv run ruff check .
       - run: uv run mypy
       - run: uv run pytest
-
-  # Fails when the models and the migrations have drifted apart. `alembic check`
-  # exits non-zero if autogenerate would produce a diff, which catches the drift
-  # on the pull request that introduces it rather than months later, when the
-  # migration that should have existed is far harder to reconstruct.
-  migrations:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: pgvector/pgvector:pg17
-        env:
-          POSTGRES_USER: memos
-          POSTGRES_PASSWORD: memos
-          POSTGRES_DB: memos
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U memos -d memos"
-          --health-interval 5s --health-timeout 3s --health-retries 10
-    env:
-      MEMOS_DATABASE_URL: postgresql+asyncpg://memos:memos@localhost:5432/memos
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-      - run: uv sync --frozen --extra dev
-      - run: uv run alembic upgrade head
+      # Fails when the models and the migrations have drifted apart: `alembic
+      # check` exits non-zero if autogenerate would produce a diff. Catching
+      # that on the pull request that introduces it is far cheaper than
+      # reconstructing the missing migration months later.
       - run: uv run alembic check
-      # A downgrade that was never run is a downgrade that does not work.
+      # A downgrade that was never run is a downgrade that does not work. Last,
+      # because it leaves the database empty.
       - run: uv run alembic downgrade base
