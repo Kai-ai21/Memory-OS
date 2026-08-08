@@ -43,13 +43,14 @@ returns `503` when the database is unreachable or `pgvector` is not installed.
 ## Prerequisites
 
 - Python 3.12+
+- [uv](https://docs.astral.sh/uv/) (dependency resolution and virtualenv management)
 - Docker (for Postgres)
 
 ## Quickstart
 
 ```bash
 make up        # start Postgres 17 + pgvector on host port 5433
-make install   # pip install -e ".[dev]"
+make install   # uv sync --frozen --extra dev
 make check     # ruff + mypy --strict + pytest
 make run       # uvicorn on http://localhost:8000
 ```
