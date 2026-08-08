@@ -9,6 +9,7 @@ from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.blobs.filesystem import FilesystemBlobStore
+from memoryos.adapters.chunking.structural import StructuralChunker
 from memoryos.adapters.connectors.filesystem import FilesystemConnector
 from memoryos.adapters.db import models
 from memoryos.adapters.db.embedding_cache import PostgresEmbeddingCache
@@ -101,7 +102,7 @@ def build_corpus(
         store=store,
         search=SearchMemories(sessions, embedder, store),
         sync=SyncSource(sessions, FilesystemConnector(blobs), blobs),
-        normalize=NormalizeMemory(sessions, blobs, build_parsers()),
+        normalize=NormalizeMemory(sessions, blobs, build_parsers(), StructuralChunker(embedder)),
         embed=EmbedMemory(sessions, embedder, cache),
     )
 

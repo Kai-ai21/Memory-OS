@@ -32,6 +32,7 @@ from memoryos.domain.entities import Source
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobType, PermanentError
 from memoryos.domain.values import SourceKind
+from tests.support.fakes import FakeEmbedder
 
 pytestmark = pytest.mark.integration
 
@@ -110,11 +111,12 @@ async def pipeline(
         await SqlAlchemySourceRepository(session).add(source)
 
     blobs = FilesystemBlobStore(tmp_path / "blobs")
+    embedder = FakeEmbedder()
     return Pipeline(
         root=tree,
         source=source,
         sync=SyncSource(sessions, FilesystemConnector(blobs), blobs),
-        normalize=NormalizeMemory(sessions, blobs, build_parsers()),
+        normalize=NormalizeMemory(sessions, blobs, build_parsers(), StructuralChunker(embedder)),
         sessions=sessions,
     )
 
@@ -171,7 +173,7 @@ async def test_syncing_then_normalizing_produces_chunks(pipeline: Pipeline) -> N
 
     chunks = await chunk_rows(pipeline.sessions)
     assert chunks
-    version = StructuralChunker().version
+    version = StructuralChunker(FakeEmbedder()).version
     for chunk in chunks:
         assert chunk.chunker_version == version
         # M1.5 fills these; M1.4 must leave them empty.
@@ -364,11 +366,11 @@ async def test_rechunk_finds_only_stale_memories(pipeline: Pipeline) -> None:
     await pipeline.run_sync()
     await pipeline.normalize_all()
 
-    current = StructuralChunker().version
+    current = StructuralChunker(FakeEmbedder()).version
     assert await find_stale(pipeline.sessions, current_version=current) == []
 
     # A different chunker: every existing chunk is now stale.
-    improved = StructuralChunker(ChunkerConfig(target=320)).version
+    improved = StructuralChunker(FakeEmbedder(), ChunkerConfig(target=320)).version
     stale = await find_stale(pipeline.sessions, current_version=improved)
 
     assert sorted(memory.external_key for memory in stale) == [
@@ -385,7 +387,7 @@ async def test_rechunk_enqueues_normalize_jobs(pipeline: Pipeline) -> None:
     async with pipeline.sessions.begin() as session:
         await session.execute(delete(models.Job))
 
-    improved = StructuralChunker(ChunkerConfig(target=320)).version
+    improved = StructuralChunker(FakeEmbedder(), ChunkerConfig(target=320)).version
     stale = await find_stale(pipeline.sessions, current_version=improved)
     enqueued = await enqueue_rechunk(pipeline.sessions, stale)
 
@@ -397,7 +399,7 @@ async def test_rechunk_can_be_scoped_to_one_source(pipeline: Pipeline) -> None:
     await pipeline.run_sync()
     await pipeline.normalize_all()
 
-    improved = StructuralChunker(ChunkerConfig(target=320)).version
+    improved = StructuralChunker(FakeEmbedder(), ChunkerConfig(target=320)).version
 
     assert (
         len(await find_stale(pipeline.sessions, current_version=improved, source="corpus"))
@@ -419,7 +421,7 @@ async def test_a_new_chunker_version_actually_re_chunks(pipeline: Pipeline) -> N
         pipeline.sessions,
         FilesystemBlobStore(pipeline.root.parent / "blobs"),
         build_parsers(),
-        StructuralChunker(ChunkerConfig(target=200, minimum=40)),
+        StructuralChunker(FakeEmbedder(), ChunkerConfig(target=200, minimum=40)),
     )
     report = await smaller(guide.id)
 
@@ -428,7 +430,7 @@ async def test_a_new_chunker_version_actually_re_chunks(pipeline: Pipeline) -> N
     after = await chunk_rows(pipeline.sessions, "guide.md")
     assert {chunk.id for chunk in after}.isdisjoint(before)
     assert {chunk.chunker_version for chunk in after} == {
-        StructuralChunker(ChunkerConfig(target=200, minimum=40)).version
+        StructuralChunker(FakeEmbedder(), ChunkerConfig(target=200, minimum=40)).version
     }
 
 

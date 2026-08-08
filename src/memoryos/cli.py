@@ -24,6 +24,7 @@ from memoryos.application.backfill import (
     find_unembedded,
     gather_stats,
 )
+from memoryos.application.doctor import run_doctor
 from memoryos.application.evaluation import format_table, measure_recall
 from memoryos.application.ports import SearchFilters
 from memoryos.application.rechunk import enqueue_rechunk, find_stale
@@ -233,6 +234,27 @@ async def run_eval_recall(
     return 0
 
 
+async def run_doctor_command(settings: Settings) -> int:
+    container = Container.build(settings)
+    try:
+        report = await run_doctor(container.database.session_factory, container.embedder)
+        print(f"model:   {container.embedder.model_id}")
+        print(f"window:  {container.embedder.max_sequence_tokens} tokens")
+        print(f"chunker: {container.chunker.version}\n")
+        for finding in report.findings:
+            mark = "ok  " if finding.healthy else "FAIL"
+            print(f"[{mark}] {finding.check}: {finding.count}")
+            if not finding.healthy:
+                print(f"        {finding.detail}")
+                for example in finding.examples:
+                    print(f"        - {example}")
+        print()
+        print("healthy" if report.healthy else "problems found")
+    finally:
+        await container.dispose()
+    return 0 if report.healthy else 1
+
+
 async def run_stats(settings: Settings) -> int:
     container = Container.build(settings)
     try:
@@ -344,6 +366,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     commands.add_parser("stats", help="report corpus and embedding coverage")
+    commands.add_parser(
+        "doctor", help="check the corpus for silently-degrading conditions"
+    )
 
     search = commands.add_parser("search", help="semantic search over memories")
     search.add_argument("query")
@@ -406,6 +431,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "stats":
         return asyncio.run(run_stats(settings))
+
+    if args.command == "doctor":
+        return asyncio.run(run_doctor_command(settings))
 
     if args.command == "search":
         return asyncio.run(

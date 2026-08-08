@@ -10,7 +10,13 @@ from memoryos.adapters.parsers.registry import build_default_registry as build_p
 from memoryos.application.embed import EmbedMemory
 from memoryos.application.jobs.registry import Handler, HandlerRegistry, JobContext
 from memoryos.application.normalize import NormalizeMemory
-from memoryos.application.ports import BlobStore, Connector, Embedder, EmbeddingCache
+from memoryos.application.ports import (
+    BlobStore,
+    Chunker,
+    Connector,
+    Embedder,
+    EmbeddingCache,
+)
 from memoryos.application.sync import SyncSource
 from memoryos.domain.jobs import JobType, PermanentError, TransientError
 
@@ -39,11 +45,15 @@ def make_embed_handler(
 
 
 def make_normalize_handler(
-    session_factory: async_sessionmaker[AsyncSession], blob_store: BlobStore
+    session_factory: async_sessionmaker[AsyncSession],
+    blob_store: BlobStore,
+    chunker: Chunker,
 ) -> Handler:
     """Build the `NORMALIZE_MEMORY` handler."""
 
-    normalize = NormalizeMemory(session_factory, blob_store, build_parser_registry())
+    normalize = NormalizeMemory(
+        session_factory, blob_store, build_parser_registry(), chunker
+    )
 
     async def handle_normalize_memory(ctx: JobContext) -> None:
         raw_id = ctx.job.payload.get("memory_id")
@@ -113,6 +123,7 @@ def build_default_registry(
     blob_store: BlobStore | None = None,
     embedder: Embedder | None = None,
     cache: EmbeddingCache | None = None,
+    chunker: Chunker | None = None,
     batch_size: int = 32,
 ) -> HandlerRegistry:
     """The registry a worker runs with.
@@ -132,9 +143,10 @@ def build_default_registry(
             make_embed_handler(session_factory, embedder, cache, batch_size),
         )
 
-    if session_factory is not None and blob_store is not None:
+    if session_factory is not None and blob_store is not None and chunker is not None:
         registry.register(
-            JobType.NORMALIZE_MEMORY, make_normalize_handler(session_factory, blob_store)
+            JobType.NORMALIZE_MEMORY,
+            make_normalize_handler(session_factory, blob_store, chunker),
         )
 
     if session_factory is not None and connector is not None and blob_store is not None:

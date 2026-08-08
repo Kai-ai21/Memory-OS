@@ -88,7 +88,70 @@ def test_the_model_id_carries_a_revision(
     embedder: SentenceTransformerEmbedder,
 ) -> None:
     assert embedder.model_id.endswith("@1")
-    assert "all-MiniLM-L6-v2" in embedder.model_id
+    assert "bge-small-en-v1.5" in embedder.model_id
+
+
+def test_the_window_is_larger_than_the_model_it_replaced(
+    embedder: SentenceTransformerEmbedder,
+) -> None:
+    # Measured, not assumed: bge-small reports 512 against MiniLM's 256, at the
+    # same 384 dimensions, so the column and the index are unchanged.
+    assert embedder.max_sequence_tokens == 512
+
+
+def test_text_past_the_window_still_changes_the_embedding(
+    embedder: SentenceTransformerEmbedder,
+) -> None:
+    """The defect M1.6.1 exists to fix.
+
+    Under the old configuration — 640-token chunks against a 256-token model —
+    two chunks sharing a long prefix embedded identically, because everything
+    past the window was discarded. This asserts the pair the chunker can now
+    actually produce differs.
+    """
+    window = embedder.max_sequence_tokens
+    prefix = "The worker claims a job from the queue and holds a lease on it. "
+    # Just inside the window, which is the largest chunk the chunker will emit.
+    while embedder.count_tokens(prefix) < window - 40:
+        prefix += "The worker claims a job from the queue and holds a lease on it. "
+
+    first, second = embedder.embed([prefix + "ENDING ONE", prefix + "ENDING TWO"])
+
+    assert first != second
+    similarity = sum(a * b for a, b in zip(first, second, strict=True))
+    assert similarity < 0.9999, "endings past the window were discarded"
+
+
+def test_the_window_is_what_the_chunker_was_sized_against(
+    embedder: SentenceTransformerEmbedder,
+) -> None:
+    from memoryos.adapters.chunking.structural import StructuralChunker
+
+    chunker = StructuralChunker(embedder)
+    # The invariant the startup assertion enforces, checked against the real
+    # tokenizer rather than a fake.
+    assert chunker.max_tokens <= embedder.max_sequence_tokens
+
+
+def test_the_tokenizer_counts_code_far_above_the_old_heuristic(
+    embedder: SentenceTransformerEmbedder,
+) -> None:
+    """Why counting words was not close enough.
+
+    Identifiers split into several WordPieces, so a words-and-punctuation
+    heuristic undercounts code by roughly 2.7x — enough that a chunk sized
+    "safely" under the old scheme overflowed the window badly.
+    """
+    import re
+
+    code = "\n".join(
+        f"    intermediate_value_{n} = compute_something(intermediate_value_{n - 1})"
+        for n in range(1, 60)
+    )
+    heuristic = len(re.findall(r"\w+|[^\w\s]", code))
+    real = embedder.count_tokens(code)
+
+    assert real > heuristic * 2
 
 
 def test_a_wrong_expected_dimension_is_caught_at_load() -> None:
