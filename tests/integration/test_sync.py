@@ -76,7 +76,7 @@ async def fixture(
     return Fixture(
         root=tree,
         source=source,
-        sync=SyncSource(sessions, FilesystemConnector(), blobs),
+        sync=SyncSource(sessions, FilesystemConnector(blobs), blobs),
         blobs=blobs,
         sessions=sessions,
     )

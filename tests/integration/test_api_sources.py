@@ -126,9 +126,8 @@ async def test_listing_memories_filters_by_source_and_paginates(
 
     from uuid import UUID
 
-    sync = SyncSource(
-        sessions, FilesystemConnector(), FilesystemBlobStore(corpus.parent / "blobs")
-    )
+    blobs = FilesystemBlobStore(corpus.parent / "blobs")
+    sync = SyncSource(sessions, FilesystemConnector(blobs), blobs)
     await sync(UUID(source_id), full=True)
 
     everything = await client.get("/memories", params={"source_id": source_id})

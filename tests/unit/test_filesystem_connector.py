@@ -6,10 +6,12 @@ rather than that they are true.
 """
 
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
 
+from memoryos.adapters.blobs.filesystem import FilesystemBlobStore
 from memoryos.adapters.connectors.filesystem import (
     DEFAULT_EXCLUDE,
     FilesystemConfig,
@@ -34,8 +36,17 @@ def make_source(root: Path, **config: object) -> Source:
     )
 
 
-async def observe_all(source: Source, *, full: bool = True) -> list[ObservedItem]:
-    return [item async for item in FilesystemConnector().observe(source, full=full)]
+async def observe_all(
+    source: Source, *, full: bool = True, blob_root: Path | None = None
+) -> list[ObservedItem]:
+    """Walk a source, storing blobs somewhere disposable.
+
+    The connector hashes by streaming into the blob store, so it needs one even
+    when the test only cares about which files were found.
+    """
+    blobs = FilesystemBlobStore(blob_root or Path(tempfile.mkdtemp()))
+    connector = FilesystemConnector(blobs)
+    return [item async for item in connector.observe(source, full=full)]
 
 
 # --------------------------------------------------------------------------

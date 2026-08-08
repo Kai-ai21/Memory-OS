@@ -173,10 +173,11 @@ class SyncSource:
 
             if not artifact_known:
                 # Bytes before the row that promises them: an artifact
-                # referencing a blob nobody stored is a dangling promise. The
-                # blob store is content-addressed and idempotent, so a retry
-                # after a crash here rewrites identical bytes to the same path.
-                await self._blobs.put(item.content_hash, await item.read_bytes())
+                # referencing a blob nobody stored is a dangling promise. A
+                # connector that hashes by streaming into the blob store has
+                # already done this; one that cannot stream leaves it to us.
+                if not await self._blobs.exists(item.content_hash):
+                    await self._blobs.put(item.content_hash, await item.read_bytes())
                 await artifacts.add(
                     RawArtifact(
                         content_hash=item.content_hash,

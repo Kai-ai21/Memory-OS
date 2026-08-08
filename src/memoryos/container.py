@@ -27,11 +27,12 @@ class Container:
     @classmethod
     def build(cls, settings: Settings) -> "Container":
         database = Database.from_url(settings.database_url, echo=settings.db_echo)
+        blobs = FilesystemBlobStore(settings.blob_root)
         return cls(
             settings=settings,
             database=database,
-            blobs=FilesystemBlobStore(settings.blob_root),
-            connector=FilesystemConnector(),
+            blobs=blobs,
+            connector=FilesystemConnector(blobs),
             queue=PostgresJobQueue(database.session_factory),
         )
 

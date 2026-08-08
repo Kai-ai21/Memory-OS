@@ -94,6 +94,18 @@ class BlobStore(Protocol):
     async def put(self, content_hash: ContentHash, data: bytes) -> None:
         """Idempotent. Writing the same hash twice is a no-op."""
 
+    async def put_stream(self, chunks: AsyncIterator[bytes]) -> tuple[ContentHash, int]:
+        """Stream bytes to storage, computing the hash in transit.
+
+        Returns the content hash and byte size.
+
+        The hash is not known until the last byte has passed through, so the
+        destination path is not known either — which is why this writes to a
+        temp file and moves it into place once the name exists. One pass over
+        the source instead of one to hash and another to store.
+        """
+        ...
+
     async def get(self, content_hash: ContentHash) -> bytes: ...
 
     async def exists(self, content_hash: ContentHash) -> bool: ...
