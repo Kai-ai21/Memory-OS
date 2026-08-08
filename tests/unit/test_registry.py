@@ -41,12 +41,12 @@ def test_registered_types_reports_what_is_known() -> None:
         "noop",
         "fail_transient",
         "fail_permanent",
-        "embed_memory",
     }
 
 
 @pytest.mark.parametrize(
-    "job_type", [JobType.SYNC_SOURCE, JobType.NORMALIZE_MEMORY]
+    "job_type",
+    [JobType.SYNC_SOURCE, JobType.NORMALIZE_MEMORY, JobType.EMBED_MEMORY],
 )
 def test_real_job_types_are_absent_without_their_collaborators(job_type: JobType) -> None:
     # These need a session factory, a blob store, and (for sync) a connector. A

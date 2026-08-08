@@ -7,25 +7,35 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.blobs.filesystem import BlobNotFound
 from memoryos.adapters.parsers.registry import build_default_registry as build_parser_registry
+from memoryos.application.embed import EmbedMemory
 from memoryos.application.jobs.registry import Handler, HandlerRegistry, JobContext
 from memoryos.application.normalize import NormalizeMemory
-from memoryos.application.ports import BlobStore, Connector
+from memoryos.application.ports import BlobStore, Connector, Embedder, EmbeddingCache
 from memoryos.application.sync import SyncSource
 from memoryos.domain.jobs import JobType, PermanentError, TransientError
 
 logger = structlog.get_logger(__name__)
 
 
-async def handle_embed_memory(ctx: JobContext) -> None:
-    """A stub until M1.5.
+def make_embed_handler(
+    session_factory: async_sessionmaker[AsyncSession],
+    embedder: Embedder,
+    cache: EmbeddingCache,
+    batch_size: int,
+) -> Handler:
+    """Build the `EMBED_MEMORY` handler."""
 
-    Chunks land with `embedding IS NULL`; this is what will fill them. It is
-    enqueued now so the normalize-to-embed wiring is exercised end to end
-    without pulling embeddings into this milestone.
-    """
-    logger.info(
-        "embed.stub", job_id=str(ctx.job.id), memory_id=ctx.job.payload.get("memory_id")
-    )
+    embed = EmbedMemory(session_factory, embedder, cache, batch_size)
+
+    async def handle_embed_memory(ctx: JobContext) -> None:
+        raw_id = ctx.job.payload.get("memory_id")
+        if not raw_id:
+            raise PermanentError("embed_memory job has no memory_id in its payload")
+
+        report = await embed(UUID(str(raw_id)))
+        logger.info("embed.job_finished", job_id=str(ctx.job.id), **report.as_dict())
+
+    return handle_embed_memory
 
 
 def make_normalize_handler(
@@ -101,19 +111,26 @@ def build_default_registry(
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     connector: Connector | None = None,
     blob_store: BlobStore | None = None,
+    embedder: Embedder | None = None,
+    cache: EmbeddingCache | None = None,
+    batch_size: int = 32,
 ) -> HandlerRegistry:
     """The registry a worker runs with.
 
-    `SYNC_SOURCE` and `NORMALIZE_MEMORY` need collaborators the test types do
-    not, so they are only registered when those are supplied. A worker built
-    without them simply has no handler for that type, and the worker already
-    treats an unregistered type as permanent rather than retrying forever.
+    The real job types need collaborators the test types do not, so each is
+    registered only when its own are supplied. A worker built without them
+    simply has no handler for that type, and the worker already treats an
+    unregistered type as permanent rather than retrying forever.
     """
     registry = HandlerRegistry()
     registry.register(JobType.NOOP, handle_noop)
     registry.register(JobType.FAIL_TRANSIENT, handle_fail_transient)
     registry.register(JobType.FAIL_PERMANENT, handle_fail_permanent)
-    registry.register(JobType.EMBED_MEMORY, handle_embed_memory)
+    if session_factory is not None and embedder is not None and cache is not None:
+        registry.register(
+            JobType.EMBED_MEMORY,
+            make_embed_handler(session_factory, embedder, cache, batch_size),
+        )
 
     if session_factory is not None and blob_store is not None:
         registry.register(

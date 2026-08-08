@@ -33,6 +33,11 @@ DEFAULT_EXCLUDE = [
     "**/.venv/**",
     "**/__pycache__/**",
     "**/.DS_Store",
+    # This project's own state directory: the blob store and the HuggingFace
+    # model cache live here. A source rooted above it would otherwise ingest
+    # the blob store into itself — every sync feeding the next one — and file
+    # the model's vocab.txt as a memory.
+    "**/var/**",
 ]
 DEFAULT_MAX_FILE_BYTES = 50 * 1024 * 1024
 

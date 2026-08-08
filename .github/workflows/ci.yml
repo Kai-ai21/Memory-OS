@@ -17,6 +17,9 @@ jobs:
           --health-interval 5s --health-timeout 3s --health-retries 10
     env:
       MEMOS_DATABASE_URL: postgresql+asyncpg://memos:memos@localhost:5432/memos
+      # Pinned so the cache step below and the code agree on where weights live.
+      HF_HOME: ${{ github.workspace }}/var/hf
+      MEMOS_HF_HOME: ${{ github.workspace }}/var/hf
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,6 +32,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
       - run: uv sync --frozen --extra dev
+      # The default test run excludes the `slow` marker, so nothing here loads
+      # the model — but the cache is shared with the `slow-tests` job below.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/var/hf
+          key: hf-${{ runner.os }}-sentence-transformers-all-MiniLM-L6-v2
       # The initial migration creates the `vector` extension, so this is also
       # what installs it for the readiness check.
       - run: uv run alembic upgrade head
@@ -43,3 +52,28 @@ jobs:
       # A downgrade that was never run is a downgrade that does not work. Last,
       # because it leaves the database empty.
       - run: uv run alembic downgrade base
+
+  # The only job that loads the real embedding model. Separate, because it
+  # downloads ~90MB and takes far longer than everything else — and because a
+  # green suite that never checks the vectors mean anything is exactly the
+  # failure this job exists to catch.
+  slow-tests:
+    runs-on: ubuntu-latest
+    env:
+      HF_HOME: ${{ github.workspace }}/var/hf
+      MEMOS_HF_HOME: ${{ github.workspace }}/var/hf
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/var/hf
+          key: hf-${{ runner.os }}-sentence-transformers-all-MiniLM-L6-v2
+      - run: uv sync --frozen --extra dev
+      - run: uv run pytest -m slow

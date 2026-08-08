@@ -303,3 +303,22 @@ def test_config_resolves_the_root(tmp_path: Path) -> None:
     nested.mkdir(parents=True)
     config = FilesystemConfig.from_dict({"root": str(nested / ".." / "b")})
     assert config.root == nested.resolve()
+
+
+async def test_the_projects_own_state_directory_is_excluded(tmp_path: Path) -> None:
+    """`var/` holds the blob store and the model cache.
+
+    A source rooted above it would ingest the blob store into itself — each
+    sync feeding the next — and file the embedding model's vocab.txt as a
+    memory. Both were observed before this exclusion existed.
+    """
+    (tmp_path / "kept.md").write_text("real content")
+    (tmp_path / "var" / "blobs" / "ab" / "cd").mkdir(parents=True)
+    (tmp_path / "var" / "blobs" / "ab" / "cd" / "notes.md").write_text("a stored blob")
+    (tmp_path / "var" / "hf").mkdir(parents=True)
+    (tmp_path / "var" / "hf" / "vocab.txt").write_text("token\n" * 100)
+    (tmp_path / "var" / "hf" / "README.md").write_text("model card")
+
+    keys = [item.external_key for item in await observe_all(make_source(tmp_path))]
+
+    assert keys == ["kept.md"]

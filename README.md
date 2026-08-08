@@ -6,14 +6,15 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 
 ## Status
 
-**Phase 1, Milestone 1.4 — normalization and chunking.**
+**Phase 1, Milestone 1.5 — embedding pipeline.**
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, and splits
 that text into chunks sized for an embedding model.
 
-It does not embed. Chunks land with `embedding IS NULL` and a `chunker_version` stamp; M1.5
-fills the vectors.
+Chunks now carry real vectors from a local sentence-transformers model, batched and cached.
+There is no vector index and no search endpoint yet — that is M1.6, and until then a query is
+a sequential scan.
 
 ## Architecture
 
@@ -131,6 +132,45 @@ which makes improving the chunker a query rather than a corpus rebuild:
 memoryos rechunk --dry-run          # what is stale?
 memoryos rechunk --source notes     # enqueue those, and only those
 ```
+
+## Embeddings
+
+```bash
+memoryos embed --dry-run              # what is unembedded?
+memoryos reembed --model NEW_ID       # after a model change
+memoryos stats                        # coverage and cache size
+```
+
+`all-MiniLM-L6-v2` runs locally, 384 dimensions to match the column fixed in M1.1. Vectors are
+unit length, which makes cosine similarity and inner product the same number and lets M1.6 use
+the cheaper one. Embedding runs on a thread — it is CPU-bound matrix multiplication, and on the
+event loop it would stall every other coroutine including health checks.
+
+**The model id is part of the cache key, and that is a correctness requirement rather than an
+optimisation.** Keying on text alone would let a model upgrade silently reuse the old model's
+vectors. Nothing would error; the index would simply hold two incompatible coordinate systems,
+and similarity between them is arithmetically valid and semantically meaningless. That is a
+very hard failure to trace back to its cause.
+
+The cache is its own table so that identical text in different memories is embedded once, and
+so that a crash between embedding and the chunk update costs nothing — the retried job finds
+every vector in cache and never touches the model.
+
+Combined with M1.4's chunk adoption, a cosmetic edit is free end to end: a line-ending change
+produces a new artifact and a new memory version, but the chunk rows move to it carrying their
+vectors, so nothing is re-chunked and nothing is re-embedded.
+
+The first install is large — `torch` and `sentence-transformers` bring the virtualenv to
+roughly 900MB, and the model weights are a further ~90MB downloaded on first use into
+`MEMOS_HF_HOME` (default `./var/hf`).
+
+```bash
+make test-slow    # the one test that loads the real model
+```
+
+That test is the only thing standing between this pipeline and one that fills the column with
+plausible-looking garbage: every other test runs against a deterministic fake, which cannot
+tell you whether the vectors mean anything.
 
 ## Migrations
 

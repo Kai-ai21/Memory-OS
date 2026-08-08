@@ -216,3 +216,61 @@ class Chunker(Protocol):
         ...
 
     def chunk(self, doc: ParsedDocument) -> list[TextChunk]: ...
+
+
+class Embedder(Protocol):
+    """Turns text into vectors.
+
+    The clearest case in Phase 1 for a port. Phase 2's evaluation harness will
+    find a model that does better on this corpus, and that swap has to be a new
+    adapter rather than a refactor of everything that touches embeddings.
+    """
+
+    @property
+    def model_id(self) -> str:
+        """Stable identifier including version.
+
+        e.g. 'sentence-transformers/all-MiniLM-L6-v2@1'. It is part of the
+        cache key, so it has to change whenever the vectors would.
+        """
+        ...
+
+    @property
+    def dimension(self) -> int: ...
+
+    @property
+    def normalizes(self) -> bool:
+        """True if output vectors are unit length."""
+        ...
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        """Synchronous on purpose.
+
+        This is CPU-bound matrix multiplication. Giving it an async signature
+        would invite someone to await it on the event loop, where it would
+        stall every other coroutine in the process — including health checks.
+        Callers push it onto a thread.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class CacheEntry:
+    cache_key: str
+    model_id: str
+    dimension: int
+    embedding: list[float]
+
+
+class EmbeddingCache(Protocol):
+    """Text-to-vector memoisation, keyed by (model, text).
+
+    Its own table rather than a column on `memory_chunks`, because identical
+    text in different memories should be embedded once. M1.4's smoke test found
+    five identical empty files in this repository alone; a real corpus repeats
+    far more than that.
+    """
+
+    async def get_many(self, keys: Sequence[str]) -> dict[str, list[float]]: ...
+
+    async def put_many(self, entries: Sequence[CacheEntry]) -> None: ...

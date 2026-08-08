@@ -19,6 +19,11 @@ from memoryos.adapters.connectors.filesystem import (
 )
 from memoryos.adapters.db import models
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
+from memoryos.application.backfill import (
+    enqueue_embedding,
+    find_unembedded,
+    gather_stats,
+)
 from memoryos.application.rechunk import enqueue_rechunk, find_stale
 from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
@@ -125,6 +130,61 @@ async def run_rechunk(
     return 0
 
 
+async def run_embed(
+    settings: Settings, *, source: str | None, dry_run: bool, stale_only: bool = False
+) -> int:
+    container = Container.build(settings)
+    try:
+        model_id = container.embedder.model_id
+        pending = await find_unembedded(
+            container.database.session_factory,
+            model_id=model_id,
+            source=source,
+            stale_only=stale_only,
+        )
+
+        print(f"target model:      {model_id}")
+        print(f"memories pending:  {len(pending)}")
+        print(f"chunks pending:    {sum(memory.chunks for memory in pending)}")
+        for memory in pending[:20]:
+            print(f"  {memory.external_key} ({memory.chunks} chunks)")
+        if len(pending) > 20:
+            print(f"  ... and {len(pending) - 20} more")
+
+        if dry_run:
+            print("dry run; nothing enqueued")
+            return 0
+
+        enqueued = await enqueue_embedding(container.database.session_factory, pending)
+        print(f"enqueued: {enqueued}")
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_stats(settings: Settings) -> int:
+    container = Container.build(settings)
+    try:
+        stats = await gather_stats(container.database.session_factory)
+        print(f"memories          {stats.memories} ({stats.current_memories} current)")
+        print(f"chunks            {stats.chunks}")
+        print(
+            f"embedded chunks   {stats.embedded_chunks} "
+            f"({stats.coverage:.1%} coverage)"
+        )
+        print(f"cache entries     {stats.cache_entries}")
+        if stats.chunks:
+            # How much of the corpus the cache spared. Distinct from the
+            # per-run hit rate, which the embed job logs as it goes.
+            reuse = 1 - (stats.cache_entries / stats.chunks) if stats.chunks else 0
+            print(f"cache reuse       {reuse:.1%} of chunks shared a cached vector")
+        for model, count in sorted(stats.models.items()):
+            print(f"  {model or '(none)'}: {count}")
+    finally:
+        await container.dispose()
+    return 0
+
+
 async def run_sync(settings: Settings, *, name: str, full: bool) -> int:
     container = Container.build(settings)
     try:
@@ -190,6 +250,29 @@ def build_parser() -> argparse.ArgumentParser:
     rechunk.add_argument(
         "--dry-run", action="store_true", help="report what would be enqueued"
     )
+
+    embed = commands.add_parser(
+        "embed", help="enqueue embedding for memories with unembedded chunks"
+    )
+    embed.add_argument("--source", help="limit to one source by name")
+    embed.add_argument(
+        "--dry-run", action="store_true", help="report what would be enqueued"
+    )
+
+    reembed = commands.add_parser(
+        "reembed", help="enqueue re-embedding for chunks from a different model"
+    )
+    reembed.add_argument(
+        "--model",
+        dest="model",
+        help="target model id; defaults to the configured one",
+    )
+    reembed.add_argument("--source", help="limit to one source by name")
+    reembed.add_argument(
+        "--dry-run", action="store_true", help="report what would be enqueued"
+    )
+
+    commands.add_parser("stats", help="report corpus and embedding coverage")
     return parser
 
 
@@ -213,6 +296,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "sync":
         return asyncio.run(run_sync(settings, name=args.source, full=args.full))
+
+    if args.command == "embed":
+        return asyncio.run(
+            run_embed(settings, source=args.source, dry_run=args.dry_run)
+        )
+
+    if args.command == "reembed":
+        if args.model:
+            settings = settings.model_copy(update={"embedding_model": args.model})
+        return asyncio.run(
+            run_embed(
+                settings, source=args.source, dry_run=args.dry_run, stale_only=True
+            )
+        )
+
+    if args.command == "stats":
+        return asyncio.run(run_stats(settings))
 
     if args.command == "rechunk":
         return asyncio.run(
