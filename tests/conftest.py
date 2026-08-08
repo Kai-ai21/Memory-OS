@@ -6,8 +6,15 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
+from memoryos.adapters.db.models import Base
 from memoryos.api.app import create_app
 from memoryos.config import Settings
 
@@ -36,7 +43,7 @@ def settings() -> Settings:
 
 
 @pytest.fixture
-async def client(settings: Settings) -> AsyncIterator[AsyncClient]:
+async def client(settings: Settings, clean_database: None) -> AsyncIterator[AsyncClient]:
     app = create_app(settings)
     async with (
         app.router.lifespan_context(app),
@@ -61,22 +68,47 @@ async def engine(migrated_database: None, settings: Settings) -> AsyncIterator[A
 
 
 @pytest.fixture
-async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
-    """A session whose work is rolled back when the test ends.
+async def clean_database(engine: AsyncEngine) -> AsyncIterator[None]:
+    """Empty every table before the test runs.
 
-    The outer transaction is never committed, so tests leave no rows behind and
-    do not depend on the order they run in. `create_savepoint` lets a repository
-    or a test commit without escaping that outer transaction.
+    One isolation strategy for the whole suite, on purpose. Until M1.3 there
+    were two: repository tests rolled back an outer transaction while queue
+    tests truncated, because the queue commits. Sync commits too, and a suite
+    with two strategies produces order-dependent failures whose cause is
+    invisible in the failing test — the damage was done by whatever ran before
+    it.
+
+    Truncation is the strategy that survives code under test committing, which
+    is why it is the one that generalises.
     """
-    async with engine.connect() as connection:
-        transaction = await connection.begin()
-        db_session = AsyncSession(
-            bind=connection,
-            expire_on_commit=False,
-            join_transaction_mode="create_savepoint",
-        )
-        try:
-            yield db_session
-        finally:
-            await db_session.close()
-            await transaction.rollback()
+    await truncate_all(engine)
+    yield
+
+
+async def truncate_all(engine: AsyncEngine) -> None:
+    tables = ", ".join(f'"{table.name}"' for table in Base.metadata.sorted_tables)
+    async with engine.begin() as connection:
+        # RESTART IDENTITY so the event log's seq starts from 1 in every test
+        # that asserts on ordering; CASCADE so foreign keys do not dictate the
+        # order of a statement that is emptying everything anyway.
+        await connection.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
+
+
+@pytest.fixture
+async def sessions(
+    engine: AsyncEngine, clean_database: None
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """A session factory over a freshly emptied database.
+
+    Code under test owns its own transactions; nothing here wraps them.
+    """
+    yield async_sessionmaker(engine, expire_on_commit=False)
+
+
+@pytest.fixture
+async def session(
+    sessions: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[AsyncSession]:
+    """A single session for tests that just need somewhere to write."""
+    async with sessions() as db_session:
+        yield db_session

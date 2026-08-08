@@ -41,7 +41,15 @@ def test_registered_types_reports_what_is_known() -> None:
         "noop",
         "fail_transient",
         "fail_permanent",
+        "normalize_memory",
     }
+
+
+def test_sync_source_is_absent_without_its_collaborators() -> None:
+    # SYNC_SOURCE needs a session factory, a connector, and a blob store. A
+    # registry built without them simply has no handler for it, and the worker
+    # already dead-letters an unregistered type rather than retrying forever.
+    assert build_default_registry().get(JobType.SYNC_SOURCE.value) is None
 
 
 async def test_the_noop_handler_succeeds_and_writes_nothing() -> None:

@@ -21,8 +21,14 @@ class JobStatus(StrEnum):
 
 
 class JobType(StrEnum):
-    """Only test types for now; the real ones arrive with the connector in M1.3."""
+    SYNC_SOURCE = auto()
+    # A stub in M1.3: it logs and returns. M1.4 gives it a body. Enqueuing it
+    # now is what proves the connector-to-queue wiring end to end without
+    # pulling normalization forward into this milestone.
+    NORMALIZE_MEMORY = auto()
 
+    # Test types. The worker's success, retry, and dead-letter paths are
+    # exercised through these rather than through real work.
     NOOP = auto()
     FAIL_TRANSIENT = auto()
     FAIL_PERMANENT = auto()

@@ -3,9 +3,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from memoryos.adapters.db.engine import Database
-from memoryos.api.routes import health
+from memoryos.api.routes import health, sources
 from memoryos.config import Settings, get_settings
+from memoryos.container import Container
 from memoryos.logging import configure_logging
 
 
@@ -15,14 +15,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        database = Database.from_url(resolved.database_url, echo=resolved.db_echo)
+        container = Container.build(resolved)
         app.state.settings = resolved
-        app.state.db = database
+        app.state.container = container
+        # Kept for the health routes, which predate the container.
+        app.state.db = container.database
         try:
             yield
         finally:
-            await database.dispose()
+            await container.dispose()
 
     app = FastAPI(title="Memory Intelligence OS", version="0.1.0", lifespan=lifespan)
     app.include_router(health.router)
+    app.include_router(sources.router)
     return app
