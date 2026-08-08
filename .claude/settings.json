@@ -6,7 +6,6 @@
       "Read(**/.ssh/**)",
       "Read(**/.aws/**)",
       "Bash(rm -rf /:*)",
-      "Bash(git push --force:*)",
       "Bash(git reset --hard:*)",
       "Bash(git clean:*)",
       "Bash(sudo:*)",
@@ -16,6 +15,7 @@
     ],
     "ask": [
       "Bash(git push:*)",
+      "Bash(git push --force:*)",
       "Bash(git merge:*)",
       "Bash(git rebase:*)",
       "Bash(git checkout main:*)",
