@@ -32,6 +32,7 @@ def hit(chunks: list[ScoredChunk]) -> MemoryHit:
     return MemoryHit(
         memory_id=chunks[0].memory_id,
         external_key="notes.md",
+        source_name="corpus",
         title=None,
         kind=MemoryKind.NOTE,
         occurred_at=datetime(2024, 1, 1, tzinfo=UTC),

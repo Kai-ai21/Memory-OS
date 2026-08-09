@@ -77,3 +77,46 @@ jobs:
           key: hf-${{ runner.os }}-sentence-transformers-all-MiniLM-L6-v2
       - run: uv sync --frozen --extra dev
       - run: uv run pytest -m slow
+
+  # The frontend, and the check that its API types still match the API.
+  #
+  # The drift check is the point of this job. Hand-written API types go stale
+  # silently, and this project has twice paid for "two places that must agree
+  # with nothing checking" — the chunker against the model's window, and Settings
+  # against the embedder's model name. Regenerating and diffing makes a backend
+  # change that breaks the client fail here rather than at runtime.
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - run: uv sync --frozen --extra dev
+      - run: cd web && npm ci
+
+      # No database and no server: the schema comes from the app object, so this
+      # runs anywhere.
+      - name: Regenerate the API types
+        run: make types
+      - name: Fail if the committed types are stale
+        run: |
+          if ! git diff --exit-code -- web/src/api/schema.d.ts web/src/api/openapi.json; then
+            echo
+            echo "The generated API types do not match the API."
+            echo "Run 'make types' and commit web/src/api/schema.d.ts and openapi.json."
+            exit 1
+          fi
+
+      - run: cd web && npm run typecheck
+      - run: cd web && npm run test -- --run
+      - run: cd web && npm run build
