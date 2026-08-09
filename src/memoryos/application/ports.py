@@ -2,6 +2,11 @@
 
 Protocols only. No implementations, no imports from `memoryos.adapters`. The
 dependency arrow points inward: adapters implement these, never the reverse.
+
+`async_sessionmaker` is the one infrastructure type that appears here, because
+every use case in this layer already takes one as its unit-of-work factory. It is
+a type, not an adapter, and pretending otherwise would mean inventing a wrapper
+whose only job is to not be named SQLAlchemy.
 """
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
@@ -9,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 from uuid import UUID
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.domain.entities import IngestionEvent, Memory, RawArtifact, Source
 from memoryos.domain.jobs import Job, JobSpec
@@ -39,7 +46,17 @@ class EventLog(Protocol):
     event would silently change history that has already been projected.
     """
 
-    async def append(self, event: IngestionEvent) -> None: ...
+    async def append(self, event: IngestionEvent) -> IngestionEvent:
+        """Append, and return the event as the log recorded it.
+
+        The returned copy carries `seq` and `recorded_at`, which the database
+        assigns and the caller cannot know beforehand. That matters more than it
+        looks: `recorded_at` is the timestamp every value derived from this event
+        must be stamped with, so that replaying the log reproduces them exactly.
+        A caller that used its own clock instead would write a projection the log
+        cannot regenerate.
+        """
+        ...
 
     async def replay(self, after_seq: int = 0, limit: int = 1000) -> Sequence[IngestionEvent]: ...
 
@@ -49,7 +66,16 @@ class MemoryRepository(Protocol):
 
     async def add_version(self, memory: Memory) -> None: ...
 
-    async def tombstone(self, memory_id: UUID) -> None: ...
+    async def tombstone(self, memory_id: UUID, at: datetime) -> None:
+        """Mark a memory deleted as of `at`.
+
+        The timestamp is passed in rather than taken from the clock, and that is
+        a replay requirement: `deleted_at` is a derived value, so it has to be a
+        function of the event that caused it — its `recorded_at` — or a rebuild
+        produces a corpus that differs from the original in a column nobody
+        would think to look at.
+        """
+        ...
 
 
 class JobQueue(Protocol):
@@ -361,6 +387,42 @@ class ScoredChunk:
     # can name the function it came from is the difference between "somewhere in
     # sync.py" and a reference somebody can check.
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class ShadowWorkspace(Protocol):
+    """Somewhere to rebuild the derived tables that is not the live one.
+
+    A replay that truncates and refills the live tables leaves the corpus
+    unsearchable while it runs, and unrecoverable if it fails halfway. This is
+    the seam that lets the rebuild happen alongside the live copy and then
+    replace it in one step — or be thrown away, which is what `verify-replay`
+    does with it.
+
+    Deliberately not "a second database". The rebuild reads the event log and the
+    artifacts, which live in the original, and copying those would both defeat
+    the point and mean the copy could go stale mid-replay.
+    """
+
+    async def create(self) -> None:
+        """Build empty derived tables in the workspace."""
+
+    async def sessions(self) -> async_sessionmaker[AsyncSession]:
+        """A session factory whose writes land in the workspace, not the live tables."""
+        ...
+
+    async def build_indexes(self) -> None:
+        """Create the indexes that are cheaper to build after loading than during.
+
+        The vector index in particular: building it on an empty table and
+        maintaining it through every insert is both slower overall and yields a
+        worse-connected graph than one build over finished data.
+        """
+
+    async def swap_in(self) -> None:
+        """Replace the live derived tables with the workspace's, atomically."""
+
+    async def discard(self) -> None:
+        """Throw the workspace away, leaving the live tables untouched."""
 
 
 class VectorStore(Protocol):

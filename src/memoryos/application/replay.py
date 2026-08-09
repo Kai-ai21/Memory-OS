@@ -1,0 +1,666 @@
+"""Rebuild the corpus from the log and the blobs.
+
+The claim M1.1 made in a docstring and every milestone since has repeated:
+`ingestion_events` plus the blob store is the whole truth, and everything else is
+a projection that can be thrown away. This is where that claim is either true or
+it is not.
+
+Which tables are which is written down below as data rather than described in
+prose, because a table added to the wrong set breaks the guarantee silently —
+nothing errors, the rebuild simply loses a category of information. A test
+asserts every table in `Base.metadata` appears in exactly one of the two sets, so
+adding a table without classifying it fails the build.
+
+Determinism is the property that makes a rebuild worth anything. Nothing derived
+here reads the clock: `ingested_at` and `deleted_at` come from the causing
+event's `recorded_at`, versions come from the order of the log, and the memory
+itself comes from `projection.memory_from_event` — the same function `sync` uses,
+so "exactly as sync would have" is structural rather than a promise. The one
+exception is `memory_chunks.embedded_at`, which records when a vector was
+computed rather than anything about the data, and legitimately differs after a
+recomputation. It is not compared by `verify-replay` for that reason.
+"""
+
+import time
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from enum import StrEnum, auto
+from uuid import UUID
+
+import structlog
+from sqlalchemy import ColumnElement, delete, func, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from memoryos.adapters.blobs.filesystem import BlobNotFound
+from memoryos.adapters.db import models
+from memoryos.adapters.db.mappers import to_event
+from memoryos.adapters.db.repositories import SqlAlchemyMemoryRepository
+from memoryos.application.embed import EmbedMemory
+from memoryos.application.normalize import NormalizeMemory
+from memoryos.application.ports import ShadowWorkspace
+from memoryos.application.projection import memory_from_event, recorded_at_of
+from memoryos.domain.entities import IngestionEvent
+from memoryos.domain.ids import new_id
+from memoryos.domain.values import EventType
+
+logger = structlog.get_logger(__name__)
+
+# --------------------------------------------------------------------------
+# What is derived, explicitly
+# --------------------------------------------------------------------------
+
+# Never truncated, by anything, ever. These hold information that exists nowhere
+# else: the bytes observed at a source, and the ordered record of observing them.
+# `sources` is here rather than in the derived set even though its `cursor` and
+# `last_sync_at` are written by the sync pipeline — those describe a connector's
+# progress through the outside world, which no amount of replaying the log can
+# reconstruct, because the outside world is not in the log.
+SOURCE_OF_TRUTH_TABLES: frozenset[str] = frozenset(
+    {
+        "sources",
+        "raw_artifacts",
+        "ingestion_events",
+    }
+)
+
+# Reconstructible from the tables above plus the blob store. Ordered
+# child-before-parent, so truncating or dropping them in sequence never fights a
+# foreign key.
+DERIVED_TABLES: tuple[str, ...] = (
+    "memory_chunks",
+    "memories",
+    "jobs",
+    "embedding_cache",
+)
+
+# The cache is the interesting member of that list. Truncating it makes a replay
+# honest — every vector is recomputed, so the embedding half of the pipeline is
+# actually exercised — and slow. Keeping it makes the replay fast but only proves
+# the pipeline downstream of embedding.
+#
+# The default is to keep it, because the cache is content-addressed: an entry is
+# a pure function of (model, role, text), so a retained entry is correct by
+# construction rather than by trust. A `--clear-cache` run is the stronger
+# periodic check, not the everyday one.
+CACHE_TABLE = "embedding_cache"
+
+# The derived tables a shadow workspace builds its own copy of — everything
+# except the cache.
+#
+# The cache is deliberately shared with the live schema, and that follows from
+# what it is: an entry is a pure function of (model, role, text), so reading one
+# written by the live pipeline is correct by construction rather than by trust.
+# Giving the workspace its own empty cache would instead force every vector to be
+# recomputed on every verification run, which would make the routine check
+# expensive enough to stop being routine.
+#
+# `jobs` *is* copied, and is swapped in empty. After a full replay every memory
+# id is new, so any job still pending refers to a row that no longer exists and
+# would fail permanently. Replacing the queue with an empty one is the honest
+# outcome, not collateral damage.
+SHADOW_TABLES: tuple[str, ...] = tuple(
+    name for name in DERIVED_TABLES if name != CACHE_TABLE
+)
+
+
+def derived_tables(*, clear_cache: bool) -> tuple[str, ...]:
+    """The tables a replay empties, given the cache decision."""
+    if clear_cache:
+        return DERIVED_TABLES
+    return tuple(name for name in DERIVED_TABLES if name != CACHE_TABLE)
+
+
+# --------------------------------------------------------------------------
+# Scope
+# --------------------------------------------------------------------------
+
+
+class ReplayStage(StrEnum):
+    """How far upstream to start over.
+
+    `EMBED` is the one that gets used in practice: swap the model, keep the
+    chunks, recompute the vectors. Minutes of compute instead of a full pipeline
+    run, and it is only safe because the chunker version and the model id are
+    both recorded per chunk.
+    """
+
+    ALL = auto()
+    NORMALIZE = auto()
+    EMBED = auto()
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayScope:
+    """Which events to replay, and from which stage."""
+
+    source_name: str | None = None
+    after_seq: int = 0
+    stage: ReplayStage = ReplayStage.ALL
+
+    @property
+    def rebuilds_memories(self) -> bool:
+        return self.stage is ReplayStage.ALL
+
+    @property
+    def rechunks(self) -> bool:
+        return self.stage in (ReplayStage.ALL, ReplayStage.NORMALIZE)
+
+    def describe(self) -> str:
+        parts = [f"stage={self.stage.value}"]
+        parts.append(f"source={self.source_name}" if self.source_name else "source=all")
+        parts.append(
+            f"after_seq={self.after_seq}" if self.after_seq else "from=beginning"
+        )
+        return "  ".join(parts)
+
+
+@dataclass(slots=True)
+class ReplayReport:
+    events: int = 0
+    observed: int = 0
+    deleted: int = 0
+    memories: int = 0
+    normalized: int = 0
+    embedded: int = 0
+    chunks: int = 0
+    vectors_computed: int = 0
+    cache_hits: int = 0
+    duration_ms: int = 0
+    into_shadow: bool = False
+    cache_cleared: bool = False
+
+    def as_dict(self) -> dict[str, int | bool]:
+        return {
+            "events": self.events,
+            "observed": self.observed,
+            "deleted": self.deleted,
+            "memories": self.memories,
+            "normalized": self.normalized,
+            "embedded": self.embedded,
+            "chunks": self.chunks,
+            "vectors_computed": self.vectors_computed,
+            "cache_hits": self.cache_hits,
+            "duration_ms": self.duration_ms,
+            "into_shadow": self.into_shadow,
+            "cache_cleared": self.cache_cleared,
+        }
+
+
+class MissingBlob(RuntimeError):
+    """An artifact promises bytes the blob store does not have."""
+
+
+class UnreplayableEvent(RuntimeError):
+    """An event kind the projection has no rule for."""
+
+
+# Every event kind `_rebuild` knows how to apply.
+#
+# An event type that is not in `EventType` at all is refused one layer earlier,
+# by the mapper that turns a row into an entity — loudly, which is right. The
+# gap this guards is the likelier mistake: adding a member to `EventType`,
+# writing a producer for it, and never teaching replay to apply it. Then every
+# rebuild silently omits that fact forever. A unit test asserts this set covers
+# the enum, so the omission fails the build instead.
+REPLAYABLE_EVENT_TYPES: frozenset[EventType] = frozenset(
+    {EventType.ARTIFACT_OBSERVED, EventType.ITEM_DELETED}
+)
+
+
+# --------------------------------------------------------------------------
+# The use case
+# --------------------------------------------------------------------------
+
+# Rows the streaming cursor buffers. The point of streaming at all is that the
+# log does not have to fit in memory.
+STREAM_CHUNK = 1000
+
+MakeNormalize = Callable[[async_sessionmaker[AsyncSession]], NormalizeMemory]
+MakeEmbed = Callable[[async_sessionmaker[AsyncSession]], EmbedMemory]
+
+
+class ReplayCorpus:
+    """Truncate the derived tables and rebuild them from the log.
+
+    The use cases it runs are the real ones — `NormalizeMemory` and
+    `EmbedMemory`, built against whichever session factory the rebuild is writing
+    through. A replay that used its own simplified reimplementation of the
+    pipeline would prove that the reimplementation works.
+    """
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        make_normalize: MakeNormalize,
+        make_embed: MakeEmbed,
+        make_shadow: Callable[[], ShadowWorkspace] | None = None,
+    ) -> None:
+        self._sessions = session_factory
+        self._make_normalize = make_normalize
+        self._make_embed = make_embed
+        self._make_shadow = make_shadow
+
+    async def __call__(
+        self,
+        scope: ReplayScope | None = None,
+        *,
+        into_shadow: bool = False,
+        clear_cache: bool = False,
+    ) -> ReplayReport:
+        resolved = scope or ReplayScope()
+        started = time.monotonic()
+        log = logger.bind(
+            scope=resolved.describe(), into_shadow=into_shadow, clear_cache=clear_cache
+        )
+        log.info("replay.started")
+
+        if into_shadow:
+            make_shadow = self._make_shadow
+            if make_shadow is None:
+                raise RuntimeError(
+                    "a shadow replay was requested but no workspace was configured"
+                )
+            report = await self._into_shadow(
+                make_shadow, resolved, clear_cache=clear_cache
+            )
+        else:
+            report = await self._in_place(
+                self._sessions, resolved, clear_cache=clear_cache
+            )
+
+        report.into_shadow = into_shadow
+        report.cache_cleared = clear_cache
+        report.duration_ms = int((time.monotonic() - started) * 1000)
+        log.info("replay.finished", **report.as_dict())
+        return report
+
+    async def _into_shadow(
+        self, make_shadow: Callable[[], ShadowWorkspace],
+        scope: ReplayScope,
+        *,
+        clear_cache: bool,
+    ) -> ReplayReport:
+        """Build alongside the live tables, then replace them in one step."""
+        shadow = make_shadow()
+        await shadow.create()
+        try:
+            sessions = await shadow.sessions()
+            report = await self._in_place(sessions, scope, clear_cache=clear_cache)
+            # After loading, never during: an index built on an empty table and
+            # maintained through every insert is slower and worse-connected.
+            await shadow.build_indexes()
+            await shadow.swap_in()
+        except BaseException:
+            # The live tables were never touched, so throwing the workspace away
+            # is a complete rollback.
+            await shadow.discard()
+            raise
+        return report
+
+    @asynccontextmanager
+    async def rebuild_into_shadow(
+        self, scope: ReplayScope | None = None, *, clear_cache: bool = False
+    ) -> AsyncIterator[tuple[ReplayReport, async_sessionmaker[AsyncSession]]]:
+        """Rebuild alongside the live corpus and hand it over to be read.
+
+        Never swapped in, always discarded — the caller gets a session factory
+        pointed at the rebuild and can compare it against the original with both
+        present at once. That is what makes `verify-replay` safe to run against a
+        corpus somebody is using: the live tables are not touched even while the
+        comparison says they should be.
+
+        The index build is skipped, because nothing here searches by vector; the
+        comparison reads rows by natural key.
+        """
+        make_shadow = self._make_shadow
+        if make_shadow is None:
+            raise RuntimeError(
+                "a shadow rebuild was requested but no workspace was configured"
+            )
+
+        resolved = scope or ReplayScope()
+        started = time.monotonic()
+        shadow = make_shadow()
+        await shadow.create()
+        try:
+            sessions = await shadow.sessions()
+            report = await self._in_place(sessions, resolved, clear_cache=clear_cache)
+            report.into_shadow = True
+            report.cache_cleared = clear_cache
+            report.duration_ms = int((time.monotonic() - started) * 1000)
+            yield report, sessions
+        finally:
+            await shadow.discard()
+
+    async def _in_place(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        scope: ReplayScope,
+        *,
+        clear_cache: bool,
+    ) -> ReplayReport:
+        report = ReplayReport()
+
+        source_id = await self._resolve_source(scope.source_name)
+        await self._clear(sessions, scope, source_id, clear_cache=clear_cache)
+
+        if scope.rebuilds_memories:
+            # One pass, interleaved: apply an event, then run the pipeline for
+            # what it produced, then move to the next event. See `_rebuild`.
+            await self._rebuild(sessions, scope, source_id, report)
+        else:
+            # The downstream stages work on what is already there, so they are a
+            # pass over the current memories rather than over the log.
+            if scope.rechunks:
+                await self._normalize(sessions, source_id, report)
+            await self._embed(sessions, source_id, report)
+
+        await self._count_chunks(sessions, report)
+        return report
+
+    async def _resolve_source(self, name: str | None) -> UUID | None:
+        if name is None:
+            return None
+        # Read from the live tables always: `sources` is source of truth and is
+        # not part of any workspace.
+        async with self._sessions() as session:
+            source_id = (
+                await session.execute(
+                    select(models.Source.id).where(models.Source.name == name)
+                )
+            ).scalar_one_or_none()
+        if source_id is None:
+            raise LookupError(f"no source named {name!r}")
+        return source_id
+
+    # ----------------------------------------------------------------------
+    # Clearing
+    # ----------------------------------------------------------------------
+
+    async def _clear(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        scope: ReplayScope,
+        source_id: UUID | None,
+        *,
+        clear_cache: bool,
+    ) -> None:
+        """Empty exactly what this scope is going to rebuild, and nothing more."""
+        if scope.stage is ReplayStage.ALL and source_id is None:
+            # The whole-corpus case, which is the one the guarantee is about.
+            # TRUNCATE by name rather than a blanket sweep, so a table that has
+            # drifted into the wrong set shows up as rows left behind instead of
+            # being quietly emptied along with everything else.
+            await truncate_derived(sessions, clear_cache=clear_cache)
+            return
+
+        chunks_in_scope = _chunks_of(source_id)
+        async with sessions.begin() as session:
+            if scope.stage is ReplayStage.EMBED:
+                # Chunk rows and their ids survive; only the vectors go. That is
+                # what makes a model swap cheap, and it is why a chunk's identity
+                # owes nothing to its vector.
+                await session.execute(
+                    update(models.MemoryChunk)
+                    .where(*chunks_in_scope)
+                    .values(embedding=None, embedding_model=None, embedded_at=None)
+                )
+            else:
+                # ON DELETE CASCADE would take the chunks with the memories, but
+                # they are deleted explicitly so the intent is legible here rather
+                # than inferred from a constraint.
+                await session.execute(
+                    delete(models.MemoryChunk).where(*chunks_in_scope)
+                )
+                if scope.stage is ReplayStage.ALL:
+                    await session.execute(
+                        delete(models.Memory).where(*_memories_of(source_id))
+                    )
+
+            if scope.rechunks:
+                # Jobs the previous pipeline left queued. A replay runs its work
+                # inline, so anything still pending refers to state that is about
+                # to stop existing.
+                await session.execute(delete(models.Job))
+
+            if clear_cache:
+                await session.execute(delete(models.EmbeddingCacheEntry))
+
+    # ----------------------------------------------------------------------
+    # Memories, from the log
+    # ----------------------------------------------------------------------
+
+    async def _rebuild(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        scope: ReplayScope,
+        source_id: UUID | None,
+        report: ReplayReport,
+    ) -> None:
+        """Apply every event in `seq` order, running the pipeline as it goes.
+
+        Versions are not assumed, they are derived: each `artifact_observed` for a
+        key supersedes whatever is current and becomes version N+1, so a key with
+        four events ends with versions 1 to 4 and exactly one `is_current`.
+
+        The pipeline runs **per event, before the next one is applied**, and that
+        interleaving is load-bearing rather than stylistic. A first attempt here
+        applied every event and then normalized the surviving memories, which is
+        cheaper and wrong: a superseded version had been normalized before it was
+        superseded, and a deleted one had been normalized *and embedded* before it
+        was tombstoned. Rebuilding only the current state left `normalized_hash`
+        null on every historical version and dropped the tombstoned version's
+        chunk entirely.
+
+        Neither of those is cosmetic. `normalize` finds a previous version by its
+        `normalized_hash` in order to move chunks onto a cosmetically-changed
+        file, so a rebuild that nulls those hashes silently costs the next sync a
+        full re-chunk and re-embed of anything it touches. And the difference is
+        invisible to row counts on the memories table — exactly the failure this
+        milestone predicted.
+
+        The cost is real and worth stating: an item with fifty revisions is parsed,
+        chunked and embedded fifty times, because that is what the log says
+        happened. A replay is as expensive as the history it is replaying.
+
+        One transaction per event, for the reason `sync` uses one per item: the
+        whole log in a single transaction holds locks for minutes and throws
+        everything away on any failure.
+        """
+        normalize = self._make_normalize(sessions)
+        embed = self._make_embed(sessions)
+
+        async for event in self._stream_events(scope, source_id):
+            report.events += 1
+
+            if event.event_type is EventType.ARTIFACT_OBSERVED:
+                memory_id = new_id()
+                async with sessions.begin() as session:
+                    await SqlAlchemyMemoryRepository(session).add_version(
+                        memory_from_event(event, memory_id=memory_id)
+                    )
+                report.observed += 1
+                report.memories += 1
+
+                await self._normalize_one(
+                    normalize, memory_id, event.external_key, report
+                )
+                await self._embed_one(embed, memory_id, report)
+                continue
+
+            if event.event_type is EventType.ITEM_DELETED:
+                await self._tombstone(sessions, event, report)
+                continue
+
+            # An event type this projection does not know how to apply. Silently
+            # ignoring it would mean a future event kind quietly not being
+            # replayed, and the corpus differing from the log in a way only a
+            # careful reader of both would ever notice.
+            raise UnreplayableEvent(
+                f"replay does not know how to apply {event.event_type.value!r} "
+                f"(event {event.id}, seq {event.seq}); add it to "
+                f"ReplayCorpus._rebuild or the rebuild is no longer faithful"
+            )
+
+    async def _tombstone(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        event: IngestionEvent,
+        report: ReplayReport,
+    ) -> None:
+        async with sessions.begin() as session:
+            memories = SqlAlchemyMemoryRepository(session)
+            current = await memories.get_current(event.source_id, event.external_key)
+            if current is None:
+                # A deletion for a key with no current version. Reachable when the
+                # scope starts partway through the log, and not an error: the
+                # tombstone has nothing to apply to.
+                logger.debug(
+                    "replay.tombstone_without_target",
+                    key=event.external_key,
+                    seq=event.seq,
+                )
+                return
+            await memories.tombstone(current.id, recorded_at_of(event))
+        report.deleted += 1
+
+    async def _normalize_one(
+        self,
+        normalize: NormalizeMemory,
+        memory_id: UUID,
+        external_key: str,
+        report: ReplayReport,
+    ) -> None:
+        try:
+            await normalize(memory_id)
+        except BlobNotFound as exc:
+            # The whole rebuild rests on the blobs being there. Skipping one would
+            # produce a corpus quietly missing a document, and no count would show
+            # it — a memory row with no chunks is also what an empty file looks
+            # like.
+            raise MissingBlob(
+                f"blob {exc.args[0] if exc.args else '?'} is referenced by "
+                f"{external_key!r} (memory {memory_id}) but is not in the blob "
+                f"store; the corpus cannot be rebuilt without it"
+            ) from exc
+        report.normalized += 1
+
+    async def _embed_one(
+        self, embed: EmbedMemory, memory_id: UUID, report: ReplayReport
+    ) -> None:
+        outcome = await embed(memory_id)
+        report.embedded += 1
+        report.vectors_computed += outcome.cache_misses
+        report.cache_hits += outcome.cache_hits
+
+    async def _stream_events(
+        self, scope: ReplayScope, source_id: UUID | None
+    ) -> AsyncIterator[IngestionEvent]:
+        """Server-side cursor over the log, in `seq` order.
+
+        Streamed rather than fetched. A mature log does not fit in memory, and
+        `SELECT * FROM ingestion_events` works perfectly on a fixture and takes
+        the process down on a real corpus.
+
+        Its own session, separate from the one doing the writing: a cursor held
+        open across writes on the same connection is a different set of problems
+        than this milestone needs.
+        """
+        stmt = (
+            select(models.IngestionEvent)
+            .where(models.IngestionEvent.seq > scope.after_seq)
+            .order_by(models.IngestionEvent.seq)
+        )
+        if source_id is not None:
+            stmt = stmt.where(models.IngestionEvent.source_id == source_id)
+
+        async with self._sessions() as session:
+            result = await session.stream(
+                stmt.execution_options(yield_per=STREAM_CHUNK)
+            )
+            async for row in result.scalars():
+                yield to_event(row)
+
+    # ----------------------------------------------------------------------
+    # Downstream stages, for the scopes that keep their memories
+    # ----------------------------------------------------------------------
+
+    async def _normalize(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        source_id: UUID | None,
+        report: ReplayReport,
+    ) -> None:
+        normalize = self._make_normalize(sessions)
+        for memory_id, external_key in await self._targets(sessions, source_id):
+            await self._normalize_one(normalize, memory_id, external_key, report)
+
+    async def _embed(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        source_id: UUID | None,
+        report: ReplayReport,
+    ) -> None:
+        embed = self._make_embed(sessions)
+        for memory_id, _ in await self._targets(sessions, source_id):
+            await self._embed_one(embed, memory_id, report)
+
+    async def _targets(
+        self, sessions: async_sessionmaker[AsyncSession], source_id: UUID | None
+    ) -> Sequence[tuple[UUID, str]]:
+        """Current, undeleted memories, in a stable order.
+
+        Only current versions: a superseded version's chunks were deleted with
+        it, and re-chunking one would put text back into the retrieval set that
+        the item no longer says.
+        """
+        stmt = (
+            select(models.Memory.id, models.Memory.external_key)
+            .where(models.Memory.is_current.is_(True), models.Memory.deleted_at.is_(None))
+            .order_by(models.Memory.external_key)
+        )
+        if source_id is not None:
+            stmt = stmt.where(models.Memory.source_id == source_id)
+        async with sessions() as session:
+            return [(row[0], row[1]) for row in await session.execute(stmt)]
+
+    async def _count_chunks(
+        self, sessions: async_sessionmaker[AsyncSession], report: ReplayReport
+    ) -> None:
+        async with sessions() as session:
+            report.chunks = (
+                await session.execute(select(func.count()).select_from(models.MemoryChunk))
+            ).scalar_one()
+
+
+def _memories_of(source_id: UUID | None) -> list[ColumnElement[bool]]:
+    """Narrow a memories statement to one source, if one was named."""
+    if source_id is None:
+        return []
+    return [models.Memory.source_id == source_id]
+
+
+def _chunks_of(source_id: UUID | None) -> list[ColumnElement[bool]]:
+    """The same, for chunks, which reach their source through their memory."""
+    if source_id is None:
+        return []
+    return [
+        models.MemoryChunk.memory_id.in_(
+            select(models.Memory.id).where(models.Memory.source_id == source_id)
+        )
+    ]
+
+
+async def truncate_derived(
+    session_factory: async_sessionmaker[AsyncSession], *, clear_cache: bool
+) -> None:
+    """Empty the derived tables outright. Used by tests and by `--from-beginning`.
+
+    `TRUNCATE` rather than `DELETE`, and named tables rather than every table:
+    naming them means a table that has drifted into the wrong set shows up here
+    as data left behind, instead of being quietly swept away with everything else.
+    """
+    names = ", ".join(f'"{name}"' for name in derived_tables(clear_cache=clear_cache))
+    async with session_factory.begin() as session:
+        await session.execute(text(f"TRUNCATE {names} CASCADE"))

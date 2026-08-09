@@ -11,10 +11,11 @@ rather than at whichever call site first passes one to a use case.
 
 from collections.abc import Sequence
 from dataclasses import replace
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memoryos.adapters.db import models
@@ -86,9 +87,16 @@ class SqlAlchemyEventLog(EventLog):
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def append(self, event: IngestionEvent) -> None:
-        self._session.add(to_event_row(event))
+    async def append(self, event: IngestionEvent) -> IngestionEvent:
+        row = to_event_row(event)
+        self._session.add(row)
         await self._session.flush()
+        # `seq` and `recorded_at` are assigned by the database, so they are only
+        # knowable after the flush. Refreshed rather than guessed, because
+        # everything derived from this event is stamped with `recorded_at` and a
+        # locally-invented value would make the projection unreplayable.
+        await self._session.refresh(row, ["seq", "recorded_at"])
+        return to_event(row)
 
     async def replay(self, after_seq: int = 0, limit: int = 1000) -> Sequence[IngestionEvent]:
         stmt = (
@@ -137,17 +145,23 @@ class SqlAlchemyMemoryRepository(MemoryRepository):
         )
         await self._session.flush()
 
-    async def tombstone(self, memory_id: UUID) -> None:
+    async def tombstone(self, memory_id: UUID, at: datetime) -> None:
         """Mark a memory deleted without removing the row.
 
         `is_current` is left alone: the tombstone is the current state of the
         item, and readers filter on `deleted_at`. Dropping the flag instead
         would make a deleted item indistinguishable from one never ingested.
+
+        `at` comes from the deletion event's `recorded_at`, not from `now()`.
+        They are within milliseconds of each other on the original write, which
+        is exactly why using the clock here was safe-looking and wrong: a replay
+        months later would stamp a different value, and the rebuilt corpus would
+        differ from the original in a column no row count would reveal.
         """
         await self._session.execute(
             update(models.Memory)
             .where(models.Memory.id == memory_id)
-            .values(deleted_at=func.now())
+            .values(deleted_at=at)
             .execution_options(synchronize_session="fetch")
         )
 

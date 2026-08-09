@@ -6,15 +6,60 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 
 ## Status
 
-**Phase 1, Milestone 1.6 — vector store and search.**
+**Phase 1 complete.** Eight milestones, ending with M1.7 — replay.
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
-artifacts and events, versions memories, parses each artifact into normalized text, and splits
-that text into chunks sized for an embedding model.
+artifacts and events, versions memories, parses each artifact into normalized text, splits that
+text into chunks sized for the embedding model, embeds them, and answers questions about them by
+meaning. Then it can throw all of that away and rebuild it from the log, and prove the result is
+identical.
 
-Chunks carry real vectors, an HNSW index sits over them, and `/search` returns memories with
-the chunks that matched. Semantic search only — BM25, fusion, reranking, and synthesis are
-Phase 2.
+Semantic search only — BM25, fusion, reranking, and synthesis are Phase 2.
+
+### What Phase 1 built
+
+| Milestone | Delivered                                                                     |
+| --------- | ----------------------------------------------------------------------------- |
+| **M1.0**  | Repository skeleton, four-layer architecture, health endpoints, CI.            |
+| **M1.1**  | Data model and migrations. Content addressing, two timestamps, UUIDv7 keys.    |
+| **M1.2**  | Durable job queue in Postgres, and a worker with leases, fencing and backoff.  |
+| **M1.3**  | Filesystem connector, content-addressed blob store, two-tier change detection. |
+| **M1.4**  | Parsers, text normalization, structural chunking, `normalized_hash`.           |
+| **M1.5**  | Embedding pipeline with a content-addressed vector cache.                      |
+| **M1.6**  | HNSW index, `VectorStore` port, `/search`, and recall measurement.             |
+| **M1.6.1**| Hotfix: chunk sizes derived from the model's real window, counted properly.    |
+| **M1.7**  | Replay. Rebuild every derived table from the log, and verify it byte for byte. |
+
+The single most valuable thing Phase 1 produced is not a feature. It is that M1.6.1 exists: a
+silent 89% truncation rate that every test passed, found only because somebody measured. Most of
+the machinery below — the startup assertion, `doctor`, `eval-recall`, `verify-replay` — is there
+to make that class of defect loud next time.
+
+### End to end from a clean checkout
+
+```bash
+docker compose up -d && sleep 8      # Postgres 17 + pgvector on host port 5433
+uv sync --frozen --extra dev
+uv run alembic upgrade head
+
+uv run memoryos source add --kind filesystem --name self --root .
+uv run memoryos sync --source self --full
+uv run memoryos worker --drain
+
+uv run memoryos stats
+uv run memoryos doctor
+uv run memoryos search "how does the job queue claim work" -k 5
+uv run memoryos verify-replay
+```
+
+Or in one command, which is the same sequence plus a fresh volume and both replay modes:
+
+```bash
+make phase1-check
+```
+
+First run downloads ~90MB of model weights into `MEMOS_HF_HOME` (default `./var/hf`), and the
+virtualenv is roughly 900MB because of `torch`.
 
 ## Architecture
 
@@ -35,8 +80,12 @@ Configuration is read once at the edge (`memoryos.config`). Nothing deeper in th
 
 ## Data model
 
-Five tables. `ingestion_events` is append-only and is the source of truth; `memories` and
-`memory_chunks` are projections that can be truncated and rebuilt from it.
+Seven tables, split into two groups that matter more than the count. `ingestion_events`,
+`raw_artifacts` and `sources` are the source of truth and are never truncated. `memories`,
+`memory_chunks`, `jobs` and `embedding_cache` are derived, and M1.7 rebuilds them from the first
+group plus the blob store. The split is declared as data in
+[`application/replay.py`](src/memoryos/application/replay.py), and a test fails if a new table is
+not classified.
 
 | Table              | Holds                                                              |
 | ------------------ | ------------------------------------------------------------------ |
@@ -45,6 +94,8 @@ Five tables. `ingestion_events` is append-only and is the source of truth; `memo
 | `ingestion_events` | Append-only log of everything observed. Replayed to rebuild state.  |
 | `memories`         | One row per version of an item; one current version per item.       |
 | `memory_chunks`    | Retrievable spans with offsets and a 384-dimension embedding slot.  |
+| `jobs`             | Durable work queue. Derived: a rebuild empties it.                  |
+| `embedding_cache`  | Vectors keyed by (model, role, text). Content-addressed memoisation. |
 
 Two design points carry the most weight:
 
@@ -153,11 +204,30 @@ if the chunker can emit more tokens than the model reads, and `memoryos doctor` 
 same condition for data already written. Embedding runs on a thread — it is CPU-bound matrix multiplication, and on the
 event loop it would stall every other coroutine including health checks.
 
-**The model id is part of the cache key, and that is a correctness requirement rather than an
-optimisation.** Keying on text alone would let a model upgrade silently reuse the old model's
-vectors. Nothing would error; the index would simply hold two incompatible coordinate systems,
-and similarity between them is arithmetically valid and semantically meaningless. That is a
-very hard failure to trace back to its cause.
+**Queries and passages are embedded through separate calls**, `embed_query` and `embed_passage`.
+There is deliberately no role-free `embed` left: several retrieval models are asymmetric, and one
+used symmetrically does not fail — it just retrieves worse than it should, which is the same shape
+of silent defect as M1.6.1.
+
+Whether bge's documented query instruction is actually *applied* is a measured decision, not an
+assumed one, because the model card for v1.5 says to make it one: "we improve its retrieval ability
+when not using instruction … the best method to decide whether to add instructions for queries is
+choosing the setting that achieves better performance on your task." Measured on this corpus, it
+loses. On the six-document fixture the prefix takes the queue question from `+0.0060` to `-0.0007`
+— an *inverted* ranking, not a narrower margin — while improving the baking question from `+0.1344`
+to `+0.1556`. On this repository's 719 chunks it changes the top result for two of the four
+assessment queries, and costs "why do we store two timestamps" the file where the answer is
+actually written. Mean margin prefers the prefix by 0.007; rankings reject it 1–2, and a ranking is
+what a user sees. So the string is recorded in `DOCUMENTED_QUERY_PREFIXES` and `APPLY_QUERY_PREFIX`
+is empty. `tests/slow/test_query_prefix.py` re-runs that A/B against whichever setting is
+configured and fails if it stops being the better one.
+
+**The model id and the role are both part of the cache key, and that is a correctness requirement
+rather than an optimisation.** Keying on text alone would let a model upgrade silently reuse the
+old model's vectors. Nothing would error; the index would simply hold two incompatible coordinate
+systems, and similarity between them is arithmetically valid and semantically meaningless. The role
+is there for the same reason one level down: without it, the same sentence embedded as a query and
+as a passage collide on one entry and whichever ran second receives the other's vector.
 
 The cache is its own table so that identical text in different memories is embedded once, and
 so that a crash between embedding and the chunk update costs nothing — the retried job finds
@@ -193,7 +263,10 @@ GET  /search?q=...&k=10&source=NAME&kind=note&after=...&before=...
 POST /search                            # same, for long queries
 ```
 
-Chunks are what match; memories are what come back, each carrying the chunks that matched it.
+Chunks are what match; memories are what come back, each carrying the chunks that matched it —
+with their char offsets and the metadata the chunker recorded, so a result can say *which
+function* a span came from rather than only which file. That metadata is computed during
+normalization and persisted, because the moment it is needed is query time, in a different process.
 A memory scores as its **best** chunk, not its mean — a long document with one perfectly
 relevant paragraph should outrank a short one that is vaguely on-topic throughout. Ties break
 on the mean.
@@ -211,6 +284,118 @@ compares the index against an exhaustive scan across several `ef_search` values.
 20,000-chunk corpus: recall@10 rises 0.94 → 1.00 as `ef_search` goes 40 → 400, and p50 latency
 rises 2.2ms → 6.3ms. Below roughly 2,000 chunks Postgres correctly ignores the index
 altogether and scans, so the numbers there say nothing about HNSW.
+
+## Replay
+
+```bash
+memoryos verify-replay                  # rebuild into a shadow schema and compare; exits non-zero on drift
+memoryos replay --from-beginning        # rebuild the derived tables in place
+memoryos replay --from-beginning --clear-cache   # and recompute every vector
+memoryos replay --stage embed           # keep the chunks, redo only the vectors
+memoryos replay --source notes          # one connector's corpus
+memoryos replay --since 40000           # only events after a log position
+memoryos replay --into-shadow           # build alongside the live tables, then swap
+```
+
+Every milestone before this one asserted in a docstring that the event log was the source of
+truth. This is where that is either true or it is not.
+
+**`--stage embed` is the one you actually reach for.** Swap the model, keep the chunks, recompute
+the vectors: minutes rather than a full pipeline run. It works because the chunker version and the
+model id are recorded per chunk, and because a chunk's identity owes nothing to its vector — the
+rows and their ids survive, only the embeddings change.
+
+**The cache is kept by default.** Truncating it makes a replay honest, because every vector is
+recomputed; keeping it makes the replay fast but only proves the pipeline downstream of embedding.
+Keeping it is correct rather than merely convenient — an entry is a pure function of
+`(model, role, text)` — so `--clear-cache` is the stronger periodic check rather than the everyday
+one.
+
+**Nothing derived reads the clock.** `ingested_at` and `deleted_at` come from the causing event's
+`recorded_at`, versions come from the order of the log, and the memory itself comes from
+`projection.memory_from_event` — the same function `sync` calls, so "exactly as sync would have"
+is structural rather than a promise. `deleted_at` used to come from `now()`; it was within
+milliseconds of the event on the original write, which is precisely why it looked fine and would
+have made every rebuild differ.
+
+The one exception is `memory_chunks.embedded_at`, which records when a vector was computed rather
+than anything about the data. It legitimately differs after a recomputation and is not compared.
+
+**The pipeline runs interleaved, per event, in log order** — apply an event, normalize and embed
+what it produced, then move on. An earlier version applied all the events and then normalized the
+survivors, which is cheaper and wrong: a superseded version had been normalized before it was
+superseded, and a deleted one had been normalized *and embedded* before it was tombstoned. That
+version left `normalized_hash` null on every historical row and dropped the tombstoned version's
+chunk. Neither is cosmetic — `normalize` finds a previous version *by its normalized hash* in
+order to move chunks onto a cosmetically-changed file — and neither changes a single row count.
+The integration test for versions and tombstones is what caught it.
+
+The cost of that is worth stating plainly: an item with fifty revisions is parsed, chunked and
+embedded fifty times, because that is what the log says happened. A replay is as expensive as the
+history it replays.
+
+### Verification
+
+`verify-replay` snapshots the live derived state, rebuilds into a shadow schema, compares, and
+drops the shadow. The live tables are never touched, so it is safe to run against a corpus
+somebody is using.
+
+Two rules decide how the comparison is written:
+
+- **Content, not counts.** Counts match while `is_current` sits on the wrong version, versions are
+  numbered in the wrong order, or vectors came from a different model. The M1.6.1 defect passed
+  every count-based check ever written.
+- **Natural keys, not primary keys.** Ids are UUIDv7, minted at write time, and a rebuild
+  legitimately produces different ones. A memory is `(source, external_key, version)`; a chunk is
+  that plus `ordinal`. Embeddings are compared as a digest of their packed bytes rather than
+  formatted text, because a text rendering rounds and would let a changed model pass.
+
+A verification that cannot fail is not a verification, so one test corrupts a chunk's hash — a
+change invisible to every count — and requires the command to notice.
+
+### The shadow swap, and what did not work
+
+The design this was specified as does not work, and it is worth writing down because it looks
+like it does:
+
+```sql
+BEGIN;
+ALTER SCHEMA public RENAME TO memoryos_old;
+ALTER SCHEMA memoryos_shadow RENAME TO public;
+COMMIT;
+```
+
+Postgres stores every object reference by OID, not by name, so renaming a schema moves no
+references. Measured on this database: a shadow table whose `source_id` referenced
+`public.sources` referenced `memoryos_old.sources` after the swap, and the new `public` contained
+no `sources` table at all — because the source of truth is deliberately never copied into the
+workspace. The result is a live schema missing half its tables, with foreign keys reaching into
+the schema you were about to drop. Dropping it then fails, or with `CASCADE` takes the constraints
+and the referenced data with it. Every count-based check would pass.
+
+What is implemented instead keeps the separate schema and moves the tables individually:
+
+```sql
+BEGIN;
+DROP TABLE public.memory_chunks;                        -- child first
+DROP TABLE public.memories;
+ALTER TABLE memoryos_shadow.memories SET SCHEMA public; -- parent first
+ALTER TABLE memoryos_shadow.memory_chunks SET SCHEMA public;
+COMMIT;
+```
+
+`SET SCHEMA` moves the table itself, so its foreign keys keep pointing at `public.sources`.
+Constraint and index names come across unchanged, and they can be the *canonical* names because
+names are unique per schema rather than per database — the shadow `memories` carries `pk_memories`
+while the live one still exists. That is what leaves the schema identical to the models, so
+`alembic check` stays clean and the next replay still works. Transactional DDL means a failure
+anywhere in that block leaves the live tables exactly as they were.
+
+The rebuild lands in the workspace via `search_path` on a dedicated engine. The models carry no
+schema, so unqualified `memories` resolves to `memoryos_shadow.memories` while `sources` — absent
+there — falls through to `public.sources`. The pipeline needs no changes at all, which is why a
+schema beats suffixed table names in one schema: with suffixes, every model and query would need a
+parallel definition.
 
 ## Migrations
 
@@ -298,11 +483,24 @@ Copy `.env.example` to `.env` to override defaults. All settings use the `MEMOS_
 ## Tests
 
 ```bash
-make test-unit  # unit tests only, no database required
-make test       # everything, including integration tests
+make test-unit     # unit tests only, no database required
+make test          # everything, including integration tests
+make test-slow     # the tests that load the real model
+make phase1-check  # the whole of Phase 1, from an empty volume
 ```
 
-Integration tests are marked `integration` and need Postgres running.
+Integration tests are marked `integration` and need Postgres running. `slow` tests load the real
+model and are excluded from the default run.
+
+Three tests are load-bearing out of proportion to their size, and each exists because a green suite
+was once wrong:
+
+- `tests/slow/test_acceptance.py` — the four assessment queries against the real model. The only
+  thing standing between this pipeline and one that fills the column with plausible garbage.
+- `tests/unit/test_replay_rules.py::test_every_table_is_classified_exactly_once` — fails when a new
+  table is added without deciding whether it can be rebuilt. That omission is otherwise invisible.
+- `tests/integration/test_replay.py::test_versions_and_tombstones_survive_a_rebuild` — the test that
+  caught the replay applying events without interleaving the pipeline, a defect no row count showed.
 
 If `/health/ready` reports a null `pgvector_version`, the init script did not run because the
 data volume already existed. Reset it:

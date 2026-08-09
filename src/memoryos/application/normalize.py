@@ -58,11 +58,18 @@ class NormalizeMemory:
         blob_store: BlobStore,
         parsers: ParserRegistry,
         chunker: Chunker,
+        *,
+        enqueue_followup: bool = True,
     ) -> None:
         self._sessions = session_factory
         self._blobs = blob_store
         self._parsers = parsers
         self._chunker = chunker
+        # A worker wants the embed job queued; a replay does not, because it
+        # embeds inline immediately afterwards. Queueing twenty thousand jobs
+        # only to drain them in the same process adds a round trip per item and
+        # leaves the queue full if the replay stops halfway.
+        self._enqueue_followup = enqueue_followup
 
     @property
     def chunker_version(self) -> str:
@@ -295,16 +302,18 @@ class NormalizeMemory:
                     )
                 )
 
-            # Same transaction as the chunks it refers to, for the same reason
-            # the sync enqueues in the transaction that creates the memory.
-            await enqueue_in(
-                session,
-                JobSpec(
-                    job_type=JobType.EMBED_MEMORY,
-                    payload={"memory_id": str(memory.id)},
-                    dedupe_key=f"embed:{memory.id}",
-                ),
-            )
+            if self._enqueue_followup:
+                # Same transaction as the chunks it refers to, for the same
+                # reason the sync enqueues in the transaction that creates the
+                # memory.
+                await enqueue_in(
+                    session,
+                    JobSpec(
+                        job_type=JobType.EMBED_MEMORY,
+                        payload={"memory_id": str(memory.id)},
+                        dedupe_key=f"embed:{memory.id}",
+                    ),
+                )
 
 
 def _finish(report: NormalizeReport, started: float) -> NormalizeReport:
