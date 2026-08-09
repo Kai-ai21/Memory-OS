@@ -166,6 +166,31 @@ def test_the_default_scope_is_the_full_proof() -> None:
     assert "from=beginning" in scope.describe()
 
 
+@pytest.mark.parametrize(
+    "scope",
+    [
+        ReplayScope(source_name="notes"),
+        ReplayScope(after_seq=10),
+        ReplayScope(stage=ReplayStage.NORMALIZE),
+        ReplayScope(stage=ReplayStage.EMBED),
+    ],
+)
+def test_a_partial_scope_is_not_a_complete_rebuild(scope: ReplayScope) -> None:
+    """What decides whether a scope may be swapped in from a workspace.
+
+    A swap replaces the derived tables rather than merging into them, so a
+    workspace built from a partial scope is a complete replacement for the part
+    replayed and an empty one for everything else. `--source notes --into-shadow`
+    would delete every other source; `--stage embed --into-shadow` would delete
+    the whole corpus, having replayed no events at all.
+    """
+    assert scope.is_complete is False
+
+
+def test_the_default_scope_is_complete() -> None:
+    assert ReplayScope().is_complete is True
+
+
 def test_a_scope_describes_itself_for_the_log() -> None:
     described = ReplayScope(source_name="notes", after_seq=42).describe()
     assert "source=notes" in described

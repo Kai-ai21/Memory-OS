@@ -32,6 +32,7 @@ from memoryos.application.embed import EmbedMemory
 from memoryos.application.normalize import NormalizeMemory
 from memoryos.application.replay import (
     MissingBlob,
+    PartialShadowReplay,
     ReplayCorpus,
     ReplayScope,
     ReplayStage,
@@ -546,6 +547,34 @@ async def test_stage_embed_keeps_the_chunk_rows_and_only_changes_vectors(
     assert not changed.missing and not changed.unexpected
 
 
+@pytest.mark.parametrize("stage", [ReplayStage.EMBED, ReplayStage.NORMALIZE])
+async def test_a_partial_stage_does_not_destroy_what_it_will_not_rebuild(
+    harness: Harness, stage: ReplayStage
+) -> None:
+    """A tombstoned memory's chunks must survive a downstream-only replay.
+
+    `_targets` will not re-chunk or re-embed a tombstone — correctly, since
+    re-deriving one would mean re-reading a file that is gone. So clearing its
+    chunks or its vectors leaves nothing to restore them. The first version of
+    this cleared every chunk in scope, which meant a routine `--stage embed` model
+    swap permanently stripped the vectors behind every deleted file, and left a
+    corpus that `doctor` would report as partly unembedded forever.
+    """
+    (harness.root / "bread.txt").unlink()
+    await harness.ingest()
+
+    before = await harness.snapshot()
+    tombstoned = [chunk for chunk in before.chunks if chunk.external_key == "bread.txt"]
+    assert tombstoned, "the fixture has no tombstoned chunk to protect"
+    assert all(chunk.embedding_digest is not None for chunk in tombstoned)
+
+    await harness.replay(ReplayScope(stage=stage), clear_cache=True)
+
+    after = await harness.snapshot()
+    kept = [chunk for chunk in after.chunks if chunk.external_key == "bread.txt"]
+    assert kept == tombstoned, "a tombstoned memory's chunks were altered or lost"
+
+
 async def test_stage_normalize_rebuilds_chunks_without_touching_memories(
     harness: Harness,
 ) -> None:
@@ -593,6 +622,56 @@ async def test_replaying_one_source_leaves_another_untouched(
     assert [row for row in after.chunks if row.source_name == "other"] == other_chunks
     # And the replayed source did get rebuilt.
     assert compare(before, after).identical, compare(before, after).render()
+
+
+async def test_a_scoped_replay_only_clears_the_jobs_it_invalidates(
+    harness: Harness, tmp_path: Path, sessions: async_sessionmaker[AsyncSession],
+    settings: Settings,
+) -> None:
+    """Queued work for a source nobody asked to replay must survive.
+
+    A scoped replay changes the memory ids of the source it rebuilds, so that
+    source's pending jobs are genuinely dead. Every other source's are fine, and
+    clearing the whole queue — which is what this did first — would silently throw
+    away work that was going to happen.
+    """
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    (other_root / "elsewhere.md").write_text("# Elsewhere\n\n" + OTHER * 5 + "\n")
+    other_source = await add_source(sessions, "other", other_root)
+    other = build_harness(
+        other_root, tmp_path / "other-blobs", sessions, other_source, settings
+    )
+    await other.ingest()
+
+    # A pending job for each source, of the kind sync leaves behind.
+    async with sessions() as session:
+        one_per_source: dict[str, UUID] = {
+            row[0]: row[1]
+            for row in await session.execute(
+                select(models.Source.name, models.Memory.id)
+                .join(models.Source, models.Source.id == models.Memory.source_id)
+                .where(models.Memory.is_current.is_(True))
+            )
+        }
+    async with sessions.begin() as session:
+        for name, memory_id in one_per_source.items():
+            session.add(
+                models.Job(
+                    id=new_id(),
+                    job_type=JobType.EMBED_MEMORY.value,
+                    payload={"memory_id": str(memory_id), "source": name},
+                )
+            )
+
+    await harness.replay(ReplayScope(source_name="corpus"))
+
+    async with sessions() as session:
+        surviving = {
+            row[0]["source"]
+            for row in await session.execute(select(models.Job.payload))
+        }
+    assert surviving == {"other"}, surviving
 
 
 async def test_replaying_since_a_sequence_only_applies_later_events(
@@ -894,6 +973,34 @@ async def test_a_swapped_in_chunk_still_points_at_a_real_memory(
         )
     assert orphans == 0
     assert detached == 0
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        ReplayScope(source_name="corpus"),
+        ReplayScope(after_seq=1),
+        ReplayScope(stage=ReplayStage.EMBED),
+        ReplayScope(stage=ReplayStage.NORMALIZE),
+    ],
+)
+async def test_a_partial_scope_cannot_be_swapped_in(
+    harness: Harness, scope: ReplayScope
+) -> None:
+    """The guardrail on a genuinely destructive combination.
+
+    Each of these would have swapped in a workspace containing less than the whole
+    corpus and silently deleted the difference — `--stage embed --into-shadow`
+    would have replaced everything with nothing, and reported success. The corpus
+    must be untouched afterwards.
+    """
+    before = await harness.snapshot()
+
+    with pytest.raises(PartialShadowReplay, match="partial"):
+        await harness.replay(scope, into_shadow=True)
+
+    assert compare(before, await harness.snapshot()).identical
+    assert await shadow_schemas(harness.sessions) == set()
 
 
 async def test_a_failed_shadow_replay_leaves_the_live_corpus_alone(

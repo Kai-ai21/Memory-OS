@@ -28,7 +28,7 @@ from memoryos.application.doctor import run_doctor
 from memoryos.application.evaluation import format_table, measure_recall
 from memoryos.application.ports import SearchFilters
 from memoryos.application.rechunk import enqueue_rechunk, find_stale
-from memoryos.application.replay import ReplayScope, ReplayStage
+from memoryos.application.replay import PartialShadowReplay, ReplayScope, ReplayStage
 from memoryos.application.verification import compare, snapshot
 from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
@@ -297,7 +297,7 @@ async def run_replay(
             scope, into_shadow=into_shadow, clear_cache=clear_cache
         )
         print(json.dumps(report.as_dict(), indent=2))
-    except LookupError as exc:
+    except (LookupError, PartialShadowReplay) as exc:
         print(str(exc))
         return 1
     finally:
@@ -478,7 +478,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--into-shadow",
         dest="into_shadow",
         action="store_true",
-        help="build into a separate schema and swap it in, instead of in place",
+        help=(
+            "build into a separate schema and swap it in, instead of in place; "
+            "requires the whole log at stage 'all', because a swap replaces the "
+            "derived tables rather than merging into them"
+        ),
     )
     replay.add_argument(
         "--clear-cache",

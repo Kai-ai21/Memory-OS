@@ -165,8 +165,11 @@ class PostgresShadowSchema(ShadowWorkspace):
                     text(f'ALTER TABLE {SHADOW_SCHEMA}."{name}" SET SCHEMA {LIVE_SCHEMA}')
                 )
             await connection.execute(DropSchema(SHADOW_SCHEMA, if_exists=True))
-        await self._dispose_shadow()
         logger.info("shadow.swapped_in", tables=list(SHADOW_TABLES))
+        # Terminal: both pools go, rather than being left open for the lifetime
+        # of whatever built this. A replay per hour otherwise accumulates a
+        # connection pool per hour.
+        await self.dispose()
 
     async def discard(self) -> None:
         """Drop the workspace. The live tables were never touched."""
@@ -175,10 +178,11 @@ class PostgresShadowSchema(ShadowWorkspace):
             await connection.execute(
                 DropSchema(SHADOW_SCHEMA, cascade=True, if_exists=True)
             )
-        await self._dispose_shadow()
         logger.info("shadow.discarded", schema=SHADOW_SCHEMA)
+        await self.dispose()
 
     async def dispose(self) -> None:
+        """Release both pools. Idempotent, so the terminal paths can both call it."""
         await self._dispose_shadow()
         if self._engine is not None:
             await self._engine.dispose()

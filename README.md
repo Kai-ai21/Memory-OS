@@ -391,6 +391,14 @@ while the live one still exists. That is what leaves the schema identical to the
 `alembic check` stays clean and the next replay still works. Transactional DDL means a failure
 anywhere in that block leaves the live tables exactly as they were.
 
+**`--into-shadow` requires a complete scope**, and that is a guardrail rather than a tidiness rule.
+A swap *replaces* the derived tables; a workspace built from a partial scope is a complete
+replacement for the part replayed and an empty one for everything else. So
+`--source notes --into-shadow` would delete every other source's corpus, and
+`--stage embed --into-shadow` would replace all of it with nothing, having replayed no events at
+all. Both would have reported success. A partial scope now refuses, and the in-place path handles
+those cases correctly.
+
 The rebuild lands in the workspace via `search_path` on a dedicated engine. The models carry no
 schema, so unqualified `memories` resolves to `memoryos_shadow.memories` while `sources` — absent
 there — falls through to `public.sources`. The pipeline needs no changes at all, which is why a

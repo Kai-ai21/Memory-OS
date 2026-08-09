@@ -29,7 +29,17 @@ from enum import StrEnum, auto
 from uuid import UUID
 
 import structlog
-from sqlalchemy import ColumnElement, delete, func, select, text, update
+from sqlalchemy import (
+    ColumnElement,
+    Select,
+    Text,
+    cast,
+    delete,
+    func,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.blobs.filesystem import BlobNotFound
@@ -146,6 +156,23 @@ class ReplayScope:
     def rechunks(self) -> bool:
         return self.stage in (ReplayStage.ALL, ReplayStage.NORMALIZE)
 
+    @property
+    def is_complete(self) -> bool:
+        """Whether this scope rebuilds the entire derived corpus.
+
+        Only a complete scope may be built in a workspace and swapped in, because
+        a swap *replaces* the derived tables rather than merging into them. A
+        workspace holding one source's rebuild is a complete replacement for that
+        source and an empty one for every other, and swapping it in would delete
+        them. An `embed`-stage workspace is worse: it replays no events, so it
+        would swap in nothing at all.
+        """
+        return (
+            self.stage is ReplayStage.ALL
+            and self.source_name is None
+            and self.after_seq == 0
+        )
+
     def describe(self) -> str:
         parts = [f"stage={self.stage.value}"]
         parts.append(f"source={self.source_name}" if self.source_name else "source=all")
@@ -193,6 +220,10 @@ class MissingBlob(RuntimeError):
 
 class UnreplayableEvent(RuntimeError):
     """An event kind the projection has no rule for."""
+
+
+class PartialShadowReplay(ValueError):
+    """A workspace can only hold a rebuild of the whole corpus."""
 
 
 # Every event kind `_rebuild` knows how to apply.
@@ -256,11 +287,7 @@ class ReplayCorpus:
         log.info("replay.started")
 
         if into_shadow:
-            make_shadow = self._make_shadow
-            if make_shadow is None:
-                raise RuntimeError(
-                    "a shadow replay was requested but no workspace was configured"
-                )
+            make_shadow = self._require_shadow(resolved)
             report = await self._into_shadow(
                 make_shadow, resolved, clear_cache=clear_cache
             )
@@ -274,6 +301,31 @@ class ReplayCorpus:
         report.duration_ms = int((time.monotonic() - started) * 1000)
         log.info("replay.finished", **report.as_dict())
         return report
+
+    def _require_shadow(self, scope: ReplayScope) -> Callable[[], ShadowWorkspace]:
+        """The workspace factory, if a workspace can legitimately serve this scope.
+
+        The scope check is a guardrail against a genuinely destructive operation
+        rather than a tidiness rule. A swap replaces the derived tables; a
+        workspace built from a partial scope is a complete replacement for the
+        part that was replayed and an empty one for everything else, so
+        `--source notes --into-shadow` would delete every other source's corpus
+        and `--stage embed --into-shadow` would delete all of it. Both would
+        report success.
+        """
+        if self._make_shadow is None:
+            raise RuntimeError(
+                "a shadow replay was requested but no workspace was configured"
+            )
+        if not scope.is_complete:
+            raise PartialShadowReplay(
+                f"a shadow workspace holds a complete rebuild, but this scope is "
+                f"partial ({scope.describe()}). Swapping it in would replace the "
+                f"derived tables with a corpus containing only what was replayed, "
+                f"deleting the rest. Run it in place instead, or widen the scope "
+                f"to the whole log at stage 'all'."
+            )
+        return self._make_shadow
 
     async def _into_shadow(
         self, make_shadow: Callable[[], ShadowWorkspace],
@@ -313,13 +365,9 @@ class ReplayCorpus:
         The index build is skipped, because nothing here searches by vector; the
         comparison reads rows by natural key.
         """
-        make_shadow = self._make_shadow
-        if make_shadow is None:
-            raise RuntimeError(
-                "a shadow rebuild was requested but no workspace was configured"
-            )
-
         resolved = scope or ReplayScope()
+        make_shadow = self._require_shadow(resolved)
+
         started = time.monotonic()
         shadow = make_shadow()
         await shadow.create()
@@ -395,8 +443,31 @@ class ReplayCorpus:
             await truncate_derived(sessions, clear_cache=clear_cache)
             return
 
-        chunks_in_scope = _chunks_of(source_id)
+        # Narrowed to the memories the downstream pass will actually reprocess,
+        # which is not the same as "every chunk in scope". A tombstoned memory
+        # keeps the chunks it had when it was deleted, and `_targets` — rightly —
+        # will not re-chunk or re-embed a tombstone. Clearing its vectors anyway
+        # would strip them with nothing to restore them, so a routine
+        # `--stage embed` model swap would quietly leave a corpus with permanently
+        # unembedded chunks behind every deleted file.
+        chunks_in_scope = _chunks_of_reprocessed(source_id)
         async with sessions.begin() as session:
+            if scope.rechunks:
+                # Only the jobs that are about to refer to nothing. A scoped
+                # replay used to clear the whole queue, which would have thrown
+                # away valid pending work for every source it was not replaying.
+                # Run before the memories are deleted, because it selects through
+                # them.
+                await session.execute(
+                    delete(models.Job).where(
+                        models.Job.payload["memory_id"].astext.in_(
+                            select(cast(models.Memory.id, Text)).where(
+                                *_memories_of(source_id)
+                            )
+                        )
+                    )
+                )
+
             if scope.stage is ReplayStage.EMBED:
                 # Chunk rows and their ids survive; only the vectors go. That is
                 # what makes a model swap cheap, and it is why a chunk's identity
@@ -417,12 +488,6 @@ class ReplayCorpus:
                     await session.execute(
                         delete(models.Memory).where(*_memories_of(source_id))
                     )
-
-            if scope.rechunks:
-                # Jobs the previous pipeline left queued. A replay runs its work
-                # inline, so anything still pending refers to state that is about
-                # to stop existing.
-                await session.execute(delete(models.Job))
 
             if clear_cache:
                 await session.execute(delete(models.EmbeddingCacheEntry))
@@ -617,11 +682,9 @@ class ReplayCorpus:
         """
         stmt = (
             select(models.Memory.id, models.Memory.external_key)
-            .where(models.Memory.is_current.is_(True), models.Memory.deleted_at.is_(None))
+            .where(models.Memory.id.in_(_reprocessed(source_id)))
             .order_by(models.Memory.external_key)
         )
-        if source_id is not None:
-            stmt = stmt.where(models.Memory.source_id == source_id)
         async with sessions() as session:
             return [(row[0], row[1]) for row in await session.execute(stmt)]
 
@@ -641,15 +704,24 @@ def _memories_of(source_id: UUID | None) -> list[ColumnElement[bool]]:
     return [models.Memory.source_id == source_id]
 
 
-def _chunks_of(source_id: UUID | None) -> list[ColumnElement[bool]]:
-    """The same, for chunks, which reach their source through their memory."""
-    if source_id is None:
-        return []
-    return [
-        models.MemoryChunk.memory_id.in_(
-            select(models.Memory.id).where(models.Memory.source_id == source_id)
-        )
-    ]
+def _reprocessed(source_id: UUID | None) -> Select[tuple[UUID]]:
+    """The memories a downstream stage will reprocess.
+
+    Deliberately the same predicate `_targets` uses. The two have to agree: what a
+    partial replay clears must be exactly what it is going to rebuild, or the
+    difference is destroyed.
+    """
+    stmt = select(models.Memory.id).where(
+        models.Memory.is_current.is_(True), models.Memory.deleted_at.is_(None)
+    )
+    if source_id is not None:
+        stmt = stmt.where(models.Memory.source_id == source_id)
+    return stmt
+
+
+def _chunks_of_reprocessed(source_id: UUID | None) -> list[ColumnElement[bool]]:
+    """Chunks belonging to those memories, which reach their source through them."""
+    return [models.MemoryChunk.memory_id.in_(_reprocessed(source_id))]
 
 
 async def truncate_derived(
