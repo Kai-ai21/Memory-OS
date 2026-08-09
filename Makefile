@@ -33,20 +33,20 @@ phase1-check:
 	uv run memoryos source add --kind filesystem --name self --root .
 	uv run memoryos sync --source self --full
 	uv run memoryos worker --drain
-	@echo "\n=== stats: after ingestion ==="
+	@printf "\n=== stats: after ingestion ===\n"
 	uv run memoryos stats
-	@echo "\n=== doctor ==="
+	@printf "\n=== doctor ===\n"
 	-uv run memoryos doctor
-	@echo "\n=== verify-replay: rebuild into a shadow schema and compare ==="
+	@printf "\n=== verify-replay: rebuild into a shadow schema and compare ===\n"
 	uv run memoryos verify-replay
-	@echo "\n=== replay: rebuild in place, recomputing every vector ==="
+	@printf "\n=== replay: rebuild in place, recomputing every vector ===\n"
 	uv run memoryos replay --from-beginning --clear-cache
-	@echo "\n=== stats: after replay (must match the first) ==="
+	@printf "\n=== stats: after replay (must match the first) ===\n"
 	uv run memoryos stats
-	@echo "\n=== the four assessment queries ==="
+	@printf "\n=== the four assessment queries ===\n"
 	uv run memoryos search "how does the job queue claim work" -k 3
 	uv run memoryos search "why do we store two timestamps" -k 3
 	uv run memoryos search "content addressing and deduplication" -k 3
 	uv run memoryos search "what happens when a file is deleted" -k 3
-	@echo "\n=== doctor: after replay ==="
+	@printf "\n=== doctor: after replay ===\n"
 	-uv run memoryos doctor
