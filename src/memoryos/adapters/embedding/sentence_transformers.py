@@ -25,15 +25,64 @@ DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
 # width, so this is a compatibility constraint rather than a preference.
 DEFAULT_DIMENSION = 384
 
-# Bumped by hand whenever the weights behind `model_name` could differ — a
-# pinned revision change, a different fine-tune. The cache key contains this
-# string, so a stale value means silently reusing vectors from another model.
+# Bumped by hand whenever the vectors this adapter produces could differ — a
+# pinned revision change, a different fine-tune, or a change to an applied query
+# prefix below. The cache key contains this string, so a stale value means
+# silently reusing vectors produced under different conditions.
+#
+# Deliberately *not* bumped when the role split landed: passages have always been
+# encoded bare, so every stored vector is bit-identical to what this model
+# produced before. The cache key gained a role field in the same change, which
+# strands the old entries — but that is a one-time recomputation of a derived,
+# content-addressed table, not a reason to invalidate every chunk in the corpus.
 REVISION = "1"
+
+# The instruction each model's authors document for queries, and only for
+# queries. Recorded per model so the knowledge lives next to the adapter that
+# would use it, whether or not it is currently applied.
+DOCUMENTED_QUERY_PREFIXES = {
+    "BAAI/bge-small-en-v1.5": "Represent this sentence for searching relevant passages: ",
+}
+
+# Which models the prefix is actually applied for.
+#
+# Empty, and that is a measured result rather than an oversight. bge-v1.5's own
+# model card says the instruction is optional for this generation — "we improve
+# its retrieval ability when not using instruction ... the best method to decide
+# whether to add instructions for queries is choosing the setting that achieves
+# better performance on your task" — so it was measured on this corpus:
+#
+#   6-document fixture, queue question:  margin +0.0060 -> -0.0007 (rank inverts)
+#   6-document fixture, baking question: margin +0.1344 -> +0.1556
+#   this repository, 719 chunks, the four M1.6 assessment queries: two of four
+#   change their top result, and "why do we store two timestamps" loses
+#   domain/entities.py — where the answer is actually written — to a test file.
+#
+# So it is off. `tests/slow/test_query_prefix.py` re-runs that comparison and
+# fails if the setting stops being the better one, which is what makes this a
+# decision the project keeps checking rather than one it made once.
+#
+# Membership is keyed by model name rather than decided in the composition root,
+# because M1.6.1's second defect was exactly that: two ways to build an embedder
+# that disagreed. A test constructing this class directly must get what the CLI
+# gets, so the behaviour has to follow the model's identity and nothing else.
+APPLY_QUERY_PREFIX: frozenset[str] = frozenset()
 
 # Fallback if the tokenizer reports something implausible. Some tokenizers ship
 # model_max_length as a sentinel like 1e30 meaning "unset".
 FALLBACK_WINDOW = 512
 _IMPLAUSIBLE_WINDOW = 100_000
+
+
+def query_prefix_for(model_name: str) -> str:
+    """The prefix this model's queries actually carry, or "" for none.
+
+    Documented and applied are two different things, and this is the one place
+    that resolves between them.
+    """
+    if model_name not in APPLY_QUERY_PREFIX:
+        return ""
+    return DOCUMENTED_QUERY_PREFIXES[model_name]
 
 
 class DimensionMismatch(RuntimeError):
@@ -54,10 +103,17 @@ class SentenceTransformerEmbedder(Embedder):
         *,
         dimension: int = DEFAULT_DIMENSION,
         cache_dir: Path | None = None,
+        query_prefix: str | None = None,
     ) -> None:
         self._model_name = model_name
         self._dimension = dimension
         self._cache_dir = cache_dir
+        # None means "whatever this model is configured for", which is what every
+        # caller in the application passes. An explicit value is for measuring
+        # the other arm, and is the only way to get one that disagrees.
+        self._query_prefix = (
+            query_prefix_for(model_name) if query_prefix is None else query_prefix
+        )
         self._model: SentenceTransformer | None = None
         # Counting tokens must not require the full model. Normalization needs
         # to size chunks the way the model reads them, and loading several
@@ -83,6 +139,11 @@ class SentenceTransformerEmbedder(Embedder):
         return True
 
     @property
+    def query_prefix(self) -> str:
+        """The instruction prepended to queries, or "" for a symmetric model."""
+        return self._query_prefix
+
+    @property
     def max_sequence_tokens(self) -> int:
         """Tokens the model actually reads. Text beyond this is discarded."""
         window = getattr(self._load_tokenizer(), "model_max_length", None)
@@ -102,7 +163,22 @@ class SentenceTransformerEmbedder(Embedder):
             return 0
         return len(self._load_tokenizer().encode(text, add_special_tokens=False))
 
-    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+    def embed_passage(self, texts: Sequence[str]) -> list[list[float]]:
+        """Stored text, encoded bare. No model in `QUERY_PREFIXES` wants one here."""
+        return self._encode(texts)
+
+    def embed_query(self, texts: Sequence[str]) -> list[list[float]]:
+        """Search text, carrying this model's instruction prefix if it has one.
+
+        The prefix costs about ten tokens of the window. Queries are short, so
+        that is free in practice — but it is why the prefix goes on this side and
+        not on passages, which are sized to fill the window exactly.
+        """
+        if not self._query_prefix:
+            return self._encode(texts)
+        return self._encode([self._query_prefix + text for text in texts])
+
+    def _encode(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:
             return []
         model = self._load()

@@ -279,6 +279,14 @@ class MemoryChunk(Base):
     # subset without rewriting everything.
     chunker_version: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    # What the chunker knew about where this span came from — the enclosing
+    # definition's name, for code. Persisted rather than held in memory, because
+    # the moment a citation needs it is query time, and until M1.7 it was
+    # computed during normalization and then discarded. Same `metadata`/`meta`
+    # split as `Memory`, for the same declarative-attribute reason.
+    meta: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, nullable=False, server_default=_EMPTY_JSONB
+    )
     # The HNSW index over this column arrives in migration 0005, declared
     # below the class. It is built after the pipeline that fills the column
     # rather than maintained through every insert from an empty table.

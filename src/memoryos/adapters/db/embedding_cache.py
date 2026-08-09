@@ -12,11 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
 from memoryos.application.ports import CacheEntry, EmbeddingCache
-from memoryos.domain.values import ContentHash
+from memoryos.domain.values import ContentHash, EmbeddingRole
 
 
-def cache_key_for(model_id: str, text: str) -> str:
-    """The key for one (model, text) pair.
+def cache_key_for(model_id: str, text: str, *, role: EmbeddingRole) -> str:
+    """The key for one (model, role, text) triple.
 
     The model identity is in the key because a vector is only meaningful in the
     coordinate system that produced it. Keying on text alone would let a model
@@ -24,11 +24,19 @@ def cache_key_for(model_id: str, text: str) -> str:
     incompatible geometries in one index, with similarity scores between them
     that are arithmetically fine and semantically nonsense.
 
-    The null byte separates the two fields so that a text ending in the model
-    id cannot collide with a different pairing that happens to concatenate the
-    same way.
+    The role is in the key for exactly the same reason one step down. An
+    asymmetric model encodes "leases expire" differently as a query than as a
+    passage, so without the role those two calls collide on one entry and
+    whichever ran second silently receives the first one's vector.
+
+    `role` is keyword-only and has no default. A default would be a guess about
+    the caller's intent, and the whole point is that the caller has to state it.
+
+    The null bytes separate the fields so that no text can slide a boundary and
+    claim another triple's vector — a null cannot appear in a model id or in a
+    role name.
     """
-    return ContentHash.of(f"{model_id}\0{text}".encode()).value
+    return ContentHash.of(f"{model_id}\0{role.value}\0{text}".encode()).value
 
 
 class PostgresEmbeddingCache(EmbeddingCache):

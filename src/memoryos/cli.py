@@ -28,6 +28,8 @@ from memoryos.application.doctor import run_doctor
 from memoryos.application.evaluation import format_table, measure_recall
 from memoryos.application.ports import SearchFilters
 from memoryos.application.rechunk import enqueue_rechunk, find_stale
+from memoryos.application.replay import PartialShadowReplay, ReplayScope, ReplayStage
+from memoryos.application.verification import compare, snapshot
 from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
 from memoryos.container import Container
@@ -278,6 +280,73 @@ async def run_stats(settings: Settings) -> int:
     return 0
 
 
+async def run_replay(
+    settings: Settings,
+    *,
+    scope: ReplayScope,
+    into_shadow: bool,
+    clear_cache: bool,
+) -> int:
+    container = Container.build(settings)
+    try:
+        print(f"scope:  {scope.describe()}")
+        print(f"cache:  {'cleared' if clear_cache else 'kept (content-addressed)'}")
+        print(f"target: {'shadow schema, swapped in' if into_shadow else 'in place'}\n")
+
+        report = await container.replay()(
+            scope, into_shadow=into_shadow, clear_cache=clear_cache
+        )
+        print(json.dumps(report.as_dict(), indent=2))
+    except (LookupError, PartialShadowReplay) as exc:
+        print(str(exc))
+        return 1
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_verify_replay(
+    settings: Settings, *, sample: int | None, clear_cache: bool
+) -> int:
+    """Rebuild into a shadow schema and prove it matches, or say exactly how not.
+
+    The live corpus is never modified: the workspace is built, compared, and
+    dropped. A non-zero exit is the whole point — a verification that cannot fail
+    is not a verification, which is why one of this milestone's tests corrupts a
+    chunk on purpose and requires this command to notice.
+    """
+    container = Container.build(settings)
+    try:
+        sessions = container.database.session_factory
+        before = await snapshot(sessions, sample=sample)
+        if not before.memories:
+            print("nothing to verify: the corpus is empty")
+            return 1
+
+        print(f"snapshot: {before.counts}")
+        if sample is not None:
+            print(f"sampled:  {sample} memories")
+        print("rebuilding into a shadow schema (the live tables are not touched)\n")
+
+        async with container.replay().rebuild_into_shadow(
+            clear_cache=clear_cache
+        ) as (report, shadow_sessions):
+            after = await snapshot(shadow_sessions, sample=sample)
+
+        result = compare(before, after)
+        print(json.dumps(report.as_dict(), indent=2))
+        print()
+        print(result.render())
+        print()
+        print("identical" if result.identical else "MISMATCH: the rebuild differs")
+        return 0 if result.identical else 1
+    except LookupError as exc:
+        print(str(exc))
+        return 1
+    finally:
+        await container.dispose()
+
+
 async def run_sync(settings: Settings, *, name: str, full: bool) -> int:
     container = Container.build(settings)
     try:
@@ -380,6 +449,67 @@ def build_parser() -> argparse.ArgumentParser:
         help="sequential scan instead of the index, for spot-checking what it missed",
     )
 
+    replay = commands.add_parser(
+        "replay", help="rebuild the derived tables from the event log and blobs"
+    )
+    scope_group = replay.add_mutually_exclusive_group()
+    scope_group.add_argument(
+        "--from-beginning",
+        dest="from_beginning",
+        action="store_true",
+        help="replay the whole log; the full proof",
+    )
+    scope_group.add_argument("--source", help="replay one connector's corpus")
+    scope_group.add_argument(
+        "--since",
+        type=int,
+        metavar="SEQ",
+        help="replay only events after this log position",
+    )
+    replay.add_argument(
+        "--stage",
+        choices=[stage.value for stage in ReplayStage if stage is not ReplayStage.ALL],
+        help=(
+            "keep upstream artifacts and redo from here: 'normalize' re-chunks and "
+            "re-embeds, 'embed' keeps chunk rows and only recomputes vectors"
+        ),
+    )
+    replay.add_argument(
+        "--into-shadow",
+        dest="into_shadow",
+        action="store_true",
+        help=(
+            "build into a separate schema and swap it in, instead of in place; "
+            "requires the whole log at stage 'all', because a swap replaces the "
+            "derived tables rather than merging into them"
+        ),
+    )
+    replay.add_argument(
+        "--clear-cache",
+        dest="clear_cache",
+        action="store_true",
+        help=(
+            "recompute every vector instead of reusing the content-addressed "
+            "cache; slower, and the stronger check"
+        ),
+    )
+
+    verify = commands.add_parser(
+        "verify-replay",
+        help="rebuild into a shadow schema and prove it matches the live corpus",
+    )
+    verify.add_argument(
+        "--sample",
+        type=int,
+        help="compare only the first N memories, for a corpus too large to do whole",
+    )
+    verify.add_argument(
+        "--clear-cache",
+        dest="clear_cache",
+        action="store_true",
+        help="recompute every vector during the rebuild rather than reusing cached ones",
+    )
+
     evaluate = commands.add_parser(
         "eval-recall", help="measure index recall against an exhaustive scan"
     )
@@ -450,6 +580,27 @@ def main(argv: list[str] | None = None) -> int:
         values = [int(value) for value in args.ef_search.split(",") if value.strip()]
         return asyncio.run(
             run_eval_recall(settings, queries=args.queries, k=args.k, ef_search_values=values)
+        )
+
+    if args.command == "replay":
+        return asyncio.run(
+            run_replay(
+                settings,
+                scope=ReplayScope(
+                    source_name=args.source,
+                    after_seq=args.since or 0,
+                    stage=ReplayStage(args.stage) if args.stage else ReplayStage.ALL,
+                ),
+                into_shadow=args.into_shadow,
+                clear_cache=args.clear_cache,
+            )
+        )
+
+    if args.command == "verify-replay":
+        return asyncio.run(
+            run_verify_replay(
+                settings, sample=args.sample, clear_cache=args.clear_cache
+            )
         )
 
     if args.command == "rechunk":

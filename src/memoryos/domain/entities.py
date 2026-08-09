@@ -156,6 +156,9 @@ class MemoryChunk:
     # Versioned on the chunk, not the memory, so re-chunking can be selective.
     chunker_version: str
     content_hash: ContentHash
+    # What the chunker knew about the span's origin — the enclosing definition's
+    # name, for code. Carried through to query time so a citation can name it.
+    meta: dict[str, Any] = field(default_factory=dict)
     embedding: tuple[float, ...] | None = None
     embedding_model: str | None = None
     embedded_at: datetime | None = None

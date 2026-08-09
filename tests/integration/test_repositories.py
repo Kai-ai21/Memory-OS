@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
@@ -115,11 +116,15 @@ async def test_tombstone_marks_the_memory_deleted_without_removing_it(
     memory = build_memory(source, artifact)
     await repository.add_version(memory)
 
-    await repository.tombstone(memory.id)
+    deleted_at = datetime(2024, 6, 1, 9, 30, tzinfo=UTC)
+    await repository.tombstone(memory.id, deleted_at)
 
     current = await repository.get_current(source.id, "notes/example.md")
     assert current is not None
-    assert current.deleted_at is not None
+    # The exact timestamp it was given, not the clock. A replay stamps this from
+    # the deletion event's `recorded_at`, so a repository that quietly used
+    # `now()` would make every rebuild differ here.
+    assert current.deleted_at == deleted_at
 
 
 async def test_append_then_replay_returns_events_in_seq_order(

@@ -125,6 +125,7 @@ class PgVectorStore(VectorStore):
                 models.MemoryChunk.content,
                 models.MemoryChunk.char_start,
                 models.MemoryChunk.char_end,
+                models.MemoryChunk.meta,
                 # Negated: `<#>` is negative inner product, and callers want a
                 # similarity where higher is better.
                 (-distance).label("score"),
@@ -174,7 +175,8 @@ def _to_chunks(rows: Sequence[Any]) -> list[ScoredChunk]:
             text=row[3],
             char_start=row[4],
             char_end=row[5],
-            score=float(row[6]),
+            metadata=dict(row[6] or {}),
+            score=float(row[7]),
         )
         for row in rows
     ]

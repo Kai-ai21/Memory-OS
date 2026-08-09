@@ -24,23 +24,15 @@ from memoryos.adapters.db.repositories import (
     SqlAlchemySourceRepository,
 )
 from memoryos.application.ports import BlobStore, Connector, ObservedItem
-from memoryos.domain.entities import IngestionEvent, Memory, RawArtifact, Source
+from memoryos.application.projection import memory_from_event, recorded_at_of
+from memoryos.domain.entities import IngestionEvent, RawArtifact, Source
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobSpec, JobType
-from memoryos.domain.values import EventType, MemoryKind, TimeProvenance
+from memoryos.domain.values import EventType, TimeProvenance
 
 logger = structlog.get_logger(__name__)
 
 CURSOR_SEEN = "seen"
-
-# Deliberately small. Classifying content properly is a parsing concern, and
-# parsing is not this milestone's business; a suffix is an honest guess.
-_KIND_BY_SUFFIX = {
-    ".md": MemoryKind.NOTE,
-    ".txt": MemoryKind.NOTE,
-    ".py": MemoryKind.CODE,
-    ".pdf": MemoryKind.DOCUMENT,
-}
 
 
 @dataclass(slots=True)
@@ -63,12 +55,6 @@ class SyncReport:
             "errors": self.errors,
             "duration_ms": self.duration_ms,
         }
-
-
-def kind_for(external_key: str) -> MemoryKind:
-    dot = external_key.rfind(".")
-    suffix = external_key[dot:].lower() if dot > 0 else ""
-    return _KIND_BY_SUFFIX.get(suffix, MemoryKind.OTHER)
 
 
 class SyncSource:
@@ -186,7 +172,7 @@ class SyncSource:
                     )
                 )
 
-            await SqlAlchemyEventLog(session).append(
+            event = await SqlAlchemyEventLog(session).append(
                 IngestionEvent(
                     id=new_id(),
                     event_type=EventType.ARTIFACT_OBSERVED,
@@ -201,16 +187,7 @@ class SyncSource:
 
             memory_id = new_id()
             await memories.add_version(
-                Memory(
-                    id=memory_id,
-                    source_id=source.id,
-                    external_key=item.external_key,
-                    content_hash=item.content_hash,
-                    kind=kind_for(item.external_key),
-                    occurred_at=item.occurred_at,
-                    occurred_at_source=item.occurred_at_source,
-                    meta={"media_type": item.media_type},
-                )
+                memory_from_event(event, memory_id=memory_id),
             )
 
             # In the same transaction as the memory it refers to. This is the
@@ -254,7 +231,7 @@ class SyncSource:
         deleted = 0
         for external_key in sorted(set(known) - observed_keys):
             async with self._sessions.begin() as session:
-                await SqlAlchemyEventLog(session).append(
+                event = await SqlAlchemyEventLog(session).append(
                     IngestionEvent(
                         id=new_id(),
                         event_type=EventType.ITEM_DELETED,
@@ -270,7 +247,11 @@ class SyncSource:
                         content_hash=None,
                     )
                 )
-                await SqlAlchemyMemoryRepository(session).tombstone(known[external_key])
+                # Stamped from the event rather than from `now()`, so that a
+                # replay of this event lands on the same `deleted_at`.
+                await SqlAlchemyMemoryRepository(session).tombstone(
+                    known[external_key], recorded_at_of(event)
+                )
             log.info("item.deleted", key=external_key)
             deleted += 1
 

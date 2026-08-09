@@ -83,7 +83,8 @@ class Corpus:
             ).scalar_one()
 
     async def embed_text(self, value: str) -> list[float]:
-        (vector,) = self.embedder.embed([value])
+        # A query vector, because that is what these tests search with.
+        (vector,) = self.embedder.embed_query([value])
         return vector
 
 
@@ -128,6 +129,37 @@ async def corpus(
     return built
 
 
+@pytest.fixture
+async def code_corpus(
+    tmp_path: Path, sessions: async_sessionmaker[AsyncSession]
+) -> Corpus:
+    """A corpus with code in it, kept separate from `corpus` on purpose.
+
+    Adding a `.py` file to the shared fixture would silently invalidate the
+    tests above that assert a kind filter finds no code and that the corpus holds
+    three documents — count-based assertions that a new fixture file quietly
+    turns into a different claim.
+    """
+    root = tmp_path / "code-corpus"
+    root.mkdir()
+    (root / "delta.py").write_text(
+        "def delta_handler(payload):\n"
+        + "\n".join(f"    step_{n} = transform_value(payload, {n})" for n in range(80))
+        + "\n    return payload\n"
+    )
+    (root / "plain.txt").write_text(PARAGRAPH * 4 + "\n")
+
+    source = Source(
+        id=new_id(), kind=SourceKind.FILESYSTEM, name="code", config={"root": str(root)}
+    )
+    async with sessions.begin() as session:
+        await SqlAlchemySourceRepository(session).add(source)
+
+    built = build_corpus(root, tmp_path / "code-blobs", sessions, source)
+    await built.ingest()
+    return built
+
+
 # --------------------------------------------------------------------------
 # The assertion that catches a wrong operator, a sign error, or a dead embedder
 # --------------------------------------------------------------------------
@@ -156,6 +188,34 @@ async def test_a_chunks_own_text_retrieves_itself_first(
     assert found[0].text == query
     # Unit vectors, so a chunk against itself is inner product 1.
     assert found[0].score == pytest.approx(1.0, abs=1e-4)
+
+
+async def test_a_result_carries_the_chunks_definition_metadata(
+    code_corpus: Corpus,
+) -> None:
+    """Query time is the only moment this matters, so it has to survive to here.
+
+    A citation that can say which function a span came from is checkable; one
+    that can only say "somewhere in delta.py" is not.
+    """
+    query = await code_corpus.chunk_text("delta.py", ordinal=0)
+    found = await code_corpus.store.search(
+        await code_corpus.embed_text(query), k=5, filters=SearchFilters()
+    )
+
+    assert found[0].metadata == {"definition": "delta_handler"}
+
+
+async def test_a_chunk_with_no_definition_carries_an_empty_mapping(
+    code_corpus: Corpus,
+) -> None:
+    # Never None: callers should not need a null check to read a mapping.
+    query = await code_corpus.chunk_text("plain.txt", ordinal=0)
+    found = await code_corpus.store.search(
+        await code_corpus.embed_text(query), k=5, filters=SearchFilters()
+    )
+
+    assert found[0].metadata == {}
 
 
 async def test_scores_are_similarities_not_distances(corpus: Corpus) -> None:

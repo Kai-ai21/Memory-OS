@@ -80,7 +80,10 @@ class SearchMemories:
         embed_started = time.monotonic()
         # Same reasoning as the embed pipeline: CPU-bound matrix work does not
         # belong on the event loop, even for a single short query.
-        (vector,) = await asyncio.to_thread(self._embedder.embed, [query])
+        #
+        # `embed_query`, not `embed_passage`: this text is what the caller is
+        # searching *with*, and the model was trained to see the two differently.
+        (vector,) = await asyncio.to_thread(self._embedder.embed_query, [query])
         embed_ms = _elapsed_ms(embed_started)
 
         search_started = time.monotonic()

@@ -10,11 +10,13 @@ Marked `slow` and excluded from the default run; `make test-slow` runs it.
 """
 
 import math
+import re
 
 import pytest
 
 from memoryos.adapters.embedding.sentence_transformers import (
     DEFAULT_DIMENSION,
+    REVISION,
     DimensionMismatch,
     SentenceTransformerEmbedder,
 )
@@ -38,7 +40,7 @@ def embedder() -> SentenceTransformerEmbedder:
 def test_the_model_produces_the_width_the_column_expects(
     embedder: SentenceTransformerEmbedder,
 ) -> None:
-    (vector,) = embedder.embed(["hello"])
+    (vector,) = embedder.embed_passage(["hello"])
     assert len(vector) == DEFAULT_DIMENSION == 384
 
 
@@ -48,7 +50,7 @@ def test_vectors_are_unit_length(embedder: SentenceTransformerEmbedder) -> None:
     With unit vectors, cosine similarity and inner product are the same number,
     and inner product is cheaper.
     """
-    vectors = embedder.embed([SIMILAR_A, SIMILAR_B, UNRELATED])
+    vectors = embedder.embed_passage([SIMILAR_A, SIMILAR_B, UNRELATED])
     for vector in vectors:
         norm = math.sqrt(sum(value * value for value in vector))
         assert norm == pytest.approx(1.0, abs=1e-5)
@@ -62,7 +64,7 @@ def test_similar_sentences_are_closer_than_unrelated_ones(
     A hash-based fake would satisfy every structural test in this suite and
     fail this one, because it has no notion of meaning at all.
     """
-    similar_a, similar_b, unrelated = embedder.embed([SIMILAR_A, SIMILAR_B, UNRELATED])
+    similar_a, similar_b, unrelated = embedder.embed_passage([SIMILAR_A, SIMILAR_B, UNRELATED])
 
     related = cosine(similar_a, similar_b)
     unrelated_a = cosine(similar_a, unrelated)
@@ -80,15 +82,18 @@ def test_the_same_text_embeds_identically(
 ) -> None:
     # The cache assumes this. If the model were nondeterministic, a cache hit
     # and a fresh call would disagree and nothing would ever notice.
-    first, second = embedder.embed([SIMILAR_A, SIMILAR_A])
+    first, second = embedder.embed_passage([SIMILAR_A, SIMILAR_A])
     assert first == pytest.approx(second)
 
 
 def test_the_model_id_carries_a_revision(
     embedder: SentenceTransformerEmbedder,
 ) -> None:
-    assert embedder.model_id.endswith("@1")
-    assert "bge-small-en-v1.5" in embedder.model_id
+    # The number itself is not asserted — it is bumped by hand whenever the
+    # vectors could change, and pinning it here would make every legitimate bump
+    # look like a regression.
+    assert embedder.model_id == f"BAAI/bge-small-en-v1.5@{REVISION}"
+    assert re.fullmatch(r".+@\d+", embedder.model_id)
 
 
 def test_the_window_is_larger_than_the_model_it_replaced(
@@ -115,7 +120,7 @@ def test_text_past_the_window_still_changes_the_embedding(
     while embedder.count_tokens(prefix) < window - 40:
         prefix += "The worker claims a job from the queue and holds a lease on it. "
 
-    first, second = embedder.embed([prefix + "ENDING ONE", prefix + "ENDING TWO"])
+    first, second = embedder.embed_passage([prefix + "ENDING ONE", prefix + "ENDING TWO"])
 
     assert first != second
     similarity = sum(a * b for a, b in zip(first, second, strict=True))
@@ -159,4 +164,4 @@ def test_a_wrong_expected_dimension_is_caught_at_load() -> None:
     # error at insert time.
     wrong = SentenceTransformerEmbedder(dimension=512)
     with pytest.raises(DimensionMismatch, match="384-dimensional"):
-        wrong.embed(["hello"])
+        wrong.embed_passage(["hello"])

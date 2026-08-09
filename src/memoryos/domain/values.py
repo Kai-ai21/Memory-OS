@@ -75,3 +75,17 @@ class MemoryKind(StrEnum):
 class EventType(StrEnum):
     ARTIFACT_OBSERVED = auto()
     ITEM_DELETED = auto()
+
+
+class EmbeddingRole(StrEnum):
+    """Which side of a retrieval a piece of text is on.
+
+    Asymmetric models are trained to embed the two differently — bge prepends an
+    instruction to queries and nothing to passages — so a vector is only
+    meaningful for the role it was produced in. The role is part of the cache
+    key for the same reason the model id is: without it, a query and a passage
+    with identical text collide and one silently receives the other's vector.
+    """
+
+    PASSAGE = auto()
+    QUERY = auto()

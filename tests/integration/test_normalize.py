@@ -496,3 +496,40 @@ async def test_normalizing_a_missing_memory_fails_permanently(
 ) -> None:
     with pytest.raises(PermanentError, match="no such memory"):
         await pipeline.normalize(new_id())
+
+
+async def test_the_enclosing_definition_reaches_the_stored_row(
+    pipeline: Pipeline,
+) -> None:
+    """The chunker has always known this; until now it was discarded.
+
+    It is computed here, during normalization, and needed at query time, which
+    is a different process minutes or months later. A value that exists only in
+    the memory of the step that derived it is not available to the step that
+    needs it.
+    """
+    body = "\n".join(
+        f"    total = total + compute_partial_result_{n}(total, {n})" for n in range(80)
+    )
+    (pipeline.root / "big.py").write_text(f"def enormous(total):\n{body}\n    return total\n")
+
+    await pipeline.run_sync()
+    await pipeline.normalize_all()
+
+    chunks = await chunk_rows(pipeline.sessions, "big.py")
+    assert chunks
+    assert all(chunk.meta.get("definition") == "enormous" for chunk in chunks), [
+        chunk.meta for chunk in chunks
+    ]
+
+
+async def test_a_span_inside_no_definition_stores_an_empty_object(
+    pipeline: Pipeline,
+) -> None:
+    # Not null. "The chunker recorded nothing" and "nobody looked" are the same
+    # state, and an empty object spares every reader a null check.
+    await pipeline.run_sync()
+    await pipeline.normalize_all()
+
+    for chunk in await chunk_rows(pipeline.sessions, "notes.txt"):
+        assert chunk.meta == {}

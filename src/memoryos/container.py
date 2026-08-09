@@ -12,6 +12,7 @@ from memoryos.adapters.connectors.filesystem import FilesystemConnector
 from memoryos.adapters.db.embedding_cache import PostgresEmbeddingCache
 from memoryos.adapters.db.engine import Database
 from memoryos.adapters.db.job_queue import PostgresJobQueue
+from memoryos.adapters.db.shadow import PostgresShadowSchema
 from memoryos.adapters.db.vector_store import PgVectorStore
 from memoryos.adapters.embedding.sentence_transformers import (
     SentenceTransformerEmbedder,
@@ -24,6 +25,7 @@ from memoryos.application.jobs.handlers import build_default_registry
 from memoryos.application.jobs.registry import HandlerRegistry
 from memoryos.application.normalize import NormalizeMemory
 from memoryos.application.ports import Chunker, Embedder
+from memoryos.application.replay import ReplayCorpus
 from memoryos.application.search import SearchMemories
 from memoryos.application.sync import SyncSource
 from memoryos.config import Settings
@@ -95,6 +97,35 @@ class Container:
             self.embedder,
             self.cache,
             self.settings.embedding_batch_size,
+        )
+
+    def replay(self) -> ReplayCorpus:
+        """The replay use case, built to work through whichever tables it is given.
+
+        `NormalizeMemory` and `EmbedMemory` are constructed per session factory
+        rather than reused, because a shadow rebuild writes through a different
+        one — same use cases, different tables. Anything holding a factory from
+        construction would quietly write the live tables during a shadow replay,
+        which is the one mistake this design has to make impossible.
+        """
+        return ReplayCorpus(
+            self.database.session_factory,
+            make_normalize=lambda sessions: NormalizeMemory(
+                sessions,
+                self.blobs,
+                self.parsers,
+                self.chunker,
+                # Replay embeds inline immediately afterwards, so a queued job
+                # would be work nobody needs doing twice.
+                enqueue_followup=False,
+            ),
+            make_embed=lambda sessions: EmbedMemory(
+                sessions, self.embedder, PostgresEmbeddingCache(sessions),
+                self.settings.embedding_batch_size,
+            ),
+            make_shadow=lambda: PostgresShadowSchema(
+                self.settings.database_url, echo=self.settings.db_echo
+            ),
         )
 
     async def dispose(self) -> None:

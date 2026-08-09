@@ -35,15 +35,19 @@ class FakeEmbedder(Embedder):
         *,
         broken_dimension: int | None = None,
         max_sequence_tokens: int = 512,
+        query_prefix: str = "",
     ) -> None:
         self._model_id = model_id
         self._dimension = dimension
         # Configurable so tests can drive the window boundary — including a
         # deliberately tiny one — without loading a model.
         self._window = max_sequence_tokens
-        # When set, `embed` returns vectors of this width instead — for the
-        # test that a mismatch is caught before anything is written.
+        # When set, `embed_passage` returns vectors of this width instead — for
+        # the test that a mismatch is caught before anything is written.
         self._broken_dimension = broken_dimension
+        # Empty by default, matching the port's symmetric default. A test that
+        # needs the two roles to diverge sets one.
+        self._query_prefix = query_prefix
         self.calls: list[list[str]] = []
 
     @property
@@ -77,10 +81,15 @@ class FakeEmbedder(Embedder):
     def texts_embedded(self) -> int:
         return sum(len(batch) for batch in self.calls)
 
-    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+    def embed_passage(self, texts: Sequence[str]) -> list[list[float]]:
         self.calls.append(list(texts))
         width = self._broken_dimension or self._dimension
         return [self._vector(text, width) for text in texts]
+
+    def embed_query(self, texts: Sequence[str]) -> list[list[float]]:
+        if not self._query_prefix:
+            return self.embed_passage(texts)
+        return self.embed_passage([self._query_prefix + text for text in texts])
 
     def _vector(self, text: str, width: int) -> list[float]:
         seed = hashlib.blake2b(text.encode("utf-8"), digest_size=32).digest()
