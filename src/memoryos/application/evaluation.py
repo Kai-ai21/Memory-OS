@@ -82,7 +82,15 @@ async def measure_recall(
 
     # Embedded once and reused across every ef_search value, so the table
     # compares index settings rather than model warm-up.
-    vectors = await asyncio.to_thread(embedder.embed, [text for _, text in samples])
+    #
+    # `embed_query`, because these texts are standing in for queries and the
+    # measurement is worth nothing if it exercises a path real searches do not.
+    # It does change what `self_retrieval` means on an asymmetric model: the
+    # query vector is no longer bit-identical to the stored passage vector, so
+    # self@1 stops being a tautology and starts being a real assertion that the
+    # two halves of the model's geometry line up. Recall is unaffected either
+    # way — exact and approximate are compared using the same vector.
+    vectors = await asyncio.to_thread(embedder.embed_query, [text for _, text in samples])
 
     truth: list[set[str]] = []
     for vector in vectors:

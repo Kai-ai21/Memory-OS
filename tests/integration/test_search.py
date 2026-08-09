@@ -83,7 +83,8 @@ class Corpus:
             ).scalar_one()
 
     async def embed_text(self, value: str) -> list[float]:
-        (vector,) = self.embedder.embed([value])
+        # A query vector, because that is what these tests search with.
+        (vector,) = self.embedder.embed_query([value])
         return vector
 
 

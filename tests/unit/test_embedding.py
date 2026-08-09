@@ -4,10 +4,18 @@ import pytest
 
 from memoryos.adapters.db.embedding_cache import cache_key_for
 from memoryos.application.embed import _batched
+from memoryos.domain.values import EmbeddingRole
 from tests.support.fakes import FakeEmbedder
 
 MODEL_A = "sentence-transformers/all-MiniLM-L6-v2@1"
 MODEL_B = "sentence-transformers/all-MiniLM-L6-v2@2"
+
+PASSAGE = EmbeddingRole.PASSAGE
+QUERY = EmbeddingRole.QUERY
+
+
+def key(model_id: str, text: str, role: EmbeddingRole = PASSAGE) -> str:
+    return cache_key_for(model_id, text, role=role)
 
 
 # --------------------------------------------------------------------------
@@ -16,11 +24,11 @@ MODEL_B = "sentence-transformers/all-MiniLM-L6-v2@2"
 
 
 def test_the_same_model_and_text_give_the_same_key() -> None:
-    assert cache_key_for(MODEL_A, "hello") == cache_key_for(MODEL_A, "hello")
+    assert key(MODEL_A, "hello") == key(MODEL_A, "hello")
 
 
 def test_changing_the_text_changes_the_key() -> None:
-    assert cache_key_for(MODEL_A, "hello") != cache_key_for(MODEL_A, "hello there")
+    assert key(MODEL_A, "hello") != key(MODEL_A, "hello there")
 
 
 def test_changing_the_model_changes_the_key() -> None:
@@ -31,33 +39,57 @@ def test_changing_the_model_changes_the_key() -> None:
     incompatible coordinate systems, and similarity between them is
     arithmetically valid and semantically meaningless.
     """
-    assert cache_key_for(MODEL_A, "hello") != cache_key_for(MODEL_B, "hello")
+    assert key(MODEL_A, "hello") != key(MODEL_B, "hello")
 
 
 def test_a_bare_revision_bump_is_enough_to_change_the_key() -> None:
-    assert cache_key_for("m@1", "text") != cache_key_for("m@2", "text")
+    assert key("m@1", "text") != key("m@2", "text")
+
+
+def test_the_same_text_in_the_two_roles_does_not_collide() -> None:
+    """The defect the role exists to prevent.
+
+    An asymmetric model encodes the same sentence differently as a query than as
+    a passage. Without the role in the key those two calls land on one entry,
+    and whichever ran second silently receives the first one's vector — no
+    error, just a query compared in the wrong half of the geometry. Exactly the
+    failure the model id in the key already guards against, one level down.
+    """
+    assert key(MODEL_A, "leases expire", PASSAGE) != key(MODEL_A, "leases expire", QUERY)
+
+
+def test_the_role_is_stable_for_the_same_text() -> None:
+    assert key(MODEL_A, "hello", QUERY) == key(MODEL_A, "hello", QUERY)
 
 
 def test_the_null_separator_prevents_a_boundary_collision() -> None:
     """Without a separator, ("ab", "c") and ("a", "bc") concatenate alike.
 
-    A null byte cannot appear in a model id, so no text can be crafted to slide
-    the boundary and claim another pairing's vector.
+    A null byte cannot appear in a model id or a role name, so no text can be
+    crafted to slide a boundary and claim another triple's vector.
     """
-    assert cache_key_for("ab", "c") != cache_key_for("a", "bc")
-    assert cache_key_for("model", "") != cache_key_for("mode", "l")
+    assert key("ab", "c") != key("a", "bc")
+    assert key("model", "") != key("mode", "l")
 
 
 def test_a_text_that_starts_with_a_null_cannot_forge_a_key() -> None:
     # The obvious attack on the separator: put the delimiter in the payload.
-    assert cache_key_for("model", "\0extra") != cache_key_for("model\0extra", "")
+    assert key("model", "\0extra") != key("model\0extra", "")
+    # Including one that tries to forge the role field.
+    assert key(MODEL_A, "x", QUERY) != key(MODEL_A, f"{QUERY.value}\0x", PASSAGE)
+
+
+def test_a_role_cannot_be_defaulted_at_the_call_site() -> None:
+    """`role` is keyword-only and has no default, so nobody can guess it."""
+    with pytest.raises(TypeError):
+        cache_key_for(MODEL_A, "hello")  # type: ignore[call-arg]
 
 
 def test_keys_are_lowercase_hex_of_the_expected_width() -> None:
-    key = cache_key_for(MODEL_A, "hello")
-    assert len(key) == 64
-    assert key == key.lower()
-    int(key, 16)
+    value = key(MODEL_A, "hello")
+    assert len(value) == 64
+    assert value == value.lower()
+    int(value, 16)
 
 
 # --------------------------------------------------------------------------
@@ -97,27 +129,50 @@ def test_batching_preserves_order_and_loses_nothing() -> None:
 
 def test_the_fake_is_deterministic() -> None:
     embedder = FakeEmbedder()
-    assert embedder.embed(["hello"]) == embedder.embed(["hello"])
+    assert embedder.embed_passage(["hello"]) == embedder.embed_passage(["hello"])
 
 
 def test_the_fake_gives_different_texts_different_vectors() -> None:
-    (first,), (second,) = FakeEmbedder().embed(["a"]), FakeEmbedder().embed(["b"])
+    (first,) = FakeEmbedder().embed_passage(["a"])
+    (second,) = FakeEmbedder().embed_passage(["b"])
     assert first != second
 
 
 def test_the_fake_returns_unit_vectors() -> None:
     # It claims `normalizes = True`, so it had better.
-    (vector,) = FakeEmbedder().embed(["hello"])
+    (vector,) = FakeEmbedder().embed_passage(["hello"])
     assert sum(value * value for value in vector) == pytest.approx(1.0)
 
 
 def test_the_fake_counts_what_it_was_asked_to_embed() -> None:
     embedder = FakeEmbedder()
-    embedder.embed(["a", "b"])
-    embedder.embed(["c"])
+    embedder.embed_passage(["a", "b"])
+    embedder.embed_passage(["c"])
     assert embedder.calls == [["a", "b"], ["c"]]
     assert embedder.texts_embedded == 3
 
 
 def test_the_fake_embeds_nothing_for_an_empty_list() -> None:
-    assert FakeEmbedder().embed([]) == []
+    assert FakeEmbedder().embed_passage([]) == []
+
+
+# --------------------------------------------------------------------------
+# Roles
+# --------------------------------------------------------------------------
+
+
+def test_a_symmetric_embedder_treats_the_two_roles_identically() -> None:
+    """The port's default, and what a model with no documented prefix wants."""
+    embedder = FakeEmbedder()
+    assert embedder.embed_query(["hello"]) == embedder.embed_passage(["hello"])
+
+
+def test_an_asymmetric_embedder_separates_them() -> None:
+    embedder = FakeEmbedder(query_prefix="Query: ")
+    assert embedder.embed_query(["hello"]) != embedder.embed_passage(["hello"])
+
+
+def test_the_prefix_is_what_makes_the_query_vector_differ() -> None:
+    # Not some other divergence: the query vector is the prefixed text's vector.
+    embedder = FakeEmbedder(query_prefix="Query: ")
+    assert embedder.embed_query(["hello"]) == embedder.embed_passage(["Query: hello"])

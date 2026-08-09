@@ -72,6 +72,54 @@ def test_settings_and_the_adapter_agree_on_the_model() -> None:
     assert Settings().embedding_model == DEFAULT_MODEL
 
 
+def test_every_way_of_building_the_embedder_agrees_on_the_query_prefix() -> None:
+    """The same drift, one level down, caught in the fast suite.
+
+    The prefix follows the model name through `__init__`, so the factory the CLI
+    uses and the bare constructor the tests use cannot disagree about it.
+    Deciding it in `build_embedder` instead would have reintroduced exactly the
+    defect above: a test measuring one thing and production doing another. No
+    model is loaded here — the prefix is settled before any weights are read.
+    """
+    from memoryos.adapters.embedding.sentence_transformers import (
+        DEFAULT_MODEL,
+        SentenceTransformerEmbedder,
+        build_embedder,
+        query_prefix_for,
+    )
+    from memoryos.config import Settings
+
+    expected = query_prefix_for(DEFAULT_MODEL)
+    assert build_embedder(Settings()).query_prefix == expected
+    assert SentenceTransformerEmbedder().query_prefix == expected
+
+
+def test_a_documented_prefix_is_not_applied_until_it_is_measured() -> None:
+    """Recorded and applied are separate, and this is the seam between them.
+
+    bge-v1.5's card documents an instruction and then says to pick by measuring.
+    We measured, on this corpus it loses, so it is documented and not applied.
+    `tests/slow/test_query_prefix.py` is what re-checks that verdict.
+    """
+    from memoryos.adapters.embedding.sentence_transformers import (
+        APPLY_QUERY_PREFIX,
+        DEFAULT_MODEL,
+        DOCUMENTED_QUERY_PREFIXES,
+        query_prefix_for,
+    )
+
+    assert DOCUMENTED_QUERY_PREFIXES[DEFAULT_MODEL], "the documented text was lost"
+    applied = DEFAULT_MODEL in APPLY_QUERY_PREFIX
+    assert bool(query_prefix_for(DEFAULT_MODEL)) is applied
+
+
+def test_a_model_with_no_documented_prefix_stays_symmetric() -> None:
+    # Guessing a prefix for a model that was not trained with one degrades it.
+    from memoryos.adapters.embedding.sentence_transformers import query_prefix_for
+
+    assert query_prefix_for("sentence-transformers/all-MiniLM-L6-v2") == ""
+
+
 def test_the_configured_pair_is_aligned() -> None:
     # The real pair the application starts with, not a fabricated one.
     from memoryos.adapters.embedding.sentence_transformers import build_embedder

@@ -11,6 +11,7 @@ from memoryos.application.backfill import enqueue_embedding, find_unembedded, ga
 from memoryos.application.embed import EmbedOutcome
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobType, PermanentError
+from memoryos.domain.values import EmbeddingRole
 from tests.integration.conftest import PARAGRAPH, Pipeline
 from tests.support.fakes import FakeEmbedder
 
@@ -126,7 +127,10 @@ async def test_identical_text_in_two_memories_is_embedded_once(
     duplicated = [text for text in chunk_contents if chunk_contents.count(text) > 1]
     assert duplicated, "fixture did not actually produce duplicate chunk text"
 
-    keys = {cache_key_for(pipeline.embedder.model_id, text) for text in chunk_contents}
+    keys = {
+        cache_key_for(pipeline.embedder.model_id, text, role=EmbeddingRole.PASSAGE)
+        for text in chunk_contents
+    }
     assert await count_of(pipeline.sessions, models.EmbeddingCacheEntry) == len(keys)
     assert len(keys) < len(chunk_contents)
 

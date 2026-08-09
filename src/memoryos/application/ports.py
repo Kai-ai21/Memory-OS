@@ -281,15 +281,30 @@ class Embedder(TokenCounter, Protocol):
         """True if output vectors are unit length."""
         ...
 
-    def embed(self, texts: Sequence[str]) -> list[list[float]]:
-        """Synchronous on purpose.
+    def embed_passage(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed text that is being stored and searched over.
 
-        This is CPU-bound matrix multiplication. Giving it an async signature
-        would invite someone to await it on the event loop, where it would
-        stall every other coroutine in the process — including health checks.
-        Callers push it onto a thread.
+        Synchronous on purpose. This is CPU-bound matrix multiplication; an
+        async signature would invite someone to await it on the event loop,
+        where it would stall every other coroutine in the process — including
+        health checks. Callers push it onto a thread.
+
+        There is deliberately no role-free `embed`. Several retrieval models are
+        asymmetric, and one that is used symmetrically does not fail — it just
+        retrieves worse than it should, which is the same shape of silent defect
+        as M1.6.1's window misalignment. Making the role a required part of the
+        call means nobody can embed without answering the question.
         """
         ...
+
+    def embed_query(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed text that is being searched *with*.
+
+        Defaults to `embed_passage`, which is correct for a symmetric model.
+        An asymmetric one overrides this; see the query prefix in the
+        sentence-transformers adapter.
+        """
+        return self.embed_passage(texts)
 
 
 @dataclass(frozen=True, slots=True)

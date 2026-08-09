@@ -14,8 +14,12 @@ from memoryos.adapters.db import models
 from memoryos.adapters.db.embedding_cache import cache_key_for
 from memoryos.application.ports import CacheEntry, Embedder, EmbeddingCache
 from memoryos.domain.jobs import PermanentError
+from memoryos.domain.values import EmbeddingRole
 
 logger = structlog.get_logger(__name__)
+
+# Everything this use case writes is stored text being indexed, never a query.
+_ROLE = EmbeddingRole.PASSAGE
 
 
 class EmbedOutcome(StrEnum):
@@ -112,7 +116,10 @@ class EmbedMemory:
 
     async def _embed_chunks(self, pending: list[tuple[UUID, str]]) -> EmbedReport:
         model_id = self._embedder.model_id
-        keys = [cache_key_for(model_id, text) for _, text in pending]
+        # Passages, always. These rows are what search compares *against*; a
+        # query vector written here would be in the wrong half of an asymmetric
+        # model's geometry and nothing downstream could tell.
+        keys = [cache_key_for(model_id, text, role=_ROLE) for _, text in pending]
 
         cached = await self._cache.get_many(list(dict.fromkeys(keys)))
 
@@ -129,10 +136,10 @@ class EmbedMemory:
         for batch in _batched(missing_texts, self._batch_size):
             # CPU-bound matrix multiplication. On the event loop it would stall
             # every other coroutine in the process, health checks included.
-            vectors = await asyncio.to_thread(self._embedder.embed, batch)
+            vectors = await asyncio.to_thread(self._embedder.embed_passage, batch)
             self._check_widths(vectors)
             for text, vector in zip(batch, vectors, strict=True):
-                fresh[cache_key_for(model_id, text)] = vector
+                fresh[cache_key_for(model_id, text, role=_ROLE)] = vector
 
         if fresh:
             await self._cache.put_many(
