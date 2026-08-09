@@ -1,0 +1,11 @@
+<!-- The highlight motif, which is the interface's one distinctive element: ruled
+     warm paper with an amber mark across it. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" fill="#f6f3ec"/>
+  <g stroke="#c8bda7" stroke-width="1.6" stroke-linecap="square">
+    <path d="M6 9h20"/>
+    <path d="M6 23h13"/>
+  </g>
+  <rect x="6" y="14" width="20" height="5" fill="#e8a63c"/>
+  <path d="M6 19.6h20" stroke="#c8791a" stroke-width="1.6" stroke-linecap="square"/>
+</svg>

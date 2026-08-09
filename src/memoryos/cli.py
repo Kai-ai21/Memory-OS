@@ -7,7 +7,7 @@ command gets written in it; the commands here do not need one.
 import argparse
 import asyncio
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import select
@@ -26,6 +26,7 @@ from memoryos.application.backfill import (
 )
 from memoryos.application.doctor import run_doctor
 from memoryos.application.evaluation import format_table, measure_recall
+from memoryos.application.judgements import export_golden_set
 from memoryos.application.ports import SearchFilters
 from memoryos.application.rechunk import enqueue_rechunk, find_stale
 from memoryos.application.replay import PartialShadowReplay, ReplayScope, ReplayStage
@@ -347,6 +348,43 @@ async def run_verify_replay(
         await container.dispose()
 
 
+async def run_export_golden_set(settings: Settings, *, output: Path) -> int:
+    """Write the labelled data to a file. M2.0's direct input.
+
+    Ids are re-resolved from natural keys as it writes, so an export taken after
+    a rebuild still points at rows that exist. An item that has left the corpus
+    exports with a null id and is counted as unresolved rather than dropped —
+    silently omitting it would make a shrinking corpus look like a shrinking
+    disagreement.
+    """
+    container = Container.build(settings)
+    try:
+        golden = await export_golden_set(
+            container.database.session_factory, now=datetime.now(UTC)
+        )
+        payload = golden.as_dict()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n")
+
+        totals = golden.totals
+        print(f"wrote {output}")
+        print(f"queries       {totals['queries']}")
+        print(f"judgements    {totals['judgements']}")
+        print(
+            f"  relevant    {totals['relevant']}\n"
+            f"  not relevant{totals['not_relevant']:>3}\n"
+            f"  missing     {totals['missing']}"
+        )
+        if totals["unresolved"]:
+            print(
+                f"unresolved    {totals['unresolved']} judged items are no longer "
+                f"in the corpus"
+            )
+    finally:
+        await container.dispose()
+    return 0
+
+
 async def run_sync(settings: Settings, *, name: str, full: bool) -> int:
     container = Container.build(settings)
     try:
@@ -510,6 +548,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="recompute every vector during the rebuild rather than reusing cached ones",
     )
 
+    golden = commands.add_parser(
+        "export-golden-set",
+        help="write the captured judgements to a file, ids re-resolved",
+    )
+    golden.add_argument(
+        "--output",
+        type=Path,
+        default=Path("var/golden-set.json"),
+        help="where to write the JSON",
+    )
+
     evaluate = commands.add_parser(
         "eval-recall", help="measure index recall against an exhaustive scan"
     )
@@ -602,6 +651,9 @@ def main(argv: list[str] | None = None) -> int:
                 settings, sample=args.sample, clear_cache=args.clear_cache
             )
         )
+
+    if args.command == "export-golden-set":
+        return asyncio.run(run_export_golden_set(settings, output=args.output))
 
     if args.command == "rechunk":
         return asyncio.run(

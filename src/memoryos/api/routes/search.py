@@ -41,6 +41,9 @@ class ChunkOut(BaseModel):
 class HitOut(BaseModel):
     memory_id: UUID
     external_key: str
+    # `(source_name, external_key)` is the durable identity of an item, and what a
+    # judgement is recorded against. Returned so the client never has to guess it.
+    source_name: str
     title: str | None
     kind: str
     occurred_at: datetime | None
@@ -67,7 +70,11 @@ class SearchOut(BaseModel):
 class SearchIn(BaseModel):
     q: str = Field(min_length=1)
     k: int = 10
-    source: str | None = None
+    # Several, because "compare these two connectors and nothing else" is a real
+    # question and `SearchFilters` has always taken a list of ids. Repeat the
+    # parameter to add sources: `?source=notes&source=code`. A single value still
+    # works, so existing callers are unaffected.
+    source: list[str] | None = None
     kind: MemoryKind | None = None
     after: datetime | None = None
     before: datetime | None = None
@@ -78,17 +85,27 @@ class SearchIn(BaseModel):
 
 async def build_filters(container: Container, body: SearchIn) -> SearchFilters:
     source_ids: list[UUID] | None = None
-    if body.source is not None:
+    if body.source:
+        names = [name for name in body.source if name]
         async with container.database.session_factory() as session:
-            source_ids = list(
-                (
-                    await session.execute(
-                        select(models.Source.id).where(models.Source.name == body.source)
+            found = {
+                row[1]: row[0]
+                for row in await session.execute(
+                    select(models.Source.id, models.Source.name).where(
+                        models.Source.name.in_(names)
                     )
-                ).scalars()
+                )
+            }
+        # Every name has to resolve. Quietly dropping an unknown one would return
+        # results from the sources that *did* match and look like a successful
+        # search of everything asked for.
+        missing = [name for name in names if name not in found]
+        if missing:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"no source named {', '.join(repr(name) for name in missing)}",
             )
-        if not source_ids:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no source named {body.source!r}")
+        source_ids = [found[name] for name in names]
 
     return SearchFilters(
         source_ids=source_ids,
@@ -107,6 +124,7 @@ def to_response(result: SearchResult) -> SearchOut:
             HitOut(
                 memory_id=hit.memory_id,
                 external_key=hit.external_key,
+                source_name=hit.source_name,
                 title=hit.title,
                 kind=hit.kind.value,
                 occurred_at=hit.occurred_at,  # type: ignore[arg-type]
@@ -146,7 +164,7 @@ async def search(
     container: ContainerDep,
     q: Annotated[str, Query(min_length=1)],
     k: int = 10,
-    source: str | None = None,
+    source: Annotated[list[str] | None, Query()] = None,
     kind: MemoryKind | None = None,
     after: datetime | None = None,
     before: datetime | None = None,

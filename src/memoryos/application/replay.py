@@ -8,8 +8,14 @@ it is not.
 Which tables are which is written down below as data rather than described in
 prose, because a table added to the wrong set breaks the guarantee silently —
 nothing errors, the rebuild simply loses a category of information. A test
-asserts every table in `Base.metadata` appears in exactly one of the two sets, so
-adding a table without classifying it fails the build.
+asserts every table in `Base.metadata` appears in exactly one of the three sets,
+so adding a table without classifying it fails the build.
+
+There are three sets and not two. M1.7 shipped with two and said in its own
+report that the binary hid a third category; `query_judgements` is what made that
+concrete. Human-authored data is neither rebuildable nor part of ingestion, and
+the rule it needs — never truncated, never written by a replay — is not the rule
+either other set carries.
 
 Determinism is the property that makes a rebuild worth anything. Nothing derived
 here reads the clock: `ingested_at` and `deleted_at` come from the causing
@@ -48,7 +54,7 @@ from memoryos.adapters.db.mappers import to_event
 from memoryos.adapters.db.repositories import SqlAlchemyMemoryRepository
 from memoryos.application.embed import EmbedMemory
 from memoryos.application.normalize import NormalizeMemory
-from memoryos.application.ports import ShadowWorkspace
+from memoryos.application.ports import BlobStore, ShadowWorkspace
 from memoryos.application.projection import memory_from_event, recorded_at_of
 from memoryos.domain.entities import IngestionEvent
 from memoryos.domain.ids import new_id
@@ -73,6 +79,22 @@ SOURCE_OF_TRUTH_TABLES: frozenset[str] = frozenset(
         "ingestion_events",
     }
 )
+
+# Written by a person, reconstructible by nobody.
+#
+# M1.7 shipped with two sets and noted in its report that the binary was one set
+# short — `jobs` is classified derived and truncating it works, but it is
+# *discardable*, not reconstructible, which is a different property that happened
+# to be safe. `query_judgements` is where that gap stops being theoretical. It is
+# not derived, because no amount of replaying produces somebody's opinion about a
+# search result. It is not source-of-truth-for-ingestion either: it describes the
+# corpus rather than feeding it, and a replay does not read it.
+#
+# The operational rule is stronger than for either other set: replay must not
+# truncate it *and* must not write it. It is the input to M2.0's evaluation
+# harness, so losing it means losing the labelled data the next milestone is
+# measured against.
+USER_AUTHORED_TABLES: frozenset[str] = frozenset({"query_judgements"})
 
 # Reconstructible from the tables above plus the blob store. Ordered
 # child-before-parent, so truncating or dropping them in sequence never fights a
@@ -266,11 +288,16 @@ class ReplayCorpus:
         make_normalize: MakeNormalize,
         make_embed: MakeEmbed,
         make_shadow: Callable[[], ShadowWorkspace] | None = None,
+        blobs: BlobStore | None = None,
     ) -> None:
         self._sessions = session_factory
         self._make_normalize = make_normalize
         self._make_embed = make_embed
         self._make_shadow = make_shadow
+        # Only for the pre-flight check; the rebuild itself reads blobs through
+        # `NormalizeMemory`. Optional so a caller that has not wired one still
+        # works — it simply skips the check rather than failing to construct.
+        self._blobs = blobs
 
     async def __call__(
         self,
@@ -391,6 +418,11 @@ class ReplayCorpus:
         report = ReplayReport()
 
         source_id = await self._resolve_source(scope.source_name)
+
+        if scope.rebuilds_memories:
+            # Before anything is destroyed. See `_preflight_blobs`.
+            await self._preflight_blobs(scope, source_id)
+
         await self._clear(sessions, scope, source_id, clear_cache=clear_cache)
 
         if scope.rebuilds_memories:
@@ -406,6 +438,49 @@ class ReplayCorpus:
 
         await self._count_chunks(sessions, report)
         return report
+
+    async def _preflight_blobs(self, scope: ReplayScope, source_id: UUID | None) -> None:
+        """Refuse to start if the bytes the log references are not reachable.
+
+        The rebuild already fails loudly on a missing blob — but it did so *after*
+        truncating, which meant discovering an unreachable blob store cost you the
+        corpus. Found the hard way: running `replay` from a subdirectory resolved
+        the default relative `blob_root` to an empty path, and the run truncated
+        119 memories before failing on the first document.
+
+        The corpus was rebuildable afterwards, from the same log, once the command
+        was run from the right place — which is the system working as designed.
+        But "destroys your corpus, then tells you why" is not the failure mode a
+        destructive operation should have when the check costs one stat per
+        distinct artifact.
+
+        Only for scopes that rebuild memories; the downstream stages read no blobs.
+        """
+        if self._blobs is None:
+            return
+
+        seen: set[str] = set()
+        missing: list[tuple[str, str]] = []
+        async for event in self._stream_events(scope, source_id):
+            if event.content_hash is None or event.content_hash.value in seen:
+                continue
+            seen.add(event.content_hash.value)
+            if not await self._blobs.exists(event.content_hash):
+                missing.append((event.content_hash.value, event.external_key))
+
+        if missing:
+            # The whole digest, not a prefix: the operator's next move is to look
+            # for that file in the blob store, and a truncated hash cannot be grepped.
+            shown = "; ".join(f"{key!r} ({digest})" for digest, key in missing[:5])
+            more = f" and {len(missing) - 5} more" if len(missing) > 5 else ""
+            raise MissingBlob(
+                f"{len(missing)} of {len(seen)} artifacts are not in the blob "
+                f"store, so the corpus cannot be rebuilt: {shown}{more}. Nothing "
+                f"has been changed. Check that MEMOS_BLOB_ROOT points at the right "
+                f"store — a relative default resolves against the current "
+                f"directory."
+            )
+        logger.info("replay.blobs_verified", artifacts=len(seen))
 
     async def _resolve_source(self, name: str | None) -> UUID | None:
         if name is None:

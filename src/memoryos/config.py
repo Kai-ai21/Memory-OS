@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     hnsw_ef_search: int = 100
     log_level: str = "INFO"
     log_json: bool = False
+    # Browser origins allowed to call this API. Empty by default, which means no
+    # CORS middleware is installed at all — a browser cannot reach the API from a
+    # page unless somebody deliberately says which page.
+    #
+    # A list rather than a string, and never `["*"]`: a wildcard on an API that
+    # reads a private corpus means any page the operator visits can search it.
+    # `create_app` refuses a wildcard outright rather than trusting this comment.
+    cors_origins: list[str] = []
 
 
 @lru_cache

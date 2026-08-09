@@ -1,4 +1,5 @@
-.PHONY: up down install test test-unit test-slow lint fmt typecheck check run worker phase1-check
+.PHONY: up down install test test-unit test-slow lint fmt typecheck check run worker \
+        phase1-check types web web-install test-web dev
 
 up:        ; docker compose up -d
 down:      ; docker compose down
@@ -12,6 +13,37 @@ typecheck: ; mypy
 check: lint typecheck test
 run:       ; uvicorn "memoryos.api.app:create_app" --factory --reload
 worker:    ; memoryos worker
+
+# --------------------------------------------------------------------------
+# Web
+# --------------------------------------------------------------------------
+
+web-install: ; cd web && npm ci
+
+# Regenerate the API types from the routes themselves. The schema is dumped from
+# the app object rather than fetched from a URL, so this needs no server and no
+# database — which is what lets CI run the same command and diff the result.
+#
+# Hand-written API types drift silently, and this project has twice paid for "two
+# places that must agree with nothing checking".
+types:
+	uv run python scripts/dump_openapi.py > web/src/api/openapi.json
+	cd web && npx openapi-typescript src/api/openapi.json -o src/api/schema.d.ts
+
+web:      ; cd web && npm run dev
+test-web: ; cd web && npm run test -- --run
+
+# API and UI together, for actually using the thing. The UI talks to the API
+# across an origin, so MEMOS_CORS_ORIGINS has to name it; that is the whole
+# reason the setting exists.
+#
+# The trap kills the API when the foreground dev server exits, so Ctrl-C does not
+# leave uvicorn holding port 8000.
+dev:
+	@MEMOS_CORS_ORIGINS='["http://localhost:5173"]' \
+	  uv run uvicorn "memoryos.api.app:create_app" --factory --port 8000 & \
+	  API=$$!; trap "kill $$API 2>/dev/null" EXIT INT TERM; \
+	  cd web && npm run dev
 
 # Everything Phase 1 built, in one command, from an empty volume.
 #

@@ -1,0 +1,1823 @@
+{
+  "components": {
+    "schemas": {
+      "CreateSource": {
+        "properties": {
+          "exclude": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclude"
+          },
+          "follow_symlinks": {
+            "default": false,
+            "title": "Follow Symlinks",
+            "type": "boolean"
+          },
+          "include": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Include"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SourceKind",
+            "default": "filesystem"
+          },
+          "max_file_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max File Bytes"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "root": {
+            "title": "Root",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "root"
+        ],
+        "title": "CreateSource",
+        "type": "object"
+      },
+      "DoctorOut": {
+        "properties": {
+          "chunker_version": {
+            "title": "Chunker Version",
+            "type": "string"
+          },
+          "embedding_model": {
+            "title": "Embedding Model",
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/FindingOut"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "healthy": {
+            "title": "Healthy",
+            "type": "boolean"
+          },
+          "model_window": {
+            "title": "Model Window",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "healthy",
+          "findings",
+          "embedding_model",
+          "chunker_version",
+          "model_window"
+        ],
+        "title": "DoctorOut",
+        "type": "object"
+      },
+      "FindingOut": {
+        "properties": {
+          "check": {
+            "title": "Check",
+            "type": "string"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "examples": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Examples",
+            "type": "array"
+          },
+          "healthy": {
+            "title": "Healthy",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "check",
+          "count",
+          "detail",
+          "examples",
+          "healthy"
+        ],
+        "title": "FindingOut",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HitOut": {
+        "properties": {
+          "external_key": {
+            "title": "External Key",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "matched_chunks": {
+            "items": {
+              "$ref": "#/components/schemas/memoryos__api__routes__search__ChunkOut"
+            },
+            "title": "Matched Chunks",
+            "type": "array"
+          },
+          "memory_id": {
+            "format": "uuid",
+            "title": "Memory Id",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "source_name": {
+            "title": "Source Name",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "memory_id",
+          "external_key",
+          "source_name",
+          "title",
+          "kind",
+          "occurred_at",
+          "score",
+          "matched_chunks"
+        ],
+        "title": "HitOut",
+        "type": "object"
+      },
+      "JudgementIn": {
+        "properties": {
+          "chunk_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Id"
+          },
+          "external_key": {
+            "minLength": 1,
+            "title": "External Key",
+            "type": "string"
+          },
+          "filters": {
+            "additionalProperties": true,
+            "title": "Filters",
+            "type": "object"
+          },
+          "memory_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Id"
+          },
+          "query_text": {
+            "minLength": 1,
+            "title": "Query Text",
+            "type": "string"
+          },
+          "rank_at_judgement": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank At Judgement"
+          },
+          "score_at_judgement": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score At Judgement"
+          },
+          "source_name": {
+            "minLength": 1,
+            "title": "Source Name",
+            "type": "string"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/Verdict"
+          }
+        },
+        "required": [
+          "query_text",
+          "source_name",
+          "external_key",
+          "verdict"
+        ],
+        "title": "JudgementIn",
+        "type": "object"
+      },
+      "JudgementOut": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JudgementOut",
+        "type": "object"
+      },
+      "Liveness": {
+        "properties": {
+          "status": {
+            "const": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "Liveness",
+        "type": "object"
+      },
+      "MemoryDetailOut": {
+        "properties": {
+          "chunks": {
+            "items": {
+              "$ref": "#/components/schemas/memoryos__api__routes__memories__ChunkOut"
+            },
+            "title": "Chunks",
+            "type": "array"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "external_key": {
+            "title": "External Key",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "ingested_at": {
+            "format": "date-time",
+            "title": "Ingested At",
+            "type": "string"
+          },
+          "is_current": {
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "normalized_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Hash"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "occurred_at_source": {
+            "title": "Occurred At Source",
+            "type": "string"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          },
+          "source_name": {
+            "title": "Source Name",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/VersionOut"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "source_id",
+          "source_name",
+          "external_key",
+          "version",
+          "is_current",
+          "kind",
+          "title",
+          "content",
+          "content_hash",
+          "normalized_hash",
+          "occurred_at",
+          "occurred_at_source",
+          "ingested_at",
+          "deleted_at",
+          "chunks",
+          "versions"
+        ],
+        "title": "MemoryDetailOut",
+        "type": "object"
+      },
+      "MemoryKind": {
+        "enum": [
+          "note",
+          "document",
+          "code",
+          "email",
+          "commit",
+          "meeting",
+          "bookmark",
+          "other"
+        ],
+        "title": "MemoryKind",
+        "type": "string"
+      },
+      "MemoryOut": {
+        "properties": {
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "external_key": {
+            "title": "External Key",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "ingested_at": {
+            "format": "date-time",
+            "title": "Ingested At",
+            "type": "string"
+          },
+          "is_current": {
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "occurred_at_source": {
+            "title": "Occurred At Source",
+            "type": "string"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "source_id",
+          "external_key",
+          "version",
+          "is_current",
+          "kind",
+          "content_hash",
+          "title",
+          "occurred_at",
+          "occurred_at_source",
+          "ingested_at",
+          "deleted_at"
+        ],
+        "title": "MemoryOut",
+        "type": "object"
+      },
+      "QuerySummaryOut": {
+        "properties": {
+          "last_judged_at": {
+            "format": "date-time",
+            "title": "Last Judged At",
+            "type": "string"
+          },
+          "missing": {
+            "title": "Missing",
+            "type": "integer"
+          },
+          "not_relevant": {
+            "title": "Not Relevant",
+            "type": "integer"
+          },
+          "query_text": {
+            "title": "Query Text",
+            "type": "string"
+          },
+          "relevant": {
+            "title": "Relevant",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query_text",
+          "relevant",
+          "not_relevant",
+          "missing",
+          "total",
+          "last_judged_at"
+        ],
+        "title": "QuerySummaryOut",
+        "type": "object"
+      },
+      "Readiness": {
+        "properties": {
+          "database": {
+            "title": "Database",
+            "type": "boolean"
+          },
+          "pgvector_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pgvector Version"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "degraded"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "database",
+          "pgvector_version"
+        ],
+        "title": "Readiness",
+        "type": "object"
+      },
+      "SearchIn": {
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before"
+          },
+          "ef_search": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ef Search"
+          },
+          "exact": {
+            "default": false,
+            "title": "Exact",
+            "type": "boolean"
+          },
+          "include_deleted": {
+            "default": false,
+            "title": "Include Deleted",
+            "type": "boolean"
+          },
+          "k": {
+            "default": 10,
+            "title": "K",
+            "type": "integer"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MemoryKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "q": {
+            "minLength": 1,
+            "title": "Q",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "required": [
+          "q"
+        ],
+        "title": "SearchIn",
+        "type": "object"
+      },
+      "SearchOut": {
+        "properties": {
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/HitOut"
+            },
+            "title": "Hits",
+            "type": "array"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "timing": {
+            "$ref": "#/components/schemas/TimingOut"
+          }
+        },
+        "required": [
+          "query",
+          "hits",
+          "timing"
+        ],
+        "title": "SearchOut",
+        "type": "object"
+      },
+      "SourceKind": {
+        "enum": [
+          "filesystem"
+        ],
+        "title": "SourceKind",
+        "type": "string"
+      },
+      "SourceOut": {
+        "properties": {
+          "chunks": {
+            "default": 0,
+            "title": "Chunks",
+            "type": "integer"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_full_sync_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Full Sync At"
+          },
+          "last_sync_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sync At"
+          },
+          "memories": {
+            "default": 0,
+            "title": "Memories",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "config",
+          "last_sync_at",
+          "last_full_sync_at",
+          "created_at"
+        ],
+        "title": "SourceOut",
+        "type": "object"
+      },
+      "StatsOut": {
+        "properties": {
+          "cache_entries": {
+            "title": "Cache Entries",
+            "type": "integer"
+          },
+          "chunker_version": {
+            "title": "Chunker Version",
+            "type": "string"
+          },
+          "chunks": {
+            "title": "Chunks",
+            "type": "integer"
+          },
+          "coverage": {
+            "title": "Coverage",
+            "type": "number"
+          },
+          "current_memories": {
+            "title": "Current Memories",
+            "type": "integer"
+          },
+          "embedded_chunks": {
+            "title": "Embedded Chunks",
+            "type": "integer"
+          },
+          "embedding_model": {
+            "title": "Embedding Model",
+            "type": "string"
+          },
+          "memories": {
+            "title": "Memories",
+            "type": "integer"
+          },
+          "model_window": {
+            "title": "Model Window",
+            "type": "integer"
+          },
+          "models": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Models",
+            "type": "object"
+          }
+        },
+        "required": [
+          "memories",
+          "current_memories",
+          "chunks",
+          "embedded_chunks",
+          "cache_entries",
+          "coverage",
+          "models",
+          "embedding_model",
+          "chunker_version",
+          "model_window"
+        ],
+        "title": "StatsOut",
+        "type": "object"
+      },
+      "SyncAccepted": {
+        "properties": {
+          "full": {
+            "title": "Full",
+            "type": "boolean"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "source_id",
+          "full"
+        ],
+        "title": "SyncAccepted",
+        "type": "object"
+      },
+      "TimingOut": {
+        "properties": {
+          "embed_ms": {
+            "title": "Embed Ms",
+            "type": "integer"
+          },
+          "search_ms": {
+            "title": "Search Ms",
+            "type": "integer"
+          },
+          "total_ms": {
+            "title": "Total Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "embed_ms",
+          "search_ms",
+          "total_ms"
+        ],
+        "title": "TimingOut",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "Verdict": {
+        "description": "What a human said about one result for one query.\n\n`MISSING` is the one that carries the most information and the only one that\ncannot be inferred from the ranking: it names a memory that *should* have\nbeen returned and was not. Precision can be measured from the first two;\nrecall cannot be measured from anything else.",
+        "enum": [
+          "relevant",
+          "not_relevant",
+          "missing"
+        ],
+        "title": "Verdict",
+        "type": "string"
+      },
+      "VersionOut": {
+        "properties": {
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "ingested_at": {
+            "format": "date-time",
+            "title": "Ingested At",
+            "type": "string"
+          },
+          "is_current": {
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "normalized_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Hash"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "is_current",
+          "content_hash",
+          "normalized_hash",
+          "ingested_at",
+          "deleted_at"
+        ],
+        "title": "VersionOut",
+        "type": "object"
+      },
+      "memoryos__api__routes__memories__ChunkOut": {
+        "description": "One chunk, with the provenance that makes it auditable.\n\n`char_start`/`char_end` index into the parent memory's `content`, which is\nwhat lets the UI draw boundaries on the document rather than concatenating\nchunk text and hoping it lines up.",
+        "properties": {
+          "char_end": {
+            "title": "Char End",
+            "type": "integer"
+          },
+          "char_start": {
+            "title": "Char Start",
+            "type": "integer"
+          },
+          "chunker_version": {
+            "title": "Chunker Version",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "embedded": {
+            "title": "Embedded",
+            "type": "boolean"
+          },
+          "embedded_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedded At"
+          },
+          "embedding_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Model"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "token_count": {
+            "title": "Token Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "ordinal",
+          "content",
+          "token_count",
+          "char_start",
+          "char_end",
+          "chunker_version",
+          "content_hash",
+          "embedding_model",
+          "embedded_at",
+          "embedded"
+        ],
+        "title": "ChunkOut",
+        "type": "object"
+      },
+      "memoryos__api__routes__search__ChunkOut": {
+        "properties": {
+          "char_end": {
+            "title": "Char End",
+            "type": "integer"
+          },
+          "char_start": {
+            "title": "Char Start",
+            "type": "integer"
+          },
+          "chunk_id": {
+            "format": "uuid",
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chunk_id",
+          "ordinal",
+          "text",
+          "score",
+          "char_start",
+          "char_end"
+        ],
+        "title": "ChunkOut",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Memory Intelligence OS",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/doctor": {
+      "get": {
+        "description": "The standing checks, rendered instead of read from a terminal.\n\nDeliberately the same `run_doctor` the CLI calls. It tokenizes candidate\nchunks with the real tokenizer, so this is not a free request \u2014 it is a\ndiagnostic somebody asked for, not something to poll.",
+        "operationId": "get_doctor_doctor_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoctorOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Doctor",
+        "tags": [
+          "stats"
+        ]
+      }
+    },
+    "/health/live": {
+      "get": {
+        "operationId": "live_health_live_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Liveness"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Live",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "ready_health_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ready",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/judgements": {
+      "get": {
+        "description": "One row per judged query, so the golden set can be watched as it grows.",
+        "operationId": "list_judgements_judgements_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/QuerySummaryOut"
+                  },
+                  "title": "Response List Judgements Judgements Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Judgements",
+        "tags": [
+          "judgements"
+        ]
+      },
+      "post": {
+        "description": "Record a verdict, replacing any previous one for the same query and item.",
+        "operationId": "create_judgement_judgements_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JudgementIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgementOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Judgement",
+        "tags": [
+          "judgements"
+        ]
+      }
+    },
+    "/judgements/export": {
+      "get": {
+        "description": "The golden set as JSON. M2.0's direct input.\n\nUntyped `dict` on purpose: this is a data interchange format whose consumer\nis an evaluation harness that does not exist yet, and pinning it into a\nresponse model now would be inventing a contract for it.",
+        "operationId": "export_judgements_export_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Export Judgements Export Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Export",
+        "tags": [
+          "judgements"
+        ]
+      }
+    },
+    "/memories": {
+      "get": {
+        "operationId": "list_memories_memories_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "source_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MemoryOut"
+                  },
+                  "title": "Response List Memories Memories Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Memories",
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/memories/{memory_id}": {
+      "get": {
+        "operationId": "get_memory_memories__memory_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Memory",
+        "tags": [
+          "memories"
+        ]
+      }
+    },
+    "/search": {
+      "get": {
+        "operationId": "search_search_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "k",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "title": "K",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MemoryKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_deleted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Deleted",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ef_search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ef Search"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exact",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exact",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search",
+        "tags": [
+          "search"
+        ]
+      },
+      "post": {
+        "description": "Same thing, for queries too long to sit comfortably in a URL.",
+        "operationId": "search_post_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Post",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/sources": {
+      "get": {
+        "description": "Every source, with how much of the corpus came from it.\n\nOuter-joined and grouped rather than a count per source in a loop: the list\nis short today, but a query per row is the shape that stops being fine\nwithout anybody noticing.",
+        "operationId": "list_sources_sources_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SourceOut"
+                  },
+                  "title": "Response List Sources Sources Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Sources",
+        "tags": [
+          "sources"
+        ]
+      },
+      "post": {
+        "operationId": "create_source_sources_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Source",
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/sources/{source_id}/sync": {
+      "post": {
+        "description": "Enqueue a sync. Never runs it inline.\n\nA sync of a large directory takes minutes. Running it in the request would\nblow the HTTP timeout, and whatever it managed to do would have no retry,\nno progress, and no way to resume. 202 with a job id is the honest answer.",
+        "operationId": "trigger_sync_sources__source_id__sync_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "full",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Full",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Trigger Sync",
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/stats": {
+      "get": {
+        "operationId": "get_stats_stats_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Stats",
+        "tags": [
+          "stats"
+        ]
+      }
+    }
+  }
+}

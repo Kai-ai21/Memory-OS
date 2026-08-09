@@ -6,7 +6,7 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 
 ## Status
 
-**Phase 1 complete.** Eight milestones, ending with M1.7 — replay.
+**Phase 1 complete**, plus M2.0a — the search interface.
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -29,6 +29,7 @@ Semantic search only — BM25, fusion, reranking, and synthesis are Phase 2.
 | **M1.6**  | HNSW index, `VectorStore` port, `/search`, and recall measurement.             |
 | **M1.6.1**| Hotfix: chunk sizes derived from the model's real window, counted properly.    |
 | **M1.7**  | Replay. Rebuild every derived table from the log, and verify it byte for byte. |
+| **M2.0a** | Search UI, judgement capture, and the golden set M2.0 is measured against.     |
 
 The single most valuable thing Phase 1 produced is not a feature. It is that M1.6.1 exists: a
 silent 89% truncation rate that every test passed, found only because somebody measured. Most of
@@ -285,6 +286,69 @@ compares the index against an exhaustive scan across several `ef_search` values.
 rises 2.2ms → 6.3ms. Below roughly 2,000 chunks Postgres correctly ignores the index
 altogether and scans, so the numbers there say nothing about HNSW.
 
+## Search interface
+
+```bash
+make dev     # API on :8000 with CORS for the UI, and Vite on :5173
+make web     # just the UI
+make types   # regenerate web/src/api/schema.d.ts from the routes
+make test-web
+```
+
+A local web UI for searching the corpus, reading results with the matched span
+highlighted, and capturing the judgements that seed M2.0's golden query set. Vite +
+React + TypeScript + Tailwind, TanStack Query for server state, no component library.
+Every piece of state in it is server state; the client state is a search box and some
+filters, and those live in the URL so a search is linkable and the back button works.
+
+**The API types are generated, not written.** `make types` dumps the OpenAPI schema
+from the app object — no server, no database — and regenerates
+`web/src/api/schema.d.ts`. CI fails if the committed types differ. This project has
+twice paid for two places that must agree with nothing checking.
+
+**CORS is off unless you name an origin.** `MEMOS_CORS_ORIGINS` defaults to empty, and
+a wildcard raises at startup: this API answers questions about a private corpus, so
+`*` means any page you visit can read it.
+
+### The highlight
+
+The most important element in the interface, and the one that required working out
+what the stored offsets actually mean. `char_start`/`char_end` tile the document
+contiguously — chunk N ends exactly where N+1 begins — but `chunk.content` is *longer*
+than that span, because the chunker prepends an overlap prefix borrowed from the
+previous chunk. Nothing records how long the prefix is. It is recoverable exactly:
+
+```
+prefix = len(content) - (char_end - char_start)
+content == document[char_start - prefix : char_end]
+```
+
+verified for 934 of 934 chunks. So the chunk's own text is the *tail* of what is
+stored, the borrowed context is the head, and **28.1% of all stored chunk text in this
+corpus is duplicated from a neighbour**. The UI marks the tail and mutes the head, and
+needs no extra request to do it.
+
+### Judgements
+
+Three verdicts per result — relevant, not relevant, missing — one click each. `missing`
+is separate because by definition its subject is not on screen, and it carries no rank.
+
+They land in `query_judgements`, the first table here that no machine can regenerate,
+classified `USER_AUTHORED`: never truncated, never written by a replay. Identity is
+`(source_name, external_key)` rather than a memory id, and that is forced rather than
+stylistic — a replay recreates every memory with a new UUID, and `TRUNCATE ... CASCADE`
+empties any table referencing `memories`, so a foreign key there would mean every
+rebuild destroyed the golden set. `memory_id`, `rank_at_judgement` and
+`score_at_judgement` are snapshots of what the system said when a human disagreed with
+it; the export re-resolves the natural key against the current corpus.
+
+```bash
+memoryos export-golden-set --output var/golden-set.json
+```
+
+Demonstrated end to end: 56 judgements survived the corpus being destroyed and rebuilt
+from the log with entirely new ids, and re-resolved with zero unresolved.
+
 ## Replay
 
 ```bash
@@ -456,9 +520,16 @@ hash.
 | `/health/live`             | Liveness. Never touches external dependencies.              |
 | `/health/ready`            | Readiness. Reports database connectivity and pgvector.      |
 | `POST /sources`            | Register a source.                                          |
-| `GET /sources`             | List registered sources.                                    |
+| `GET /sources`             | Registered sources, with their memory and chunk counts.     |
 | `POST /sources/{id}/sync`  | Enqueue a sync. Returns `202` with the job id.              |
 | `GET /memories`            | Current memories, filterable by `source_id`, paginated.     |
+| `GET /memories/{id}`       | One memory: content, chunks in ordinal order, versions.     |
+| `GET /search`              | Semantic search. `source` repeats for several connectors.   |
+| `GET /stats`               | What `memoryos stats` prints, from the same function.       |
+| `GET /doctor`              | What `memoryos doctor` prints. On demand — it tokenizes.    |
+| `POST /judgements`         | Record a verdict. Re-judging replaces.                      |
+| `GET /judgements`          | One row per judged query, with verdict counts.              |
+| `GET /judgements/export`   | The golden set, ids re-resolved. M2.0's input.              |
 
 `POST /sources/{id}/sync` enqueues and never runs the sync inline. A large directory takes
 minutes to walk; doing it in the request would blow the HTTP timeout, and whatever it managed

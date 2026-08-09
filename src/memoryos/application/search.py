@@ -26,6 +26,12 @@ CHUNK_FANOUT = 5
 class MemoryHit:
     memory_id: UUID
     external_key: str
+    # Which connector this came from. Carried because `(source_name,
+    # external_key)` is the durable identity of an item — the pair a judgement is
+    # recorded against, and the pair `verify-replay` compares on. A caller that
+    # had to infer it would be guessing, and `external_key` alone is not unique
+    # across sources.
+    source_name: str
     title: str | None
     kind: MemoryKind
     occurred_at: object
@@ -127,11 +133,12 @@ class SearchMemories:
             if row is None:
                 # Deleted between the index read and this lookup.
                 continue
-            external_key, title, kind, occurred_at = row
+            external_key, title, kind, occurred_at, source_name = row
             hits.append(
                 MemoryHit(
                     memory_id=memory_id,
                     external_key=external_key,
+                    source_name=source_name,
                     title=title,
                     kind=MemoryKind(kind),
                     occurred_at=occurred_at,
@@ -151,18 +158,23 @@ class SearchMemories:
 
     async def _memory_metadata(
         self, memory_ids: list[UUID]
-    ) -> dict[UUID, tuple[str, str | None, str, object]]:
-        stmt = select(
-            models.Memory.id,
-            models.Memory.external_key,
-            models.Memory.title,
-            models.Memory.kind,
-            models.Memory.occurred_at,
-        ).where(models.Memory.id.in_(memory_ids))
+    ) -> dict[UUID, tuple[str, str | None, str, object, str]]:
+        stmt = (
+            select(
+                models.Memory.id,
+                models.Memory.external_key,
+                models.Memory.title,
+                models.Memory.kind,
+                models.Memory.occurred_at,
+                models.Source.name,
+            )
+            .join(models.Source, models.Source.id == models.Memory.source_id)
+            .where(models.Memory.id.in_(memory_ids))
+        )
 
         async with self._sessions() as session:
             rows = await session.execute(stmt)
-            return {row[0]: (row[1], row[2], row[3], row[4]) for row in rows}
+            return {row[0]: (row[1], row[2], row[3], row[4], row[5]) for row in rows}
 
 
 def _ranking(hit: MemoryHit) -> tuple[float, float]:

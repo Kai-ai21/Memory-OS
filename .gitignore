@@ -17,3 +17,7 @@ htmlcov/
 .DS_Store
 .claude/settings.local.json
 var/
+
+# Web
+web/node_modules/
+web/dist/

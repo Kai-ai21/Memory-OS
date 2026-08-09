@@ -1,0 +1,212 @@
+/**
+ * One memory in full, with chunk boundaries drawn on the real content.
+ *
+ * This is the diagnostic view, and the boundaries are the reason it exists. A
+ * chunker splitting mid-thought is invisible in every test — the row counts are
+ * right, the offsets are right, the tokens are under the window — and obvious the
+ * moment you see where the rules fall in a paragraph.
+ *
+ * The content is rendered once, in document order, with a rule at each boundary,
+ * rather than as a list of chunk texts. Concatenating chunk texts would hide
+ * exactly what is being inspected, because the overlap prefix means neighbouring
+ * chunks share text and the seams would not be where the rules are.
+ */
+
+import { useMemo } from "react";
+import { Link, useParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+
+import { api, type MemoryChunk } from "../../api/client";
+import { Failure, Loading, Meta, SectionHeading, Tag } from "../../components/primitives";
+import { count, isCode, range, shortHash, timestamp } from "../../lib/format";
+
+export function MemoryPage() {
+  const { id = "" } = useParams();
+  const memory = useQuery({ queryKey: ["memory", id], queryFn: () => api.memory(id) });
+
+  if (memory.isLoading) return <Loading rows={6} />;
+  if (memory.isError) return <Failure error={memory.error} />;
+  if (!memory.data) return null;
+
+  const detail = memory.data;
+  const code = isCode(detail.kind);
+
+  return (
+    <div className="flex flex-col gap-6">
+      <header className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-baseline gap-3">
+          <h1 className="font-mono text-base text-ink">{detail.external_key}</h1>
+          <Tag>{detail.kind}</Tag>
+          {detail.deleted_at ? <Tag>deleted</Tag> : null}
+          {!detail.is_current ? <Tag>superseded</Tag> : null}
+        </div>
+        {detail.title ? <p className="prose-content text-muted">{detail.title}</p> : null}
+        <div className="flex flex-wrap gap-x-5 gap-y-1">
+          <Meta label="source">{detail.source_name}</Meta>
+          <Meta label="version">{detail.version}</Meta>
+          <Meta label="occurred">{timestamp(detail.occurred_at)}</Meta>
+          <Meta label="ingested">{timestamp(detail.ingested_at)}</Meta>
+          <Meta label="provenance">{detail.occurred_at_source}</Meta>
+        </div>
+        <div className="flex flex-wrap gap-x-5 gap-y-1">
+          {/* Both hashes. The pair is the whole story of M1.4: different bytes
+              with identical normalized text is a new artifact and no re-chunking. */}
+          <Meta label="content hash">
+            <span title={detail.content_hash}>{shortHash(detail.content_hash)}</span>
+          </Meta>
+          <Meta label="normalized hash">
+            <span title={detail.normalized_hash ?? ""}>{shortHash(detail.normalized_hash)}</span>
+          </Meta>
+          <Meta label="chunks">{count(detail.chunks.length)}</Meta>
+        </div>
+      </header>
+
+      <section className="flex flex-col gap-2">
+        <SectionHeading right={`${detail.chunks.length} boundaries`}>
+          content with chunk boundaries
+        </SectionHeading>
+        <BoundedContent content={detail.content} chunks={detail.chunks} code={code} />
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <SectionHeading>chunks</SectionHeading>
+        <table className="w-full border-collapse text-left">
+          <thead>
+            <tr className="border-b border-rule">
+              {["#", "range", "tokens", "chunker", "model", "embedded", "definition"].map(
+                (heading) => (
+                  <th key={heading} className="meta-label py-1 pr-4 font-normal">
+                    {heading}
+                  </th>
+                ),
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {detail.chunks.map((chunk) => (
+              <tr key={chunk.id} className="border-b border-rule/60">
+                <td className="meta py-1 pr-4 text-ink">{chunk.ordinal}</td>
+                <td className="meta py-1 pr-4">{range(chunk.char_start, chunk.char_end)}</td>
+                <td className="meta py-1 pr-4">{chunk.token_count}</td>
+                <td className="meta py-1 pr-4 text-faint">{chunk.chunker_version}</td>
+                <td className="meta py-1 pr-4 text-faint">{chunk.embedding_model ?? "—"}</td>
+                <td className="meta py-1 pr-4">
+                  {chunk.embedded ? timestamp(chunk.embedded_at) : "not embedded"}
+                </td>
+                <td className="meta py-1 pr-4 text-amber">
+                  {typeof chunk.metadata?.definition === "string"
+                    ? chunk.metadata.definition
+                    : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <SectionHeading>version history</SectionHeading>
+        <ul>
+          {detail.versions.map((version) => (
+            <li
+              key={version.id}
+              className="flex flex-wrap items-baseline gap-x-4 border-b border-rule/60 py-1"
+            >
+              <span className="meta w-8 text-ink">v{version.version}</span>
+              {version.is_current ? (
+                <span className="meta text-amber">current</span>
+              ) : (
+                <span className="meta text-faint">superseded</span>
+              )}
+              {version.deleted_at ? <span className="meta text-deny">tombstoned</span> : null}
+              <span className="meta text-faint" title={version.content_hash}>
+                {shortHash(version.content_hash)}
+              </span>
+              <span className="meta text-faint">{timestamp(version.ingested_at)}</span>
+              {version.id !== detail.id ? (
+                <Link to={`/memory/${version.id}`} className="meta text-amber underline">
+                  open
+                </Link>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  );
+}
+
+/**
+ * The content, with a rule wherever a chunk begins.
+ *
+ * Boundaries are taken from `char_start`, deduplicated and sorted — chunks
+ * overlap, so several can begin inside the previous one, and drawing every
+ * `char_end` too would produce a rule every few words and say nothing.
+ */
+function BoundedContent({
+  content,
+  chunks,
+  code,
+}: {
+  content: string | null;
+  chunks: MemoryChunk[];
+  code: boolean;
+}) {
+  const pieces = useMemo(() => {
+    if (!content) return [];
+    const starts = [...new Set(chunks.map((chunk) => chunk.char_start))]
+      .filter((offset) => offset > 0 && offset < content.length)
+      .sort((a, b) => a - b);
+
+    const slices: { from: number; text: string; ordinal: number | null }[] = [];
+    let cursor = 0;
+    for (const start of starts) {
+      slices.push({
+        from: cursor,
+        text: content.slice(cursor, start),
+        ordinal: ordinalStartingAt(chunks, cursor),
+      });
+      cursor = start;
+    }
+    slices.push({
+      from: cursor,
+      text: content.slice(cursor),
+      ordinal: ordinalStartingAt(chunks, cursor),
+    });
+    return slices.filter((slice) => slice.text.length > 0);
+  }, [content, chunks]);
+
+  if (!content) {
+    return (
+      <p className="meta text-faint">
+        no normalized text — this memory has not been normalized, or parsed to nothing
+      </p>
+    );
+  }
+
+  return (
+    <div className="border border-rule bg-raised" data-testid="bounded-content">
+      {pieces.map((piece, index) => (
+        <div
+          key={piece.from}
+          className={index > 0 ? "border-t border-dashed border-edge/45" : ""}
+          data-testid="boundary-slice"
+        >
+          <div className="flex gap-3 px-3 py-2">
+            <span className="meta w-8 shrink-0 pt-0.5 text-right text-faint">
+              {piece.ordinal !== null ? `#${piece.ordinal}` : ""}
+            </span>
+            <div className={code ? "code-content flex-1" : "prose-content flex-1"}>
+              {piece.text}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ordinalStartingAt(chunks: MemoryChunk[], offset: number): number | null {
+  const match = chunks.find((chunk) => chunk.char_start === offset);
+  return match ? match.ordinal : null;
+}

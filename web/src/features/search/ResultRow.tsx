@@ -1,0 +1,222 @@
+/**
+ * One memory hit, with its matched chunks.
+ *
+ * The information hierarchy is the design: score first because it is what you
+ * scan, then `external_key` because it is what you recognise, then the matched
+ * text because it is what you judge. Kind, time and chunk provenance sit in mono
+ * metadata that stays out of the way until looked at.
+ *
+ * Expanding a chunk fetches the parent memory and shows the neighbouring chunks
+ * by ordinal, which is what makes "chunk 7 matched" interpretable. The highlight
+ * does not depend on that fetch: it is arithmetic on the offsets the search
+ * response already carries (see `lib/highlight.ts`), so every result is legible
+ * the moment it arrives and the list view stays a single request.
+ */
+
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+
+import { api, type MatchedChunk, type MemoryHit } from "../../api/client";
+import { Highlighted } from "../../components/Highlighted";
+import { Tag } from "../../components/primitives";
+import { isCode, range, score as fmtScore, timestamp } from "../../lib/format";
+import { JudgementButtons, type JudgementTarget } from "../judgements/JudgementButtons";
+import type { Verdict } from "../../api/client";
+
+interface Props {
+  hit: MemoryHit;
+  rank: number;
+  queryText: string;
+  sourceName: string;
+  filters: Record<string, unknown>;
+  verdict?: Verdict | null;
+  onJudged?: (externalKey: string, verdict: Verdict) => void;
+}
+
+export function ResultRow({
+  hit,
+  rank,
+  queryText,
+  sourceName,
+  filters,
+  verdict,
+  onJudged,
+}: Props) {
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [showAllChunks, setShowAllChunks] = useState(false);
+  const code = isCode(hit.kind);
+
+  // The search use case fetches five chunks per requested memory to get k
+  // distinct memories, so a single hit can arrive with five. Rendering all of
+  // them made ten results nineteen screens long; two is enough to see *why* the
+  // memory ranked, and the rest are one click away.
+  const visibleChunks = showAllChunks ? hit.matched_chunks : hit.matched_chunks.slice(0, 2);
+  const hidden = hit.matched_chunks.length - visibleChunks.length;
+
+  // Only fetched once something is expanded, and only for the neighbouring
+  // chunks — the highlight itself is arithmetic on the search response, so the
+  // list view is one request and every result is legible immediately.
+  const detail = useQuery({
+    queryKey: ["memory", hit.memory_id],
+    queryFn: () => api.memory(hit.memory_id),
+    enabled: expanded !== null,
+  });
+
+  const target: JudgementTarget = {
+    queryText,
+    sourceName,
+    externalKey: hit.external_key,
+    memoryId: hit.memory_id,
+    rank,
+    score: hit.score,
+    filters,
+  };
+
+  return (
+    <article className="border-b border-rule py-3" data-testid="result">
+      <header className="flex items-baseline gap-3">
+        {/* Rank and score in a fixed-width gutter, so scores form a column that
+            can be compared down the page rather than a ragged edge. */}
+        <span className="meta w-6 shrink-0 text-right text-faint">{rank}</span>
+        <span
+          className="w-16 shrink-0 font-mono text-sm font-medium text-ink"
+          data-testid="score"
+        >
+          {fmtScore(hit.score)}
+        </span>
+        <Link
+          to={`/memory/${hit.memory_id}`}
+          className="min-w-0 flex-1 truncate font-mono text-sm text-ink underline decoration-rule-strong decoration-1 underline-offset-2 hover:decoration-edge"
+          title={hit.external_key}
+        >
+          {hit.external_key}
+        </Link>
+        <Tag>{hit.kind}</Tag>
+        <span className="meta hidden shrink-0 text-faint sm:inline">
+          {timestamp(hit.occurred_at)}
+        </span>
+        <JudgementButtons
+          target={target}
+          current={verdict}
+          onRecorded={(given) => onJudged?.(hit.external_key, given)}
+        />
+      </header>
+
+      {hit.title ? <p className="meta mt-1 pl-25 text-muted">{hit.title}</p> : null}
+
+      <div className="mt-2 space-y-2 pl-25">
+        {visibleChunks.map((chunk) => (
+          <ChunkBlock
+            key={chunk.chunk_id}
+            chunk={chunk}
+            code={code}
+            expanded={expanded === chunk.ordinal}
+            onToggle={() =>
+              setExpanded((current) => (current === chunk.ordinal ? null : chunk.ordinal))
+            }
+            neighbours={
+              expanded === chunk.ordinal
+                ? (detail.data?.chunks ?? []).filter(
+                    (other) =>
+                      Math.abs(other.ordinal - chunk.ordinal) === 1 &&
+                      other.ordinal !== chunk.ordinal,
+                  )
+                : []
+            }
+            loadingNeighbours={expanded === chunk.ordinal && detail.isLoading}
+          />
+        ))}
+        {hidden > 0 ? (
+          <button
+            type="button"
+            className="meta text-amber hover:text-amber-bright"
+            onClick={() => setShowAllChunks(true)}
+          >
+            + {hidden} more matched {hidden === 1 ? "chunk" : "chunks"} in this memory
+          </button>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+interface ChunkProps {
+  chunk: MatchedChunk;
+  code: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  neighbours: { ordinal: number; content: string; token_count: number }[];
+  loadingNeighbours: boolean;
+}
+
+function ChunkBlock({
+  chunk,
+  code,
+  expanded,
+  onToggle,
+  neighbours,
+  loadingNeighbours,
+}: ChunkProps) {
+  const definition =
+    typeof chunk.metadata?.definition === "string" ? chunk.metadata.definition : null;
+
+  return (
+    <div className="border-l border-rule pl-3" data-testid="matched-chunk">
+      <div className="flex items-baseline gap-2">
+        <button
+          type="button"
+          className="meta text-amber hover:text-amber-bright"
+          onClick={onToggle}
+          aria-expanded={expanded}
+        >
+          {expanded ? "−" : "+"} #{chunk.ordinal}
+        </button>
+        <span className="meta text-muted">{fmtScore(chunk.score)}</span>
+        <span className="meta text-faint">{range(chunk.char_start, chunk.char_end)}</span>
+        {/* What M1.7 persisted the chunk metadata for: a citation that can name
+            the function it came from rather than only the file. */}
+        {definition ? (
+          <span className="meta text-amber" data-testid="definition">
+            {definition}()
+          </span>
+        ) : null}
+      </div>
+
+      <div className="mt-1">
+        <Highlighted
+          text={chunk.text}
+          charStart={chunk.char_start}
+          charEnd={chunk.char_end}
+          code={code}
+          // Expanded shows the whole borrowed lead-in as well as the neighbours.
+          full={expanded}
+        />
+      </div>
+
+      {expanded ? (
+        <div className="mt-2 space-y-2 border-t border-dashed border-rule pt-2">
+          <p className="meta-label text-faint">context by ordinal</p>
+          {loadingNeighbours ? (
+            <p className="meta text-faint">loading…</p>
+          ) : neighbours.length === 0 ? (
+            <p className="meta text-faint">no neighbouring chunks — this is the whole memory</p>
+          ) : (
+            neighbours
+              .sort((a, b) => a.ordinal - b.ordinal)
+              .map((other) => (
+                <div key={other.ordinal} className="opacity-70">
+                  <span className="meta text-faint">
+                    #{other.ordinal} · {other.token_count} tok
+                  </span>
+                  <div className={code ? "code-content mt-1" : "prose-content mt-1"}>
+                    {other.content}
+                  </div>
+                </div>
+              ))
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}

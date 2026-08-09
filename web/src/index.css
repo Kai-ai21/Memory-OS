@@ -1,0 +1,252 @@
+/* Memory OS — search interface.
+ *
+ * The character being aimed at is a reference instrument: something closer to a
+ * well-made terminal client or a lab notebook than to an admin dashboard. Dense,
+ * information-forward, and legible at small sizes, because the person using it
+ * wants to see the data rather than be guided through it.
+ *
+ * Three decisions carry most of that.
+ *
+ * GROUND — warm, and committed to. A paper tone rather than pure white, and a
+ * warm near-black rather than #000. Pure white on a screen full of small dense
+ * text is glary, and warm neutrals make the single accent read as ink on paper
+ * instead of as a UI colour.
+ *
+ * TYPE — three roles, deliberately distinguishable at a glance:
+ *   metadata  JetBrains Mono, small, wide-tracked. Paths, scores, ordinals,
+ *             offsets, hashes, timestamps. Tabular figures so columns of scores
+ *             line up and can be compared vertically.
+ *   prose     Source Serif 4. The chunk text being *read*. A serif because it is
+ *             the one thing on screen that is content rather than instrument, and
+ *             it should not look like more metadata.
+ *   code      JetBrains Mono again, but larger, tighter-leaded and on a tinted
+ *             surface with a rule — so a code chunk never blurs into the
+ *             metadata set in the same face.
+ *
+ * ACCENT — one amber, spent almost entirely on the matched-span highlight. That
+ * highlight is the most important element in the interface: it is what makes a
+ * result legible without reading it. Everything else stays neutral so the amber
+ * never has to compete.
+ */
+
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/700.css";
+@import "@fontsource-variable/source-serif-4";
+
+@import "tailwindcss";
+
+@theme {
+  /* Warm neutral ground. `paper` is the page, `raised` is anything sitting on
+   * it — a two-step scale, because a tool with five surface levels reads as
+   * decoration. */
+  --color-paper: #f6f3ec;
+  --color-raised: #fffdf7;
+  --color-sunken: #efeae0;
+  --color-rule: #ded6c6;
+  --color-rule-strong: #c8bda7;
+
+  /* Warm ink. `ink` for content, `muted` for metadata, `faint` for things
+   * present but not being read. */
+  --color-ink: #24211b;
+  --color-muted: #6a6357;
+  --color-faint: #9a9284;
+
+  /* The one accent. `amber` for active state and interactive text, `wash` for
+   * the highlight behind matched text, `edge` for its underline. The wash is
+   * deliberately translucent so it multiplies over both paper and code
+   * surfaces without needing a second value. */
+  --color-amber: #96570b;
+  --color-amber-bright: #c8791a;
+  --color-wash: color-mix(in oklab, #e8a63c 42%, transparent);
+  --color-edge: #c8791a;
+
+  /* Verdict colours. Muted on purpose — these are annotations on data, not
+   * status badges, and three saturated pills per row would out-shout the
+   * highlight. */
+  --color-affirm: #2f6b3f;
+  --color-deny: #8f3222;
+
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-prose: "Source Serif 4 Variable", "Source Serif 4", Charter, Georgia, serif;
+
+  --text-meta: 0.6875rem;
+  --text-meta--line-height: 1.45;
+}
+
+@layer base {
+  html {
+    /* A tool, not a document: no rubber-banding overscroll on the page itself. */
+    overscroll-behavior-y: none;
+  }
+
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Every number in this interface is compared against the number above it, so
+   * figures are tabular everywhere by default rather than per-component. */
+  body,
+  input,
+  button {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-amber-bright) 30%, transparent);
+  }
+
+  /* Visible focus, and only for keyboard users. This UI is driven from the
+   * keyboard, so the focus ring is functional rather than an accessibility
+   * afterthought — but a mouse click on a button should not leave one behind. */
+  :focus-visible {
+    outline: 2px solid var(--color-amber-bright);
+    outline-offset: 1px;
+  }
+
+  /* A dense list of rules is the main structural device, so scrollbars are
+   * quietened to stop them competing with it. */
+  * {
+    scrollbar-color: var(--color-rule-strong) transparent;
+    scrollbar-width: thin;
+  }
+}
+
+@layer components {
+  /* --- The highlight -------------------------------------------------------
+   * The most important element in the UI. A wash plus a solid bottom edge, so
+   * it reads as a physical highlighter mark and survives being printed,
+   * screenshotted, or looked at quickly. `box-decoration-break` keeps the mark
+   * continuous when a span wraps across lines, which is the common case in a
+   * chunk of prose.
+   */
+  .mark {
+    background-color: var(--color-wash);
+    border-bottom: 1.5px solid var(--color-edge);
+    padding: 0.05em 0.08em;
+    margin: 0 -0.08em;
+    border-radius: 1px;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
+  /* --- Text roles --------------------------------------------------------- */
+  .meta {
+    font-family: var(--font-mono);
+    font-size: var(--text-meta);
+    line-height: var(--text-meta--line-height);
+    letter-spacing: 0.04em;
+    color: var(--color-muted);
+  }
+
+  .meta-label {
+    font-family: var(--font-mono);
+    font-size: var(--text-meta);
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
+
+  .prose-content {
+    font-family: var(--font-prose);
+    font-size: 0.9375rem;
+    line-height: 1.62;
+    color: var(--color-ink);
+  }
+
+  .code-content {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    tab-size: 4;
+    color: var(--color-ink);
+    background-color: var(--color-sunken);
+    border-left: 2px solid var(--color-rule-strong);
+    padding: 0.5rem 0.75rem;
+  }
+
+  /* --- Controls -----------------------------------------------------------
+   * Square, ruled, flat. No rounded-xl, no shadows: the visual language is
+   * ruled paper, and a drop shadow would put a card on top of it.
+   */
+  .field {
+    background-color: var(--color-raised);
+    border: 1px solid var(--color-rule);
+    color: var(--color-ink);
+    padding: 0.3rem 0.5rem;
+  }
+
+  .field:focus {
+    border-color: var(--color-amber-bright);
+    outline: none;
+  }
+
+  .btn {
+    border: 1px solid var(--color-rule);
+    background-color: var(--color-raised);
+    color: var(--color-muted);
+    padding: 0.2rem 0.5rem;
+    font-size: var(--text-meta);
+    letter-spacing: 0.04em;
+    cursor: pointer;
+  }
+
+  .btn:hover:not(:disabled) {
+    border-color: var(--color-rule-strong);
+    color: var(--color-ink);
+  }
+
+  .btn:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+
+  .btn-on {
+    border-color: var(--color-amber-bright);
+    color: var(--color-amber);
+    background-color: color-mix(in oklab, var(--color-amber-bright) 9%, var(--color-raised));
+  }
+
+  .btn-affirm-on {
+    border-color: var(--color-affirm);
+    color: var(--color-affirm);
+    background-color: color-mix(in oklab, var(--color-affirm) 9%, var(--color-raised));
+  }
+
+  .btn-deny-on {
+    border-color: var(--color-deny);
+    color: var(--color-deny);
+    background-color: color-mix(in oklab, var(--color-deny) 9%, var(--color-raised));
+  }
+
+  /* Clamped chunk text.
+   *
+   * Measured before adding this: ten results ran to 19 screens, averaging nearly
+   * two viewports per result, which is the opposite of dense — you cannot compare
+   * results you cannot see together. The clamp keeps the *top* of the text, which
+   * is where the match begins once the borrowed lead-in is truncated, and fades
+   * out rather than cutting so the truncation is legible as truncation.
+   */
+  .clamped {
+    max-height: 16em;
+    overflow: hidden;
+    mask-image: linear-gradient(to bottom, black 78%, transparent 100%);
+  }
+
+  /* A key cap, for the shortcut hints that make the keyboard model visible. */
+  .kbd {
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    border: 1px solid var(--color-rule-strong);
+    background-color: var(--color-sunken);
+    padding: 0.05rem 0.25rem;
+    color: var(--color-muted);
+  }
+}
