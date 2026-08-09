@@ -262,6 +262,7 @@ def build_harness(
             factory, embedder, PostgresEmbeddingCache(factory)
         ),
         make_shadow=lambda: PostgresShadowSchema(settings.database_url),
+        blobs=blobs,
     )
     return Harness(
         root=root,

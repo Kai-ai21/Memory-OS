@@ -15,6 +15,7 @@ import userEvent from "@testing-library/user-event";
 import { SearchPage } from "./SearchPage";
 import {
   MATCHED_TEXT,
+  borrowingHit,
   renderWithProviders,
   searchResponse,
   stubFetch,
@@ -126,21 +127,35 @@ describe("results", () => {
     expect(screen.getByTestId("definition")).toHaveTextContent("Worker.run");
   });
 
-  it("does not highlight until the document text is available", async () => {
-    // The offsets index into the parent memory, so before it is fetched they
-    // cannot be positioned. Showing the text unmarked is right; guessing is not.
+  it("highlights immediately, without waiting for the memory", async () => {
+    // The offsets are enough on their own: the chunk's own text is the tail of
+    // what is stored. No fetch, so a result is legible the moment it arrives.
     stubFetch([
       { match: "/sources", body: SOURCES },
       { match: "/search", body: searchResponse() },
     ]);
     renderWithProviders(<SearchPage />, { route: "/?q=leases" });
 
-    await screen.findByTestId("chunk-text");
-    expect(screen.queryByTestId("mark")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("mark")).toHaveTextContent(MATCHED_TEXT);
   });
 
-  it("highlights the matched span once the memory is expanded", async () => {
-    const content = `${"x".repeat(100)}${MATCHED_TEXT}${"y".repeat(20)}`;
+  it("mutes the borrowed lead-in so it does not read as the match", async () => {
+    // 28.1% of stored chunk text in this corpus is borrowed from the previous
+    // chunk. Rendering it as part of the match is the misattribution these
+    // offsets invite.
+    stubFetch([
+      { match: "/sources", body: SOURCES },
+      { match: "/search", body: searchResponse({ hits: [borrowingHit()] }) },
+    ]);
+    renderWithProviders(<SearchPage />, { route: "/?q=leases" });
+
+    expect(await screen.findByTestId("lead-in")).toHaveTextContent("borrowed context");
+    expect(screen.getByTestId("mark")).toHaveTextContent(MATCHED_TEXT);
+  });
+
+  it("shows the neighbouring chunks when a chunk is expanded", async () => {
+    // What makes "chunk 3 matched" interpretable. The fetch is for the
+    // neighbours, not for the highlight.
     stubFetch([
       { match: "/sources", body: SOURCES },
       { match: "/search", body: searchResponse() },
@@ -155,7 +170,7 @@ describe("results", () => {
           is_current: true,
           kind: "code",
           title: null,
-          content,
+          content: "irrelevant to the highlight",
           content_hash: "a".repeat(64),
           normalized_hash: "b".repeat(64),
           occurred_at: null,
@@ -163,7 +178,22 @@ describe("results", () => {
           ingested_at: "2026-08-01T10:00:00Z",
           deleted_at: null,
           metadata: {},
-          chunks: [],
+          chunks: [
+            {
+              id: "55555555-5555-7555-8555-555555555555",
+              ordinal: 4,
+              content: "the chunk that comes next",
+              token_count: 7,
+              char_start: 200,
+              char_end: 225,
+              chunker_version: "structural-v2",
+              content_hash: "c".repeat(64),
+              embedding_model: "m@1",
+              embedded_at: null,
+              metadata: {},
+              embedded: true,
+            },
+          ],
           versions: [],
         },
       },
@@ -172,8 +202,7 @@ describe("results", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /#3/ }));
 
-    const mark = await screen.findByTestId("mark");
-    expect(mark).toHaveTextContent(MATCHED_TEXT);
+    expect(await screen.findByText(/the chunk that comes next/)).toBeInTheDocument();
   });
 });
 

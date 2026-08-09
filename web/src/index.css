@@ -226,6 +226,20 @@
     background-color: color-mix(in oklab, var(--color-deny) 9%, var(--color-raised));
   }
 
+  /* Clamped chunk text.
+   *
+   * Measured before adding this: ten results ran to 19 screens, averaging nearly
+   * two viewports per result, which is the opposite of dense — you cannot compare
+   * results you cannot see together. The clamp keeps the *top* of the text, which
+   * is where the match begins once the borrowed lead-in is truncated, and fades
+   * out rather than cutting so the truncation is legible as truncation.
+   */
+  .clamped {
+    max-height: 16em;
+    overflow: hidden;
+    mask-image: linear-gradient(to bottom, black 78%, transparent 100%);
+  }
+
   /* A key cap, for the shortcut hints that make the keyboard model visible. */
   .kbd {
     font-family: var(--font-mono);

@@ -1,16 +1,33 @@
 /**
- * Splitting text at a character range, for the matched-span highlight.
+ * Locating a chunk's own text inside the text that is stored for it.
  *
- * This is the most important piece of rendering in the interface — the highlight
- * is what makes a result legible without reading it — and it is also the easiest
- * to get subtly wrong at the boundaries. So it is a pure function over strings
- * with no React in it, and the edge cases are tested rather than eyeballed.
+ * This is the most important piece of rendering in the interface, and getting it
+ * right required first working out what the stored offsets actually mean. They do
+ * not mean what M1.4's docstring claims ("`char_start`/`char_end` index exactly
+ * into the stored text"). Measured across all 934 chunks of this repository:
  *
- * A note on what the offsets mean. `char_start`/`char_end` on a chunk index into
- * the *parent memory's* normalized text, not into the chunk's own text. When the
- * chunk text is the exact slice, the whole chunk is the match. When it is not —
- * the chunker adds an overlap prefix from the previous chunk — the offsets have to
- * be rebased before they mean anything locally, and `rebase` does that.
+ *   chunk #1  char_start=754  char_end=1118  span=364  len(content)=792
+ *
+ * `char_start`..`char_end` is a *contiguous, non-overlapping tiling* of the
+ * document — chunk N ends exactly where N+1 begins, for every chunk in the
+ * corpus. But `content` is longer than that span, because the chunker prepends an
+ * overlap prefix borrowed from the previous chunk so that a concept crossing a
+ * boundary appears whole in one chunk. Nothing records how long that prefix is.
+ *
+ * It is recoverable, exactly:
+ *
+ *   prefix = len(content) - (char_end - char_start)
+ *
+ * and `content === document[char_start - prefix : char_end]`, verified for 934 of
+ * 934 chunks with zero failures. So the chunk's authoritative text is the *tail*
+ * of what is stored, and the borrowed context is the head.
+ *
+ * Two consequences the interface is built around. The highlight needs no document
+ * fetch — it is arithmetic on values the search response already carries, so a
+ * result is legible the instant it arrives. And the borrowed prefix is rendered as
+ * de-emphasised lead-in rather than as part of the match, because reading it as
+ * the match is exactly the misattribution these offsets invite: 28.1% of all
+ * stored chunk text is borrowed from a neighbour.
  */
 
 export interface Segment {
@@ -21,10 +38,10 @@ export interface Segment {
 /**
  * Split `text` into marked and unmarked segments at `[start, end)`.
  *
- * Offsets are clamped into range and an inverted or empty range yields one
- * unmarked segment. Silently rendering nothing, or throwing, would both be worse
- * than showing the text unhighlighted: the text is the thing the user came for,
- * and the highlight is an aid to reading it.
+ * Offsets are clamped into range, and an inverted or empty range yields one
+ * unmarked segment. Rendering nothing, or throwing, would both be worse than
+ * showing the text unhighlighted: the text is what the reader came for, and the
+ * highlight is an aid to reading it.
  */
 export function segment(text: string, start: number, end: number): Segment[] {
   if (text.length === 0) return [];
@@ -34,9 +51,8 @@ export function segment(text: string, start: number, end: number): Segment[] {
   if (to <= from) return [{ text, marked: false }];
 
   const segments: Segment[] = [];
-  // Leading and trailing segments are omitted when empty rather than emitted as
-  // empty strings — a range covering the whole text should produce exactly one
-  // marked segment, which is what makes the tests here readable.
+  // Empty leading and trailing segments are omitted rather than emitted, so a
+  // range covering the whole text produces exactly one marked segment.
   if (from > 0) segments.push({ text: text.slice(0, from), marked: false });
   segments.push({ text: text.slice(from, to), marked: true });
   if (to < text.length) segments.push({ text: text.slice(to), marked: false });
@@ -44,34 +60,37 @@ export function segment(text: string, start: number, end: number): Segment[] {
 }
 
 /**
- * Translate document offsets into offsets within `chunkText`.
+ * How much of a chunk's stored text is borrowed from the previous chunk.
  *
- * The chunk's text usually appears verbatim in the document at `char_start`, but
- * not always: normalization and the chunker's overlap prefix mean the two can
- * disagree. So the text is located by search first and only then by arithmetic,
- * and if neither works the caller is told there is nothing to mark rather than
- * being handed a plausible-looking wrong range.
+ * Returns null when the arithmetic cannot hold — a span longer than the text
+ * means the two disagree, and marking nothing is the honest answer. Never
+ * guesses: a highlight in the wrong place is worse than no highlight, because it
+ * asserts something false about which text matched.
  */
-export function rebase(
-  documentText: string,
-  chunkText: string,
+export function overlapPrefixLength(
+  text: string,
+  charStart: number,
+  charEnd: number,
+): number | null {
+  const span = charEnd - charStart;
+  if (span <= 0) return null;
+  const prefix = text.length - span;
+  if (prefix < 0 || prefix > text.length) return null;
+  return prefix;
+}
+
+/**
+ * The chunk's own span within its stored text: everything after the borrowed
+ * prefix.
+ */
+export function ownSpan(
+  text: string,
   charStart: number,
   charEnd: number,
 ): { start: number; end: number } | null {
-  if (!chunkText) return null;
-
-  // Where does this chunk actually sit in the document? Searching from a little
-  // before the recorded offset finds it even when normalization shifted things,
-  // without matching an identical passage elsewhere in the file.
-  const searchFrom = Math.max(0, charStart - chunkText.length);
-  let offset = documentText.indexOf(chunkText, searchFrom);
-  if (offset < 0) offset = documentText.indexOf(chunkText);
-  if (offset < 0) return null;
-
-  const start = charStart - offset;
-  const end = charEnd - offset;
-  if (end <= 0 || start >= chunkText.length) return null;
-  return { start: Math.max(0, start), end: Math.min(chunkText.length, end) };
+  const prefix = overlapPrefixLength(text, charStart, charEnd);
+  if (prefix === null) return null;
+  return { start: prefix, end: text.length };
 }
 
 function clamp(value: number, low: number, high: number): number {

@@ -6,10 +6,11 @@
  * text because it is what you judge. Kind, time and chunk provenance sit in mono
  * metadata that stays out of the way until looked at.
  *
- * Expanding a chunk fetches the parent memory. That does two things at once: it
- * shows the neighbouring chunks by ordinal, which is what makes "chunk 7 matched"
- * interpretable, and it supplies the document text the highlight needs to rebase
- * its offsets onto — so expanding is also what turns the highlight on.
+ * Expanding a chunk fetches the parent memory and shows the neighbouring chunks
+ * by ordinal, which is what makes "chunk 7 matched" interpretable. The highlight
+ * does not depend on that fetch: it is arithmetic on the offsets the search
+ * response already carries (see `lib/highlight.ts`), so every result is legible
+ * the moment it arrives and the list view stays a single request.
  */
 
 import { useState } from "react";
@@ -43,9 +44,19 @@ export function ResultRow({
   onJudged,
 }: Props) {
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [showAllChunks, setShowAllChunks] = useState(false);
   const code = isCode(hit.kind);
 
-  // Only fetched once something is expanded. The list view stays one request.
+  // The search use case fetches five chunks per requested memory to get k
+  // distinct memories, so a single hit can arrive with five. Rendering all of
+  // them made ten results nineteen screens long; two is enough to see *why* the
+  // memory ranked, and the rest are one click away.
+  const visibleChunks = showAllChunks ? hit.matched_chunks : hit.matched_chunks.slice(0, 2);
+  const hidden = hit.matched_chunks.length - visibleChunks.length;
+
+  // Only fetched once something is expanded, and only for the neighbouring
+  // chunks — the highlight itself is arithmetic on the search response, so the
+  // list view is one request and every result is legible immediately.
   const detail = useQuery({
     queryKey: ["memory", hit.memory_id],
     queryFn: () => api.memory(hit.memory_id),
@@ -95,12 +106,11 @@ export function ResultRow({
       {hit.title ? <p className="meta mt-1 pl-25 text-muted">{hit.title}</p> : null}
 
       <div className="mt-2 space-y-2 pl-25">
-        {hit.matched_chunks.map((chunk) => (
+        {visibleChunks.map((chunk) => (
           <ChunkBlock
             key={chunk.chunk_id}
             chunk={chunk}
             code={code}
-            documentText={detail.data?.content ?? null}
             expanded={expanded === chunk.ordinal}
             onToggle={() =>
               setExpanded((current) => (current === chunk.ordinal ? null : chunk.ordinal))
@@ -117,6 +127,15 @@ export function ResultRow({
             loadingNeighbours={expanded === chunk.ordinal && detail.isLoading}
           />
         ))}
+        {hidden > 0 ? (
+          <button
+            type="button"
+            className="meta text-amber hover:text-amber-bright"
+            onClick={() => setShowAllChunks(true)}
+          >
+            + {hidden} more matched {hidden === 1 ? "chunk" : "chunks"} in this memory
+          </button>
+        ) : null}
       </div>
     </article>
   );
@@ -125,7 +144,6 @@ export function ResultRow({
 interface ChunkProps {
   chunk: MatchedChunk;
   code: boolean;
-  documentText: string | null;
   expanded: boolean;
   onToggle: () => void;
   neighbours: { ordinal: number; content: string; token_count: number }[];
@@ -135,7 +153,6 @@ interface ChunkProps {
 function ChunkBlock({
   chunk,
   code,
-  documentText,
   expanded,
   onToggle,
   neighbours,
@@ -171,8 +188,9 @@ function ChunkBlock({
           text={chunk.text}
           charStart={chunk.char_start}
           charEnd={chunk.char_end}
-          documentText={documentText}
           code={code}
+          // Expanded shows the whole borrowed lead-in as well as the neighbours.
+          full={expanded}
         />
       </div>
 

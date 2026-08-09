@@ -126,6 +126,7 @@ class Container:
             make_shadow=lambda: PostgresShadowSchema(
                 self.settings.database_url, echo=self.settings.db_echo
             ),
+            blobs=self.blobs,
         )
 
     async def dispose(self) -> None:

@@ -73,6 +73,34 @@ export function stubFetch(routes: Route[]): Recorded[] {
 /** The chunk text used by the fixture, exported so a test can assert on it. */
 export const MATCHED_TEXT = "a worker claims a job and holds a lease on it";
 
+/**
+ * A hit whose stored chunk text carries a borrowed lead-in, the way every chunk
+ * after ordinal 0 does in the real corpus: the span covers only the tail.
+ */
+export function borrowingHit() {
+  const borrowed = "borrowed context from the previous chunk. ";
+  return {
+    memory_id: "11111111-1111-7111-8111-111111111111",
+    external_key: "src/memoryos/application/worker.py",
+    source_name: "self",
+    title: null,
+    kind: "note",
+    occurred_at: null,
+    score: 0.77,
+    matched_chunks: [
+      {
+        chunk_id: "22222222-2222-7222-8222-222222222222",
+        ordinal: 3,
+        text: borrowed + MATCHED_TEXT,
+        score: 0.77,
+        char_start: 1000,
+        char_end: 1000 + MATCHED_TEXT.length,
+        metadata: {},
+      },
+    ],
+  };
+}
+
 /** A search response with one hit, shaped like the real thing. */
 export function searchResponse(overrides: Record<string, unknown> = {}) {
   return {

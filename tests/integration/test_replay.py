@@ -552,15 +552,25 @@ async def test_an_unknown_source_name_is_reported_rather_than_ignored(
 # --------------------------------------------------------------------------
 
 
-async def test_a_missing_blob_fails_loudly_with_the_hash_and_the_key(
+async def test_a_missing_blob_is_refused_before_anything_is_destroyed(
     harness: Harness,
 ) -> None:
-    """The rebuild rests entirely on the blobs being there.
+    """The check runs before the truncate, not after it.
 
-    Skipping the document would produce a corpus quietly missing a file, and no
-    count would reveal it — the memory row would exist with no chunks, which is
-    also what an empty file looks like.
+    The rebuild rests entirely on the blobs being there, and skipping a document
+    would produce a corpus quietly missing a file — a memory row with no chunks,
+    which is also what an empty file looks like. So it fails, loudly, naming the
+    file and the whole hash.
+
+    That it fails *first* was learned the hard way: running `replay` from a
+    subdirectory resolved the default relative `blob_root` to an empty path, and
+    the run truncated 119 memories before failing on the first document. The
+    corpus was rebuildable from the same log once the command was run from the
+    right place — the system working as designed — but "destroys your corpus,
+    then explains why" is the wrong failure mode for a destructive operation when
+    the check costs one stat per artifact.
     """
+    before = await harness.snapshot()
     async with harness.sessions() as session:
         content_hash = (
             await session.execute(
@@ -577,8 +587,13 @@ async def test_a_missing_blob_fails_loudly_with_the_hash_and_the_key(
         await harness.replay()
 
     message = str(caught.value)
-    assert content_hash in message
+    # Names the file and the whole hash, so the next step is a search rather
+    # than a guess.
     assert "queue.md" in message
+    assert content_hash in message
+    assert "Nothing has been changed" in message
+    # Untouched: not merely present, byte-identical.
+    assert compare(before, await harness.snapshot()).identical
 
 
 async def test_an_unreplayable_event_type_is_refused(harness: Harness) -> None:
