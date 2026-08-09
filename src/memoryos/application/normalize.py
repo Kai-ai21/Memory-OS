@@ -283,6 +283,11 @@ class NormalizeMemory:
                         char_end=chunk.char_end,
                         chunker_version=self._chunker.version,
                         content_hash=ContentHash.of(chunk.text.encode("utf-8")).value,
+                        # Persisted rather than dropped. This is the only moment
+                        # it is known — the chunker computed it from structure
+                        # the parser found — and query time is when a citation
+                        # needs it.
+                        meta=dict(chunk.metadata),
                         # M1.5 fills these.
                         embedding=None,
                         embedding_model=None,

@@ -1,7 +1,7 @@
 """Semantic search over memories."""
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -32,6 +32,10 @@ class ChunkOut(BaseModel):
     score: float
     char_start: int
     char_end: int
+    # What the chunker knew about where this span came from, e.g.
+    # `{"definition": "SyncSource._ingest"}`. Half of what makes the offsets
+    # above usable as a citation rather than just a highlight range.
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class HitOut(BaseModel):
@@ -115,6 +119,7 @@ def to_response(result: SearchResult) -> SearchOut:
                         score=chunk.score,
                         char_start=chunk.char_start,
                         char_end=chunk.char_end,
+                        metadata=chunk.metadata,
                     )
                     for chunk in hit.matched_chunks
                 ],

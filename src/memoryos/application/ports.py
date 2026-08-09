@@ -356,6 +356,11 @@ class ScoredChunk:
     score: float
     char_start: int
     char_end: int
+    # What the chunker recorded about this span's origin — `{"definition":
+    # "SyncSource._ingest"}` and the like. Surfaced here because a citation that
+    # can name the function it came from is the difference between "somewhere in
+    # sync.py" and a reference somebody can check.
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class VectorStore(Protocol):
