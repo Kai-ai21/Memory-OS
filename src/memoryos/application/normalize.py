@@ -288,6 +288,7 @@ class NormalizeMemory:
                         token_count=chunk.token_count,
                         char_start=chunk.char_start,
                         char_end=chunk.char_end,
+                        prefix_chars=chunk.prefix_chars,
                         chunker_version=self._chunker.version,
                         content_hash=ContentHash.of(chunk.text.encode("utf-8")).value,
                         # Persisted rather than dropped. This is the only moment

@@ -273,9 +273,18 @@ class MemoryChunk(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False)
     # Offsets into the memory's text, so a citation can highlight the matched
-    # span rather than the whole document.
+    # span rather than the whole document. They bound the chunk's own span, not
+    # `content`: the invariant is `content[prefix_chars:] ==
+    # memory.content[char_start:char_end]`.
     char_start: Mapped[int] = mapped_column(Integer, nullable=False)
     char_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    # How much of `content` is overlap borrowed from the preceding chunk. A
+    # column rather than arithmetic on the lengths, because a derived value
+    # every reader has to rediscover is one most readers get wrong — the UI had
+    # to measure the corpus to work out what the offsets meant.
+    prefix_chars: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
     # Versioned per chunk rather than per memory, which permits re-chunking a
     # subset without rewriting everything.
     chunker_version: Mapped[str] = mapped_column(Text, nullable=False)
@@ -304,6 +313,9 @@ class MemoryChunk(Base):
         CheckConstraint("token_count > 0", name="ck_memory_chunks_token_count_positive"),
         CheckConstraint("char_start >= 0", name="ck_memory_chunks_char_start_non_negative"),
         CheckConstraint("char_end > char_start", name="ck_memory_chunks_char_range"),
+        CheckConstraint(
+            "prefix_chars >= 0", name="ck_memory_chunks_prefix_chars_non_negative"
+        ),
         Index("ix_memory_chunks_chunker_version", "chunker_version"),
         Index("ix_memory_chunks_content_hash", "content_hash"),
     )

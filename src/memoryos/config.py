@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from memoryos.adapters.embedding.sentence_transformers import (
@@ -15,6 +16,16 @@ class Settings(BaseSettings):
 
     environment: str = "local"
     database_url: str = "postgresql+asyncpg://memos:memos@localhost:5433/memos"
+    # Where the test suite writes. Its own database rather than its own
+    # isolation strategy: the integration tests truncate every table, which is
+    # the only strategy that survives code under test committing, and pointing
+    # that at the development database destroys a working corpus. It did, three
+    # times during M2.0a.
+    #
+    # Compose creates it; `MEMOS_ENVIRONMENT=test` selects it. CI sets neither
+    # and is unaffected — its database is disposable, and a second one there
+    # would only be a second thing to migrate.
+    test_database_url: str = "postgresql+asyncpg://memos:memos@localhost:5433/memos_test"
     db_echo: bool = False
     # Where artifact bytes live. Local directory for now; the BlobStore port is
     # what lets this become object storage without a use case changing.
@@ -40,6 +51,20 @@ class Settings(BaseSettings):
     # reads a private corpus means any page the operator visits can search it.
     # `create_app` refuses a wildcard outright rather than trusting this comment.
     cors_origins: list[str] = []
+
+    @model_validator(mode="after")
+    def _redirect_the_test_environment(self) -> "Settings":
+        """Under `MEMOS_ENVIRONMENT=test`, `database_url` *is* the test database.
+
+        Resolved here rather than at each call site so that everything reading
+        `database_url` — the container, Alembic's env.py, the shadow workspace —
+        agrees without knowing the rule exists. A test run that reached the
+        development database through one forgotten call site would truncate it,
+        which is the failure this exists to prevent.
+        """
+        if self.environment == "test":
+            self.database_url = self.test_database_url
+        return self
 
 
 @lru_cache

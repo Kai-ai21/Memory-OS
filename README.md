@@ -164,18 +164,34 @@ re-embedding, because the vectors travel with the rows.
 Chunking splits on structure first, because the author already said where the topic changes.
 Oversized sections are filled sentence-aware; undersized ones merge with their neighbour; each
 chunk carries an overlap prefix from the one before it, because boundaries are arbitrary and a
-concept spanning one would otherwise appear in neither chunk in full. `char_start`/`char_end`
-index exactly into the stored text, which is what will let a citation highlight the matched
-span.
+concept spanning one would otherwise appear in neither chunk in full.
 
-**Code is special-cased**: it splits only on definition boundaries and never mid-function, even
-when that leaves a chunk over the ceiling. Half a function embeds as neither a function nor a
-coherent statement; size variance is the lesser cost.
+**`char_start`/`char_end` bound the chunk's own span, not the text stored for it.** M1.4
+documented them as indexing exactly into the stored text, which holds only at ordinal 0: the
+spans tile the document contiguously, while `content` additionally carries the borrowed overlap
+head. `prefix_chars` records how long that head is, so the relationship is exact and stated
+rather than rediscovered:
+
+```
+content[prefix_chars:] == memory.content[char_start:char_end]
+```
+
+The UI had to measure the corpus to work out what the offsets meant, which is what a derived
+value nobody records costs. 28% of stored chunk text is borrowed lead-in, so reading the offsets
+as bounds on `content` mis-highlights most chunks — plausibly, since the text it points at is
+real text from the same document.
+
+**Code is special-cased**: it splits on definition boundaries, and an oversized definition is
+broken at the outermost boundary inside it — blank lines first, then statement starts at the
+shallowest indentation the body uses, and never inside an unbalanced bracket, because a break
+inside an open call splits one statement into two fragments. The ceiling still wins over all of
+it: a single statement longer than the window is split at a line start inside the call rather
+than left for the model to truncate.
 
 The chunker version encodes its parameters:
 
 ```
-structural-v1:target=640:overlap=80:min=120:max=1024
+structural-v3:model_window=512:target=396:overlap=47:min=79:max=496
 ```
 
 which makes improving the chunker a query rather than a corpus rebuild:
@@ -570,6 +586,21 @@ make phase1-check  # the whole of Phase 1, from an empty volume
 
 Integration tests are marked `integration` and need Postgres running. `slow` tests load the real
 model and are excluded from the default run.
+
+**The suite has its own database.** `clean_database` truncates every table, because truncation is
+the only isolation strategy that survives code under test committing its own transactions — and
+pointed at the development database that is `pytest` deleting a working corpus, which it did three
+times during M2.0a. Compose creates `memos_test`; `tests/conftest.py` sets `MEMOS_ENVIRONMENT=test`,
+and `Settings` resolves `database_url` to `test_database_url` under that value, so every consumer
+lands on it without being told separately. An existing volume predates the init script, so create
+it once by hand:
+
+```bash
+docker compose exec postgres psql -U memos -d memos -c "CREATE DATABASE memos_test"
+```
+
+CI sets neither variable and is unaffected: its database is disposable, so a second one there would
+only be a second thing to migrate.
 
 Three tests are load-bearing out of proportion to their size, and each exists because a green suite
 was once wrong:

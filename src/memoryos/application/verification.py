@@ -74,6 +74,7 @@ class ChunkRow:
     token_count: int
     char_start: int
     char_end: int
+    prefix_chars: int
     # A digest, not the vector. Element-wise comparison of 384 floats produces a
     # diff nobody can read; this reduces "the vectors differ" to one line, and
     # the model is deterministic so exact equality is the right bar.
@@ -240,6 +241,7 @@ async def _chunk_rows(session: AsyncSession) -> tuple[ChunkRow, ...]:
             models.MemoryChunk.token_count,
             models.MemoryChunk.char_start,
             models.MemoryChunk.char_end,
+            models.MemoryChunk.prefix_chars,
             models.MemoryChunk.embedding,
             models.MemoryChunk.meta,
         )
@@ -264,10 +266,11 @@ async def _chunk_rows(session: AsyncSession) -> tuple[ChunkRow, ...]:
             token_count=row[7],
             char_start=row[8],
             char_end=row[9],
-            embedding_digest=digest_of(row[10]),
+            prefix_chars=row[10],
+            embedding_digest=digest_of(row[11]),
             # Serialised with sorted keys so that two equal mappings cannot
             # compare unequal because Postgres returned them in a different order.
-            metadata=_canonical(row[11]),
+            metadata=_canonical(row[12]),
         )
         for row in await session.execute(stmt)
     )

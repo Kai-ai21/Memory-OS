@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -16,9 +17,23 @@ from sqlalchemy.ext.asyncio import (
 
 from memoryos.adapters.db.models import Base
 from memoryos.api.app import create_app
-from memoryos.config import Settings
+from memoryos.config import Settings, get_settings
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# `clean_database` truncates every table, because truncation is the only
+# isolation strategy that survives code under test committing its own
+# transactions. So the one thing that must never happen is the suite reaching the
+# development database — and it did, three times during M2.0a, each time costing
+# a full re-ingest and re-embed of the corpus.
+#
+# Set here, in the rootdir conftest, which pytest imports before any test module
+# and before anything constructs `Settings`. Settings resolves `database_url` to
+# `test_database_url` under this value, so every consumer — the fixtures below,
+# the app factory, Alembic's env.py — lands on `memos_test` without being told
+# separately. `setdefault`, so an explicit environment still wins.
+os.environ.setdefault("MEMOS_ENVIRONMENT", "test")
+get_settings.cache_clear()
 
 
 def alembic_config() -> Config:

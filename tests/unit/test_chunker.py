@@ -43,13 +43,26 @@ def python(source: str) -> ParsedDocument:
 
 
 def round_trips(doc: ParsedDocument, chunk: TextChunk) -> bool:
-    """The chunk text ends with exactly the span it claims.
+    """The chunk's own text is exactly the span it claims.
 
-    Ends with rather than equals, because every chunk after the first carries
-    an overlap prefix borrowed from its predecessor. char_start/char_end name
-    the body alone — the part a citation should highlight.
+    Not equality against the whole of `chunk.text`: every chunk after the first
+    carries an overlap prefix borrowed from its predecessor, and
+    `prefix_chars` is how long that head is. char_start/char_end name the body
+    alone — the part a citation should highlight.
     """
-    return chunk.text.endswith(doc.text[chunk.char_start : chunk.char_end])
+    return chunk.text[chunk.prefix_chars :] == doc.text[chunk.char_start : chunk.char_end]
+
+
+def bracket_depth(text: str, offset: int) -> int:
+    """Open brackets before `offset`, counted naively.
+
+    Deliberately independent of the chunker's own scanner: a test that reused it
+    would assert the scanner agrees with itself. Only valid for sources with no
+    brackets inside strings or comments, which is why the fixtures below have
+    none.
+    """
+    head = text[:offset]
+    return sum(head.count(char) for char in "([{") - sum(head.count(char) for char in ")]}")
 
 
 # --------------------------------------------------------------------------
@@ -63,7 +76,7 @@ def test_the_version_encodes_the_parameters_and_the_window() -> None:
     # when nothing else changed.
     version = StructuralChunker(FakeEmbedder(max_sequence_tokens=512)).version
     assert version == (
-        "structural-v2:model_window=512:target=396:overlap=47:min=79:max=496"
+        "structural-v3:model_window=512:target=396:overlap=47:min=79:max=496"
     )
 
 
@@ -229,8 +242,59 @@ def test_overlap_can_be_switched_off() -> None:
 
 
 # --------------------------------------------------------------------------
-# Offsets
+# Offsets: what they index into
+#
+# M1.4 documented `char_start`/`char_end` as indexing exactly into the stored
+# text. That is true only at ordinal 0 — every later chunk carries a borrowed
+# overlap head — and the difference is invisible: a span computed from the
+# documented meaning lands on real text from the same document, just not the
+# text the chunk claims.
 # --------------------------------------------------------------------------
+
+
+@settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+@given(
+    text=st.text(
+        alphabet=st.characters(exclude_categories=["Cs"]), min_size=0, max_size=3000
+    )
+)
+def test_prefix_chars_locates_the_body_in_the_stored_text(text: str) -> None:
+    """`content[prefix_chars:] == document[char_start:char_end]`, always.
+
+    The invariant Phase 2's citations rest on. Stated as a property rather than
+    an example because the failing cases are the awkward ones — a section that
+    merged, a span the overlap could not reach back into — and those are what a
+    generator finds.
+    """
+    doc = document(text)
+    for chunk in StructuralChunker(COUNTER).chunk(doc):
+        assert chunk.text[chunk.prefix_chars :] == doc.text[chunk.char_start : chunk.char_end]
+
+
+def test_the_first_chunk_borrows_nothing() -> None:
+    # There is no predecessor to borrow from, so the stored text and the claimed
+    # span are the same thing — the one case M1.4's documented meaning held for.
+    for source in (SENTENCE * 300, "A short note.", "# H\n\n" + SENTENCE * 90):
+        chunks = StructuralChunker(COUNTER).chunk(document(source))
+        assert chunks
+        assert chunks[0].prefix_chars == 0
+        assert chunks[0].char_start == 0
+
+
+def test_the_bodies_concatenate_back_into_the_document() -> None:
+    """Nothing is dropped and nothing is counted twice.
+
+    The overlap makes the stored text overlap; the bodies must not. Reassembling
+    them in ordinal order has to give the document back character for character,
+    or some span of it is either unretrievable or claimed by two chunks.
+    """
+    doc = markdown(
+        "---\ntitle: T\n---\n\n# One\n\n" + SENTENCE * 40 + "\n\n## Two\n\n" + SENTENCE * 40
+    )
+    chunks = StructuralChunker(COUNTER).chunk(doc)
+
+    assert len(chunks) > 1
+    assert "".join(chunk.text[chunk.prefix_chars :] for chunk in chunks) == doc.text
 
 
 def test_offsets_round_trip_for_a_realistic_document() -> None:
@@ -363,6 +427,38 @@ def test_code_offsets_round_trip() -> None:
 
     for chunk in StructuralChunker(COUNTER).chunk(doc):
         assert round_trips(doc, chunk)
+
+
+def test_code_never_breaks_inside_an_unbalanced_bracket() -> None:
+    """A break inside an open call splits one statement across two chunks.
+
+    Measured on this repository before M1.4a: 88 of 94 mid-statement breaks, all
+    of them arriving through the whitespace splitter because `_fill_between`
+    could only ever emit two spans and both balanced candidate sets were
+    therefore rejected. The worst example severed a `raise ValueError(` in
+    `domain/entities.py`, leaving the explanation of why there are two
+    timestamps in neither chunk in full.
+    """
+    call = "\n".join(
+        [
+            "    result_{n} = compute(",
+            "        alpha_{n},",
+            "        beta_{n},",
+            "        gamma_{n},",
+            "    )",
+        ]
+    )
+    body = "\n".join(call.format(n=n) for n in range(60))
+    doc = python(f"def build():\n    total = 0\n{body}\n    return total\n")
+
+    chunks = StructuralChunker(COUNTER).chunk(doc)
+
+    assert len(chunks) > 1, "the fixture must be large enough to force a split"
+    for chunk in chunks[1:]:
+        assert bracket_depth(doc.text, chunk.char_start) == 0, (
+            f"boundary at {chunk.char_start} sits inside an open bracket: "
+            f"{doc.text[chunk.char_start : chunk.char_start + 40]!r}"
+        )
 
 
 def test_tiny_code_definitions_are_merged() -> None:
