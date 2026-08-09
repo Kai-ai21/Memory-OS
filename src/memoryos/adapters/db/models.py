@@ -41,6 +41,7 @@ from memoryos.domain.values import (
     MemoryKind,
     SourceKind,
     TimeProvenance,
+    Verdict,
 )
 
 # The embedding model chosen in M1.5 (all-MiniLM-L6-v2 class) produces 384
@@ -441,6 +442,98 @@ class EmbeddingCacheEntry(Base):
             f"cache_key ~ '{HEX64_PATTERN}'", name="ck_embedding_cache_key_hex"
         ),
         CheckConstraint("dimension > 0", name="ck_embedding_cache_dimension_positive"),
+    )
+
+
+class QueryJudgement(Base):
+    """A human's verdict on one result for one query.
+
+    The only table in this schema that a machine cannot regenerate. Every other
+    row here is either bytes observed at a source or something computed from
+    them; this is somebody's opinion, and if it is lost it can only be recreated
+    by asking them again. That is why `application/replay.py` classifies it
+    `USER_AUTHORED` rather than squeezing it into derived or source-of-truth —
+    replay must never truncate it and must never try to rebuild it.
+
+    The query is stored as text rather than as a foreign key to some `queries`
+    table. A judgement is *about* a phrasing: "how does claiming work" and "how
+    does the job queue claim work" are different queries with different right
+    answers, and normalising them into one row would erase the distinction the
+    golden set exists to measure.
+
+    **The identity of the judged item is its natural key, not a memory id, and
+    there is deliberately no foreign key to `memories`.** That is a departure from
+    the milestone's stated schema and it is forced, because the two requirements
+    it gives are contradictory: a replay deletes and recreates every memory row
+    with a new UUID, so any reference to `memories.id` either blocks the replay
+    or dies with it. Measured on this database — `TRUNCATE memory_chunks,
+    memories, jobs CASCADE` reports "truncate cascades to table
+    judgement_probe" and empties it, and a plain `DELETE FROM memories` takes it
+    too via `ON DELETE CASCADE`. Every full replay would silently destroy the
+    golden set, which is precisely what `USER_AUTHORED` exists to prevent.
+
+    So `(source_name, external_key)` is the identity — the same natural key
+    `verify-replay` compares on, and for the same reason: ids are minted per
+    write and a rebuild legitimately changes them. `memory_id` and `chunk_id`
+    survive as *snapshots*, plain columns recording what the system pointed at
+    when the human judged, alongside `rank_at_judgement` and
+    `score_at_judgement` which are snapshots for the same reason. The export
+    re-resolves the natural key to whatever is current, so the golden set stays
+    correct across any number of rebuilds.
+    """
+
+    __tablename__ = "query_judgements"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    query_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # The durable identity of the judged item, stable across rebuilds.
+    source_name: Mapped[str] = mapped_column(Text, nullable=False)
+    external_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # What the system pointed at when the verdict was given. No foreign key: see
+    # the class docstring. Null once a rebuild has moved on, which is honest —
+    # the judgement is still valid, the pointer simply is not.
+    memory_id: Mapped[UUID | None] = mapped_column(_UUID)
+    chunk_id: Mapped[UUID | None] = mapped_column(_UUID)
+    verdict: Mapped[str] = mapped_column(Text, nullable=False)
+    rank_at_judgement: Mapped[int | None] = mapped_column(Integer)
+    score_at_judgement: Mapped[float | None] = mapped_column(REAL)
+    # The filters in force when the judgement was made. A result judged
+    # irrelevant under a source filter is a different statement from the same
+    # verdict over the whole corpus.
+    filters: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=_EMPTY_JSONB
+    )
+    judged_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        # One verdict per (query, item). Re-judging updates rather than
+        # appending, so the golden set cannot hold two contradictory opinions
+        # about the same pair and quietly average them. Keyed on the natural
+        # identity rather than `memory_id`, which would let the same judgement be
+        # recorded again under a new id after every rebuild.
+        UniqueConstraint(
+            "query_text",
+            "source_name",
+            "external_key",
+            name="uq_query_judgements_query_item",
+        ),
+        _enum_check("verdict", Verdict, "ck_query_judgements_verdict"),
+        CheckConstraint(
+            "rank_at_judgement IS NULL OR rank_at_judgement >= 1",
+            name="ck_query_judgements_rank_positive",
+        ),
+        CheckConstraint("length(btrim(query_text)) > 0", name="ck_query_judgements_query_text"),
+        # A `missing` verdict has no rank, because the point of it is that the
+        # result was not in the ranking at all. Enforced rather than trusted:
+        # a rank on a missing row would silently corrupt any recall computed
+        # from this table.
+        CheckConstraint(
+            "verdict <> 'missing' OR rank_at_judgement IS NULL",
+            name="ck_query_judgements_missing_has_no_rank",
+        ),
+        Index("ix_query_judgements_query_text", "query_text"),
     )
 
 

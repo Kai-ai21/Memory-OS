@@ -7,6 +7,7 @@ set is simply never replayed and never reported.
 """
 
 from datetime import UTC, datetime
+from itertools import combinations
 from uuid import UUID
 
 import pytest
@@ -24,6 +25,7 @@ from memoryos.application.replay import (
     REPLAYABLE_EVENT_TYPES,
     SHADOW_TABLES,
     SOURCE_OF_TRUTH_TABLES,
+    USER_AUTHORED_TABLES,
     ReplayScope,
     ReplayStage,
     derived_tables,
@@ -63,28 +65,64 @@ def observed(**overrides: object) -> IngestionEvent:
 def test_every_table_is_classified_exactly_once() -> None:
     """The test that fails when a new table is not classified.
 
-    A table in neither set is never rebuilt and never mentioned; a table in both
-    is a contradiction about whether it holds anything irreplaceable. Either way
+    A table in no set is never rebuilt and never mentioned; a table in two is a
+    contradiction about whether it holds anything irreplaceable. Either way
     nothing errors at runtime — the replay guarantee just quietly stops covering
     part of the schema. So the check lives here, against the real metadata.
+
+    Three sets, not two. M1.7 shipped with two and reported that the binary was
+    one short; `query_judgements` is the table that made that concrete.
     """
     known = {table.name for table in Base.metadata.sorted_tables}
-    derived = set(DERIVED_TABLES)
+    sets = {
+        "SOURCE_OF_TRUTH_TABLES": SOURCE_OF_TRUTH_TABLES,
+        "DERIVED_TABLES": frozenset(DERIVED_TABLES),
+        "USER_AUTHORED_TABLES": USER_AUTHORED_TABLES,
+    }
+    classified = frozenset().union(*sets.values())
 
-    unclassified = known - (SOURCE_OF_TRUTH_TABLES | derived)
+    unclassified = known - classified
     assert unclassified == set(), (
-        f"{sorted(unclassified)} are in neither SOURCE_OF_TRUTH_TABLES nor "
-        f"DERIVED_TABLES. Decide whether each one can be rebuilt from the event "
-        f"log and the blob store, and add it to the right list in "
+        f"{sorted(unclassified)} are in none of {sorted(sets)}. Decide whether "
+        f"each one is irreplaceable input, rebuildable from the log and blobs, or "
+        f"written by a person, and add it to the right set in "
         f"memoryos/application/replay.py."
     )
 
-    in_both = SOURCE_OF_TRUTH_TABLES & derived
-    assert in_both == set(), f"{sorted(in_both)} claim to be both"
+    for left, right in combinations(sorted(sets), 2):
+        overlap = sets[left] & sets[right]
+        assert overlap == set(), f"{sorted(overlap)} is in both {left} and {right}"
 
-    # And neither list names a table that does not exist, which is how a set goes
-    # stale after a rename.
-    assert (SOURCE_OF_TRUTH_TABLES | derived) - known == set()
+    # And no set names a table that does not exist, which is how one goes stale
+    # after a rename.
+    assert classified - known == set()
+
+
+def test_human_authored_data_is_neither_derived_nor_ingestion_input() -> None:
+    """The classification the milestone turns on.
+
+    A judgement cannot be rebuilt — no amount of replaying the log produces
+    somebody's opinion — so it is not derived. It also does not feed ingestion,
+    so it is not source of truth in the sense the other set means. Putting it in
+    either would attach the wrong rule to it: derived tables get truncated, and
+    that would destroy the labelled data M2.0 is measured against.
+    """
+    assert "query_judgements" in USER_AUTHORED_TABLES
+    assert "query_judgements" not in DERIVED_TABLES
+    assert "query_judgements" not in SOURCE_OF_TRUTH_TABLES
+
+
+def test_no_user_authored_table_is_ever_truncated() -> None:
+    # `truncate_derived` names its tables explicitly, so this asserts the two
+    # lists cannot overlap however the cache flag is set.
+    for clear_cache in (False, True):
+        assert not (set(derived_tables(clear_cache=clear_cache)) & USER_AUTHORED_TABLES)
+
+
+def test_a_user_authored_table_is_never_built_in_a_workspace() -> None:
+    # A shadow swap replaces the tables it holds. Holding judgements would mean
+    # swapping in an empty copy of them.
+    assert not (set(SHADOW_TABLES) & USER_AUTHORED_TABLES)
 
 
 def test_the_derived_tables_are_ordered_child_before_parent() -> None:

@@ -77,6 +77,20 @@ class EventType(StrEnum):
     ITEM_DELETED = auto()
 
 
+class Verdict(StrEnum):
+    """What a human said about one result for one query.
+
+    `MISSING` is the one that carries the most information and the only one that
+    cannot be inferred from the ranking: it names a memory that *should* have
+    been returned and was not. Precision can be measured from the first two;
+    recall cannot be measured from anything else.
+    """
+
+    RELEVANT = auto()
+    NOT_RELEVANT = auto()
+    MISSING = auto()
+
+
 class EmbeddingRole(StrEnum):
     """Which side of a retrieval a piece of text is on.
 

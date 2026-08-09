@@ -4,7 +4,8 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
+from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.blobs.filesystem import FilesystemBlobStore
@@ -16,10 +17,14 @@ from memoryos.adapters.db.repositories import (
     SqlAlchemyArtifactRepository,
     SqlAlchemySourceRepository,
 )
+from memoryos.adapters.db.shadow import SHADOW_SCHEMA, PostgresShadowSchema
 from memoryos.adapters.parsers.registry import build_default_registry as build_parsers
 from memoryos.application.embed import EmbedMemory, EmbedReport
 from memoryos.application.normalize import NormalizeMemory
+from memoryos.application.replay import ReplayCorpus
 from memoryos.application.sync import SyncSource
+from memoryos.application.verification import Snapshot, snapshot
+from memoryos.config import Settings
 from memoryos.domain.entities import Memory, RawArtifact, Source
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobType
@@ -146,3 +151,171 @@ async def pipeline(
         cache=PostgresEmbeddingCache(sessions),
         sessions=sessions,
     )
+
+
+# --------------------------------------------------------------------------
+# The replay harness
+#
+# Shared rather than local to test_replay.py, because test_judgements.py needs
+# the same corpus: the guarantee it checks is that a replay of a real corpus
+# leaves human-authored rows alone, and that needs a real corpus to replay.
+# --------------------------------------------------------------------------
+
+QUEUE_TEXT = (
+    "The worker claims a task from the queue and holds a lease on it while the "
+    "handler runs to completion. Renewing that lease is how a long task keeps its "
+    "hold on the work it started. "
+)
+
+BREAD_TEXT = (
+    "A wild yeast starter is fed flour and water until it doubles reliably, then "
+    "folded gently and given a long cold rest in the refrigerator. "
+)
+
+
+@dataclass(slots=True)
+class Harness:
+    """Everything needed to ingest a corpus and then rebuild it.
+
+    The replay is built the way the container builds it — the real
+    `NormalizeMemory` and `EmbedMemory`, constructed per session factory so a
+    shadow rebuild writes through a different one. A test double for the pipeline
+    would prove the double works.
+    """
+
+    root: Path
+    source: Source
+    sessions: async_sessionmaker[AsyncSession]
+    blobs: FilesystemBlobStore
+    embedder: FakeEmbedder
+    sync: SyncSource
+    replay: ReplayCorpus
+
+    async def ingest(self) -> None:
+        """Sync, then drain the queue inline the way a worker would."""
+        await self.sync(self.source.id, full=True)
+        for job_type, handler in (
+            (JobType.NORMALIZE_MEMORY, self.normalize()),
+            (JobType.EMBED_MEMORY, self.embed()),
+        ):
+            async with self.sessions() as session:
+                targets = [
+                    UUID(row[0]["memory_id"])
+                    for row in await session.execute(
+                        select(models.Job.payload).where(
+                            models.Job.job_type == job_type.value
+                        )
+                    )
+                ]
+            for memory_id in targets:
+                await handler(memory_id)
+            async with self.sessions.begin() as session:
+                await session.execute(
+                    delete(models.Job).where(models.Job.job_type == job_type.value)
+                )
+
+    def normalize(self) -> NormalizeMemory:
+        return NormalizeMemory(
+            self.sessions, self.blobs, build_parsers(), StructuralChunker(self.embedder)
+        )
+
+    def embed(self) -> EmbedMemory:
+        return EmbedMemory(
+            self.sessions, self.embedder, PostgresEmbeddingCache(self.sessions)
+        )
+
+    async def snapshot(self) -> Snapshot:
+        return await snapshot(self.sessions)
+
+    async def count(self, table: type[models.Base]) -> int:
+        async with self.sessions() as session:
+            return int(
+                (
+                    await session.execute(select(func.count()).select_from(table))
+                ).scalar_one()
+            )
+
+    async def chunk_ids(self) -> list[str]:
+        async with self.sessions() as session:
+            return sorted(
+                str(row[0])
+                for row in await session.execute(select(models.MemoryChunk.id))
+            )
+
+
+def build_harness(
+    root: Path,
+    blobs_root: Path,
+    sessions: async_sessionmaker[AsyncSession],
+    source: Source,
+    settings: Settings,
+) -> Harness:
+    blobs = FilesystemBlobStore(blobs_root)
+    embedder = FakeEmbedder()
+    chunker = StructuralChunker(embedder)
+    replay = ReplayCorpus(
+        sessions,
+        make_normalize=lambda factory: NormalizeMemory(
+            factory, blobs, build_parsers(), chunker, enqueue_followup=False
+        ),
+        make_embed=lambda factory: EmbedMemory(
+            factory, embedder, PostgresEmbeddingCache(factory)
+        ),
+        make_shadow=lambda: PostgresShadowSchema(settings.database_url),
+    )
+    return Harness(
+        root=root,
+        source=source,
+        sessions=sessions,
+        blobs=blobs,
+        embedder=embedder,
+        sync=SyncSource(sessions, FilesystemConnector(blobs), blobs),
+        replay=replay,
+    )
+
+
+async def shadow_schemas(sessions: async_sessionmaker[AsyncSession]) -> set[str]:
+    """Any workspace schema still present. Should always be empty afterwards."""
+    async with sessions() as session:
+        return {
+            row[0]
+            for row in await session.execute(
+                sa_text(
+                    "SELECT nspname FROM pg_namespace WHERE nspname = :schema"
+                ).bindparams(schema=SHADOW_SCHEMA)
+            )
+        }
+
+
+async def add_source(
+    sessions: async_sessionmaker[AsyncSession], name: str, root: Path
+) -> Source:
+    source = Source(
+        id=new_id(), kind=SourceKind.FILESYSTEM, name=name, config={"root": str(root)}
+    )
+    async with sessions.begin() as session:
+        await SqlAlchemySourceRepository(session).add(source)
+    return source
+
+
+@pytest.fixture
+async def harness(
+    tmp_path: Path, sessions: async_sessionmaker[AsyncSession], settings: Settings
+) -> Harness:
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "queue.md").write_text("# Queue\n\n" + QUEUE_TEXT * 4 + "\n")
+    (root / "bread.txt").write_text(BREAD_TEXT * 4 + "\n")
+    (root / "mod.py").write_text(
+        "def handler(payload):\n"
+        + "\n".join(f"    step_{n} = transform(payload, {n})" for n in range(60))
+        + "\n    return payload\n"
+    )
+    # Two identical files, so the cache and the deduplication path are exercised.
+    (root / "copy-a.txt").write_text(BREAD_TEXT * 2 + "\n")
+    (root / "copy-b.txt").write_text(BREAD_TEXT * 2 + "\n")
+
+    source = await add_source(sessions, "corpus", root)
+    built = build_harness(root, tmp_path / "blobs", sessions, source, settings)
+    await built.ingest()
+    return built

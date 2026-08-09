@@ -11,22 +11,17 @@ that the vector attached to it is the same vector. A deterministic fake proves
 that better than the real model would, because it is reproducible.
 """
 
-from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
 import pytest
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from memoryos.adapters.blobs.filesystem import FilesystemBlobStore
 from memoryos.adapters.chunking.structural import StructuralChunker
-from memoryos.adapters.connectors.filesystem import FilesystemConnector
 from memoryos.adapters.db import models
 from memoryos.adapters.db.embedding_cache import PostgresEmbeddingCache
-from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
-from memoryos.adapters.db.shadow import SHADOW_SCHEMA, PostgresShadowSchema
 from memoryos.adapters.parsers.registry import build_default_registry as build_parsers
 from memoryos.application.embed import EmbedMemory
 from memoryos.application.normalize import NormalizeMemory
@@ -38,176 +33,22 @@ from memoryos.application.replay import (
     ReplayStage,
     truncate_derived,
 )
-from memoryos.application.sync import SyncSource
-from memoryos.application.verification import Snapshot, compare, snapshot
+from memoryos.application.verification import compare, snapshot
 from memoryos.config import Settings
-from memoryos.domain.entities import Source
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobType
-from memoryos.domain.values import ContentHash, SourceKind
+from memoryos.domain.values import ContentHash
+from tests.integration.conftest import (
+    BREAD_TEXT,
+    QUEUE_TEXT,
+    Harness,
+    add_source,
+    build_harness,
+    shadow_schemas,
+)
 from tests.support.fakes import FakeEmbedder
 
 pytestmark = pytest.mark.integration
-
-PARAGRAPH = (
-    "The worker claims a task from the queue and holds a lease on it while the "
-    "handler runs to completion. Renewing that lease is how a long task keeps its "
-    "hold on the work it started. "
-)
-
-OTHER = (
-    "A wild yeast starter is fed flour and water until it doubles reliably, then "
-    "folded gently and given a long cold rest in the refrigerator. "
-)
-
-
-@dataclass(slots=True)
-class Harness:
-    """Everything needed to ingest a corpus and then rebuild it.
-
-    The replay is built the way the container builds it — the real
-    `NormalizeMemory` and `EmbedMemory`, constructed per session factory so a
-    shadow rebuild writes through a different one. A test double for the pipeline
-    would prove the double works.
-    """
-
-    root: Path
-    source: Source
-    sessions: async_sessionmaker[AsyncSession]
-    blobs: FilesystemBlobStore
-    embedder: FakeEmbedder
-    sync: SyncSource
-    replay: ReplayCorpus
-
-    async def ingest(self) -> None:
-        """Sync, then drain the queue inline the way a worker would."""
-        await self.sync(self.source.id, full=True)
-        for job_type, handler in (
-            (JobType.NORMALIZE_MEMORY, self.normalize()),
-            (JobType.EMBED_MEMORY, self.embed()),
-        ):
-            async with self.sessions() as session:
-                targets = [
-                    UUID(row[0]["memory_id"])
-                    for row in await session.execute(
-                        select(models.Job.payload).where(
-                            models.Job.job_type == job_type.value
-                        )
-                    )
-                ]
-            for memory_id in targets:
-                await handler(memory_id)
-            async with self.sessions.begin() as session:
-                await session.execute(
-                    delete(models.Job).where(models.Job.job_type == job_type.value)
-                )
-
-    def normalize(self) -> NormalizeMemory:
-        return NormalizeMemory(
-            self.sessions, self.blobs, build_parsers(), StructuralChunker(self.embedder)
-        )
-
-    def embed(self) -> EmbedMemory:
-        return EmbedMemory(
-            self.sessions, self.embedder, PostgresEmbeddingCache(self.sessions)
-        )
-
-    async def snapshot(self) -> Snapshot:
-        return await snapshot(self.sessions)
-
-    async def count(self, table: type[models.Base]) -> int:
-        async with self.sessions() as session:
-            return int(
-                (
-                    await session.execute(select(func.count()).select_from(table))
-                ).scalar_one()
-            )
-
-    async def chunk_ids(self) -> list[str]:
-        async with self.sessions() as session:
-            return sorted(
-                str(row[0])
-                for row in await session.execute(select(models.MemoryChunk.id))
-            )
-
-
-def build_harness(
-    root: Path,
-    blobs_root: Path,
-    sessions: async_sessionmaker[AsyncSession],
-    source: Source,
-    settings: Settings,
-) -> Harness:
-    blobs = FilesystemBlobStore(blobs_root)
-    embedder = FakeEmbedder()
-    chunker = StructuralChunker(embedder)
-    replay = ReplayCorpus(
-        sessions,
-        make_normalize=lambda factory: NormalizeMemory(
-            factory, blobs, build_parsers(), chunker, enqueue_followup=False
-        ),
-        make_embed=lambda factory: EmbedMemory(
-            factory, embedder, PostgresEmbeddingCache(factory)
-        ),
-        make_shadow=lambda: PostgresShadowSchema(settings.database_url),
-    )
-    return Harness(
-        root=root,
-        source=source,
-        sessions=sessions,
-        blobs=blobs,
-        embedder=embedder,
-        sync=SyncSource(sessions, FilesystemConnector(blobs), blobs),
-        replay=replay,
-    )
-
-
-async def shadow_schemas(sessions: async_sessionmaker[AsyncSession]) -> set[str]:
-    """Any workspace schema still present. Should always be empty afterwards."""
-    async with sessions() as session:
-        return {
-            row[0]
-            for row in await session.execute(
-                sa_text(
-                    "SELECT nspname FROM pg_namespace WHERE nspname = :schema"
-                ).bindparams(schema=SHADOW_SCHEMA)
-            )
-        }
-
-
-async def add_source(
-    sessions: async_sessionmaker[AsyncSession], name: str, root: Path
-) -> Source:
-    source = Source(
-        id=new_id(), kind=SourceKind.FILESYSTEM, name=name, config={"root": str(root)}
-    )
-    async with sessions.begin() as session:
-        await SqlAlchemySourceRepository(session).add(source)
-    return source
-
-
-@pytest.fixture
-async def harness(
-    tmp_path: Path, sessions: async_sessionmaker[AsyncSession], settings: Settings
-) -> Harness:
-    root = tmp_path / "corpus"
-    root.mkdir()
-    (root / "queue.md").write_text("# Queue\n\n" + PARAGRAPH * 4 + "\n")
-    (root / "bread.txt").write_text(OTHER * 4 + "\n")
-    (root / "mod.py").write_text(
-        "def handler(payload):\n"
-        + "\n".join(f"    step_{n} = transform(payload, {n})" for n in range(60))
-        + "\n    return payload\n"
-    )
-    # Two identical files, so the cache and the deduplication path are exercised.
-    (root / "copy-a.txt").write_text(OTHER * 2 + "\n")
-    (root / "copy-b.txt").write_text(OTHER * 2 + "\n")
-
-    source = await add_source(sessions, "corpus", root)
-    built = build_harness(root, tmp_path / "blobs", sessions, source, settings)
-    await built.ingest()
-    return built
-
 
 # --------------------------------------------------------------------------
 # The milestone's central claim
@@ -335,9 +176,9 @@ async def test_versions_and_tombstones_survive_a_rebuild(harness: Harness) -> No
     but versions numbered in the wrong order, or `is_current` on the wrong row,
     does not.
     """
-    (harness.root / "queue.md").write_text("# Queue\n\n" + PARAGRAPH * 5 + "\n")
+    (harness.root / "queue.md").write_text("# Queue\n\n" + QUEUE_TEXT * 5 + "\n")
     await harness.ingest()
-    (harness.root / "queue.md").write_text("# Queue v3\n\n" + PARAGRAPH * 6 + "\n")
+    (harness.root / "queue.md").write_text("# Queue v3\n\n" + QUEUE_TEXT * 6 + "\n")
     await harness.ingest()
     (harness.root / "bread.txt").unlink()
     await harness.ingest()
@@ -363,7 +204,7 @@ async def test_versions_and_tombstones_survive_a_rebuild(harness: Harness) -> No
 async def test_exactly_one_version_is_current_after_a_rebuild(
     harness: Harness,
 ) -> None:
-    (harness.root / "queue.md").write_text("# Queue\n\n" + PARAGRAPH * 7 + "\n")
+    (harness.root / "queue.md").write_text("# Queue\n\n" + QUEUE_TEXT * 7 + "\n")
     await harness.ingest()
 
     await truncate_derived(harness.sessions, clear_cache=False)
@@ -393,7 +234,7 @@ async def test_a_deleted_file_that_returns_gets_a_new_version(
     """
     (harness.root / "bread.txt").unlink()
     await harness.ingest()
-    (harness.root / "bread.txt").write_text(OTHER * 4 + "\n")
+    (harness.root / "bread.txt").write_text(BREAD_TEXT * 4 + "\n")
     await harness.ingest()
 
     before = await harness.snapshot()
@@ -414,7 +255,7 @@ async def test_a_deleted_file_that_returns_gets_a_new_version(
 async def test_a_superseded_version_keeps_no_chunks(harness: Harness) -> None:
     # A version nobody can retrieve leaving chunks behind is the same failure as
     # a deleted memory leaving chunks behind.
-    (harness.root / "queue.md").write_text("# Queue\n\n" + PARAGRAPH * 9 + "\n")
+    (harness.root / "queue.md").write_text("# Queue\n\n" + QUEUE_TEXT * 9 + "\n")
     await harness.ingest()
 
     await truncate_derived(harness.sessions, clear_cache=False)
@@ -601,7 +442,7 @@ async def test_replaying_one_source_leaves_another_untouched(
 ) -> None:
     other_root = tmp_path / "other"
     other_root.mkdir()
-    (other_root / "elsewhere.md").write_text("# Elsewhere\n\n" + OTHER * 5 + "\n")
+    (other_root / "elsewhere.md").write_text("# Elsewhere\n\n" + BREAD_TEXT * 5 + "\n")
     other_source = await add_source(sessions, "other", other_root)
     other = build_harness(
         other_root, tmp_path / "other-blobs", sessions, other_source, settings
@@ -637,7 +478,7 @@ async def test_a_scoped_replay_only_clears_the_jobs_it_invalidates(
     """
     other_root = tmp_path / "other"
     other_root.mkdir()
-    (other_root / "elsewhere.md").write_text("# Elsewhere\n\n" + OTHER * 5 + "\n")
+    (other_root / "elsewhere.md").write_text("# Elsewhere\n\n" + BREAD_TEXT * 5 + "\n")
     other_source = await add_source(sessions, "other", other_root)
     other = build_harness(
         other_root, tmp_path / "other-blobs", sessions, other_source, settings
@@ -832,7 +673,7 @@ async def test_verification_notices_a_wrong_is_current_flag(
     harness: Harness,
 ) -> None:
     """The M1.6.1-shaped failure: right counts, wrong current version."""
-    (harness.root / "queue.md").write_text("# Queue\n\n" + PARAGRAPH * 5 + "\n")
+    (harness.root / "queue.md").write_text("# Queue\n\n" + QUEUE_TEXT * 5 + "\n")
     await harness.ingest()
 
     async with harness.sessions.begin() as session:

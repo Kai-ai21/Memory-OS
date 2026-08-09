@@ -8,8 +8,14 @@ it is not.
 Which tables are which is written down below as data rather than described in
 prose, because a table added to the wrong set breaks the guarantee silently —
 nothing errors, the rebuild simply loses a category of information. A test
-asserts every table in `Base.metadata` appears in exactly one of the two sets, so
-adding a table without classifying it fails the build.
+asserts every table in `Base.metadata` appears in exactly one of the three sets,
+so adding a table without classifying it fails the build.
+
+There are three sets and not two. M1.7 shipped with two and said in its own
+report that the binary hid a third category; `query_judgements` is what made that
+concrete. Human-authored data is neither rebuildable nor part of ingestion, and
+the rule it needs — never truncated, never written by a replay — is not the rule
+either other set carries.
 
 Determinism is the property that makes a rebuild worth anything. Nothing derived
 here reads the clock: `ingested_at` and `deleted_at` come from the causing
@@ -73,6 +79,22 @@ SOURCE_OF_TRUTH_TABLES: frozenset[str] = frozenset(
         "ingestion_events",
     }
 )
+
+# Written by a person, reconstructible by nobody.
+#
+# M1.7 shipped with two sets and noted in its report that the binary was one set
+# short — `jobs` is classified derived and truncating it works, but it is
+# *discardable*, not reconstructible, which is a different property that happened
+# to be safe. `query_judgements` is where that gap stops being theoretical. It is
+# not derived, because no amount of replaying produces somebody's opinion about a
+# search result. It is not source-of-truth-for-ingestion either: it describes the
+# corpus rather than feeding it, and a replay does not read it.
+#
+# The operational rule is stronger than for either other set: replay must not
+# truncate it *and* must not write it. It is the input to M2.0's evaluation
+# harness, so losing it means losing the labelled data the next milestone is
+# measured against.
+USER_AUTHORED_TABLES: frozenset[str] = frozenset({"query_judgements"})
 
 # Reconstructible from the tables above plus the blob store. Ordered
 # child-before-parent, so truncating or dropping them in sequence never fights a

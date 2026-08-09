@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from memoryos.adapters.connectors.filesystem import (
     DEFAULT_EXCLUDE,
@@ -52,6 +52,11 @@ class SourceOut(BaseModel):
     last_sync_at: datetime | None
     last_full_sync_at: datetime | None
     created_at: datetime
+    # Current, undeleted memories and their chunks. Zero is the interesting
+    # value: a registered source with no memories has never synced or matched
+    # nothing, and a total corpus count cannot tell you which source that is.
+    memories: int = 0
+    chunks: int = 0
 
 
 class SyncAccepted(BaseModel):
@@ -104,10 +109,46 @@ async def create_source(body: CreateSource, container: ContainerDep) -> models.S
 
 
 @router.get("/sources", response_model=list[SourceOut])
-async def list_sources(container: ContainerDep) -> list[models.Source]:
+async def list_sources(container: ContainerDep) -> list[SourceOut]:
+    """Every source, with how much of the corpus came from it.
+
+    Outer-joined and grouped rather than a count per source in a loop: the list
+    is short today, but a query per row is the shape that stops being fine
+    without anybody noticing.
+    """
+    stmt = (
+        select(
+            models.Source,
+            func.count(func.distinct(models.Memory.id)),
+            func.count(models.MemoryChunk.id),
+        )
+        .outerjoin(
+            models.Memory,
+            (models.Memory.source_id == models.Source.id)
+            & models.Memory.is_current.is_(True)
+            & models.Memory.deleted_at.is_(None),
+        )
+        .outerjoin(models.MemoryChunk, models.MemoryChunk.memory_id == models.Memory.id)
+        .group_by(models.Source.id)
+        .order_by(models.Source.name)
+    )
     async with container.database.session_factory() as session:
-        result = await session.execute(select(models.Source).order_by(models.Source.name))
-        return list(result.scalars())
+        rows = (await session.execute(stmt)).all()
+
+    return [
+        SourceOut(
+            id=source.id,
+            kind=source.kind,
+            name=source.name,
+            config=source.config,
+            last_sync_at=source.last_sync_at,
+            last_full_sync_at=source.last_full_sync_at,
+            created_at=source.created_at,
+            memories=memories,
+            chunks=chunks,
+        )
+        for source, memories, chunks in rows
+    ]
 
 
 @router.post(
