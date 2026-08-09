@@ -219,13 +219,32 @@ class Parser(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class TextChunk:
-    """A retrievable span, with offsets into the document it came from."""
+    """A retrievable span, with offsets into the document it came from.
+
+    The invariant, exactly:
+
+        text[prefix_chars:] == document[char_start:char_end]
+
+    `char_start`/`char_end` name the chunk's *own* span, and those spans tile
+    the document contiguously. `text` is longer than that span for every chunk
+    but the first, because the chunker prepends an overlap prefix borrowed from
+    its predecessor so a concept crossing a boundary appears whole somewhere.
+    `prefix_chars` is how long that borrowed head is.
+
+    M1.4 documented the offsets as indexing exactly into `text`, which is true
+    only at ordinal 0. Anything computing a span from that reading highlights
+    text the chunk does not claim — and plausibly, since the text it highlights
+    is real text from the same document.
+    """
 
     ordinal: int
     text: str
     char_start: int
     char_end: int
     token_count: int
+    # Length of the borrowed overlap head. 0 at ordinal 0, which has no
+    # predecessor to borrow from.
+    prefix_chars: int = 0
     # What the chunker knew about where this came from. A definition split
     # across several chunks records its name here, so a citation can still say
     # which function the span belongs to.
@@ -382,6 +401,12 @@ class ScoredChunk:
     score: float
     char_start: int
     char_end: int
+    # How much of `text` is borrowed lead-in from the previous chunk:
+    # `text[prefix_chars:] == document[char_start:char_end]`. Carried on the
+    # result rather than left to the caller, because the arithmetic that
+    # recovers it from the lengths is exactly the arithmetic a citation gets
+    # silently wrong.
+    prefix_chars: int = 0
     # What the chunker recorded about this span's origin — `{"definition":
     # "SyncSource._ingest"}` and the like. Surfaced here because a citation that
     # can name the function it came from is the difference between "somewhere in

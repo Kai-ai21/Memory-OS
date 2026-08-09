@@ -141,7 +141,19 @@ class Memory:
 
 @dataclass(frozen=True, slots=True)
 class MemoryChunk:
-    """A retrievable span of one memory's text."""
+    """A retrievable span of one memory's text.
+
+    The relationship between the stored text and the offsets, exactly:
+
+        content[prefix_chars:] == memory.content[char_start:char_end]
+
+    `char_start`/`char_end` name the span this chunk *claims* — they tile the
+    memory's text contiguously, chunk N ending where N+1 begins — while
+    `content` additionally carries an overlap head borrowed from the previous
+    chunk. Without `prefix_chars` that head is invisible, and a citation
+    reading the offsets as bounds on `content` highlights a span the chunk does
+    not claim.
+    """
 
     id: UUID
     memory_id: UUID
@@ -150,12 +162,15 @@ class MemoryChunk:
     content: str
     token_count: int
     # Offsets into the memory's normalized text, so a citation can highlight the
-    # exact matched span rather than the whole document.
+    # exact matched span rather than the whole document. They bound the chunk's
+    # own span, not `content` — see the invariant above.
     char_start: int
     char_end: int
     # Versioned on the chunk, not the memory, so re-chunking can be selective.
     chunker_version: str
     content_hash: ContentHash
+    # Length of the borrowed overlap head. 0 at ordinal 0.
+    prefix_chars: int = 0
     # What the chunker knew about the span's origin — the enclosing definition's
     # name, for code. Carried through to query time so a citation can name it.
     meta: dict[str, Any] = field(default_factory=dict)
@@ -174,3 +189,5 @@ class MemoryChunk:
             raise ValueError(
                 f"char_end must be > char_start, got {self.char_end} <= {self.char_start}"
             )
+        if self.prefix_chars < 0:
+            raise ValueError(f"prefix_chars must be >= 0, got {self.prefix_chars}")

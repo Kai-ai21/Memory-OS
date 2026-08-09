@@ -12,7 +12,7 @@ from uuid import UUID
 
 import pytest
 from pypdf import PdfWriter
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.blobs.filesystem import FilesystemBlobStore
@@ -432,6 +432,50 @@ async def test_a_new_chunker_version_actually_re_chunks(pipeline: Pipeline) -> N
     assert {chunk.chunker_version for chunk in after} == {
         StructuralChunker(FakeEmbedder(), ChunkerConfig(target=200, minimum=40)).version
     }
+
+
+async def test_rechunk_populates_prefix_chars_on_existing_memories(
+    pipeline: Pipeline,
+) -> None:
+    """The repair path for corpora written before M1.4a.
+
+    Migration 0008 gives every existing row `prefix_chars = 0`, which is wrong
+    for every chunk after the first — the borrowed head is not recoverable from
+    a migration, and 28% of this repository's stored chunk text was borrowed. So
+    the column ships provisional, the chunker version bumps in the same change
+    to make every row stale, and the rechunk is what writes the real value.
+    """
+    await pipeline.run_sync()
+    await pipeline.normalize_all()
+
+    # The state migration 0008 leaves behind: the column is there, every row
+    # claims to have borrowed nothing, and the stamp is the old chunker's.
+    async with pipeline.sessions.begin() as session:
+        await session.execute(
+            update(models.MemoryChunk).values(
+                prefix_chars=0, chunker_version="structural-v2:superseded"
+            )
+        )
+        await session.execute(delete(models.Job))
+
+    current = StructuralChunker(FakeEmbedder()).version
+    stale = await find_stale(pipeline.sessions, current_version=current)
+    assert await enqueue_rechunk(pipeline.sessions, stale) == 3
+
+    await pipeline.normalize_all()
+
+    rows = await chunk_rows(pipeline.sessions)
+    documents = {
+        memory.id: memory.content
+        for memory in [
+            await memory_for(pipeline.sessions, key)
+            for key in ("guide.md", "notes.txt", "mod.py")
+        ]
+    }
+    assert any(row.prefix_chars > 0 for row in rows), "nothing borrowed after a rechunk"
+    for row in rows:
+        document = documents[row.memory_id] or ""
+        assert row.content[row.prefix_chars :] == document[row.char_start : row.char_end]
 
 
 # --------------------------------------------------------------------------
