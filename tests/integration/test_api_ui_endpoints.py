@@ -209,7 +209,7 @@ async def test_doctor_reports_unhealthy_when_something_is_wrong(
 
 def payload(**overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
-        "query_text": "how does the job queue claim work",
+        "query_text": "how a lease is renewed",
         "source_name": "corpus",
         "external_key": "queue.md",
         "verdict": "relevant",
@@ -229,7 +229,7 @@ async def test_posting_a_judgement_and_listing_it(
     assert created.json()["id"]
 
     (summary,) = (await client.get("/judgements")).json()
-    assert summary["query_text"] == "how does the job queue claim work"
+    assert summary["query_text"] == "how a lease is renewed"
     assert summary["relevant"] == 1
     assert summary["total"] == 1
 

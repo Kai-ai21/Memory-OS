@@ -34,7 +34,7 @@ NOW = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
 
 def judgement(**overrides: object) -> JudgementInput:
     fields: dict[str, object] = {
-        "query_text": "how does the job queue claim work",
+        "query_text": "how a lease is renewed",
         "source_name": "corpus",
         "external_key": "queue.md",
         "verdict": Verdict.RELEVANT,

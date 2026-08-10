@@ -14,6 +14,7 @@ whether a change fixed *that* case, and never refreshed.
 opinions about the same pair is not richer data, it is data nobody can use.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -25,6 +26,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
+from memoryos.application.golden import DEFAULT_EVAL_EXCLUDE
 from memoryos.domain.ids import new_id
 from memoryos.domain.values import Verdict
 
@@ -208,6 +210,11 @@ class GoldenQuery:
 class GoldenSet:
     generated_at: str
     queries: list[GoldenQuery]
+    # Glob patterns the harness drops from a ranking before scoring. Carried in
+    # the export rather than compiled into the harness so it is visible and
+    # editable next to the data it applies to; `export-golden-set` preserves an
+    # existing list rather than overwriting a hand edit.
+    eval_exclude: tuple[str, ...] = DEFAULT_EVAL_EXCLUDE
 
     @property
     def totals(self) -> dict[str, int]:
@@ -226,6 +233,7 @@ class GoldenSet:
     def as_dict(self) -> dict[str, Any]:
         return {
             "generated_at": self.generated_at,
+            "eval_exclude": list(self.eval_exclude),
             "totals": self.totals,
             "queries": [
                 {
@@ -252,7 +260,10 @@ class GoldenSet:
 
 
 async def export_golden_set(
-    session_factory: async_sessionmaker[AsyncSession], *, now: datetime
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    now: datetime,
+    eval_exclude: Sequence[str] | None = None,
 ) -> GoldenSet:
     """The labelled data, grouped by query, with ids re-resolved.
 
@@ -301,6 +312,9 @@ async def export_golden_set(
 
     return GoldenSet(
         generated_at=now.isoformat(),
+        eval_exclude=(
+            DEFAULT_EVAL_EXCLUDE if eval_exclude is None else tuple(eval_exclude)
+        ),
         queries=[
             GoldenQuery(
                 query_text=query_text,

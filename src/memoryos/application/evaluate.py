@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
-from memoryos.application.golden import GoldenQuery, GoldenSet
+from memoryos.application.golden import GoldenQuery, GoldenSet, excluded_by
 from memoryos.application.metrics import EvalResult, score
 from memoryos.application.ports import SearchFilters
 from memoryos.application.search import MemoryHit, SearchMemories
@@ -59,6 +59,11 @@ class QueryRun:
     result: EvalResult
     rows: list[RetrievedRow]
     filters: dict[str, Any]
+    # Memories dropped by `eval_exclude` before anything was scored, as
+    # `external_key -> the pattern that dropped it`. Reported rather than
+    # silently applied: a filter that quietly removes results is a filter nobody
+    # can audit, and this one directly changes every number in the run.
+    excluded: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +128,11 @@ class EvaluationRun:
                 }
                 for summary in self.summaries()
             },
-            "results": [run.result.as_dict() for run in self.runs],
+            "eval_exclude": list(self.golden.exclude),
+            "results": [
+                {**run.result.as_dict(), "excluded": dict(run.excluded)}
+                for run in self.runs
+            ],
             "excluded": [
                 {"query_text": item.query_text, "reason": item.reason}
                 for item in self.golden.excluded
@@ -157,8 +166,19 @@ async def evaluate(
         filters, filter_warnings = await _resolve_filters(query.filters, session_factory)
         warnings.extend(f"{query.query_text}: {note}" for note in filter_warnings)
 
-        result = await search(query.query_text, k=k, filters=filters, mode=mode)
-        rows = _rows(query, result.hits)
+        # Over-fetched by however many results the exclusions will remove, so a
+        # filtered run still scores k results rather than k minus the corpus's
+        # self-references. Without this, excluding a file would improve
+        # precision purely by shortening the list.
+        hits = await _retrieve(search, query, k=k, filters=filters, mode=mode, golden=golden)
+        excluded = {
+            hit.external_key: pattern
+            for hit in hits
+            if (pattern := excluded_by(golden.exclude, hit.external_key)) is not None
+        }
+        kept = [hit for hit in hits if hit.external_key not in excluded][:k]
+
+        rows = _rows(query, kept)
         runs.append(
             QueryRun(
                 result=score(
@@ -169,6 +189,7 @@ async def evaluate(
                 ),
                 rows=rows,
                 filters=dict(query.filters),
+                excluded=excluded,
             )
         )
 
@@ -181,6 +202,35 @@ async def evaluate(
         mode=mode,
         warnings=warnings,
     )
+
+
+async def _retrieve(
+    search: SearchMemories,
+    query: GoldenQuery,
+    *,
+    k: int,
+    filters: SearchFilters,
+    mode: SearchMode,
+    golden: GoldenSet,
+) -> list[MemoryHit]:
+    """Ask for enough results that k survive the exclusions.
+
+    One extra search at a wider k rather than a guess, and only when the first
+    pass actually lost something — most queries retrieve nothing excluded and
+    pay nothing.
+    """
+    hits = await search(query.query_text, k=k, filters=filters, mode=mode)
+    if not golden.exclude:
+        return list(hits.hits)
+
+    dropped = sum(
+        1 for hit in hits.hits if excluded_by(golden.exclude, hit.external_key) is not None
+    )
+    if dropped == 0:
+        return list(hits.hits)
+
+    widened = await search(query.query_text, k=k + dropped, filters=filters, mode=mode)
+    return list(widened.hits)
 
 
 def _rows(query: GoldenQuery, hits: Sequence[MemoryHit]) -> list[RetrievedRow]:
@@ -296,6 +346,19 @@ def format_verbose(run: EvaluationRun) -> str:
 
 def _notes(run: EvaluationRun) -> list[str]:
     lines: list[str] = []
+    dropped = [(r.result.query_text, r.excluded) for r in run.runs if r.excluded]
+    if dropped:
+        total = sum(len(items) for _, items in dropped)
+        lines += [
+            "",
+            f"excluded {total} results from {len(dropped)} queries "
+            f"(eval_exclude: {', '.join(run.golden.exclude)}):",
+        ]
+        lines += [
+            f"  {query}\n"
+            + "\n".join(f"      {key}  [{pattern}]" for key, pattern in sorted(items.items()))
+            for query, items in dropped
+        ]
     if run.golden.excluded:
         lines += ["", f"excluded {len(run.golden.excluded)} unscoreable queries:"]
         lines += [
@@ -307,6 +370,72 @@ def _notes(run: EvaluationRun) -> list[str]:
     if run.warnings:
         lines += ["", "warnings:"] + [f"  {note}" for note in run.warnings]
     return lines
+
+
+# --------------------------------------------------------------------------
+# Stability
+#
+# The question this answers is not "is the system good" but "how small a
+# difference can this harness honestly see". M2.2 tuned nothing and still moved
+# mean MRR by 0.009 by rewriting a README section, which is larger than the
+# gap it was trying to report. A measured floor is what stops the next
+# milestone reporting noise as a result.
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Stability:
+    metric: str
+    values: list[float]
+
+    @property
+    def mean(self) -> float:
+        return _mean(self.values)
+
+    @property
+    def stdev(self) -> float:
+        # Population, not sample: these are all the runs there were, not a
+        # sample drawn from a larger set of runs.
+        return statistics.pstdev(self.values) if len(self.values) > 1 else 0.0
+
+    @property
+    def spread(self) -> float:
+        return max(self.values) - min(self.values) if self.values else 0.0
+
+
+def stability(runs: Sequence[EvaluationRun]) -> list[Stability]:
+    """Per-metric variation across repeated runs of the same evaluation."""
+    return [
+        Stability(
+            metric=label.format(k=runs[0].k),
+            values=[_mean([getattr(r, attribute) for r in run.results]) for run in runs],
+        )
+        for label, attribute in METRICS
+    ]
+
+
+def format_stability(runs: Sequence[EvaluationRun]) -> str:
+    lines = [
+        f"repeated {len(runs)}x over an unchanged corpus",
+        "",
+        f"{'':<14}{'mean':>10}{'stdev':>10}{'spread':>10}",
+    ]
+    for row in stability(runs):
+        lines.append(
+            f"{row.metric:<14}{row.mean:>10.4f}{row.stdev:>10.4f}{row.spread:>10.4f}"
+        )
+    worst = max((row.spread for row in stability(runs)), default=0.0)
+    lines += [
+        "",
+        (
+            "zero across the board: retrieval is deterministic, so repetition "
+            "alone cannot establish a resolution floor — corpus sensitivity is "
+            "what sets it."
+            if worst == 0.0
+            else f"largest spread {worst:.4f}: differences below this are not evidence."
+        ),
+    ]
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------

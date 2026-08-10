@@ -7,7 +7,7 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 ## Status
 
 **Phase 1 complete**, plus M2.0a (the search interface), M2.0 (the evaluation harness),
-M2.1 (keyword search) and M2.2 (hybrid retrieval).
+M2.1 (keyword search), M2.2 (hybrid retrieval) and M2.3a (measurement reliability).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -52,7 +52,7 @@ uv run memoryos worker --drain
 
 uv run memoryos stats
 uv run memoryos doctor
-uv run memoryos search "how does the job queue claim work" -k 5
+uv run memoryos search "how a worker takes a task and holds it" -k 5
 uv run memoryos verify-replay
 ```
 
@@ -236,7 +236,7 @@ choosing the setting that achieves better performance on your task." Measured on
 loses. On the six-document fixture the prefix takes the queue question from `+0.0060` to `-0.0007`
 — an *inverted* ranking, not a narrower margin — while improving the baking question from `+0.1344`
 to `+0.1556`. On this repository's 719 chunks it changes the top result for two of the four
-assessment queries, and costs "why do we store two timestamps" the file where the answer is
+assessment queries, and costs the two-timestamps question the file where the answer is
 actually written. Mean margin prefers the prefix by 0.007; rankings reject it 1–2, and a ranking is
 what a user sees. So the string is recorded in `DOCUMENTED_QUERY_PREFIXES` and `APPLY_QUERY_PREFIX`
 is empty. `tests/slow/test_query_prefix.py` re-runs that A/B against whichever setting is
@@ -273,7 +273,7 @@ tell you whether the vectors mean anything.
 ## Search
 
 ```bash
-memoryos search "how does the job queue claim work" -k 5
+memoryos search "how a worker takes a task and holds it" -k 5
 memoryos search "..." --exact          # sequential scan, to see what the index missed
 memoryos search "..." --mode keyword   # the lexical half, see below
 memoryos eval-recall --queries 50 --ef-search 40,100,200,400
@@ -451,7 +451,7 @@ needs no extra request to do it.
 Three verdicts per result — relevant, not relevant, missing — one click each. `missing`
 is separate because by definition its subject is not on screen, and it carries no rank.
 The same three buttons appear on each matched chunk, which is the only way to record
-"right file, wrong chunk": M2.0 found `why do we store two timestamps` returning both
+"right file, wrong chunk": M2.0 found the two-timestamps question returning both
 `README.md` and `models.py` inside the top six on paragraphs that do not distinguish
 `occurred_at` from `ingested_at`, a failure a memory-level verdict scores as a success.
 
@@ -507,28 +507,71 @@ than scored zero, and every triple is resolved against the current corpus at loa
 with the failures *named*: a golden set that quietly shrinks as files move reports a
 rising score for a corpus that is losing its answer key.
 
-The baseline is 21 queries over 235 judgements at k=10, and it lives in
+The baseline is 41 queries over 440 judgements at k=10, and it lives in
 `var/baseline.json` — the four means are deliberately **not** copied into this file.
 
 That is not laziness, it is the corpus. This repository is what gets indexed, so a
-paragraph quoting the score is part of what produces the score, and keeping the two in
-agreement is a fixpoint problem rather than an edit. It is not a rounding-scale effect
-either: one draft of the section below happened to put a rare token next to the file
-that contains it, inside one chunk, which put this README into that query's top ten and
-moved the mean of every metric by about 0.015 — while the retrieval defect it was
-describing was completely unchanged. Numbers that move when you write about them do not
-belong in prose. `evaluate --compare` against the committed JSON is the interface, and
-it is only meaningful over a corpus that did not change underneath the run.
+paragraph quoting the score used to be part of what produced the score. M2.3a fixed
+that (see below) and the numbers are now stable under documentation edits, but the
+habit stays: a measurement belongs in the artefact that recorded it, and
+`evaluate --compare` against the committed JSON is the interface.
+
+### Measurement reliability
+
+M2.2 could not tell a real improvement from noise. Rewriting one README section moved
+mean MRR by 0.009 — larger than the difference being reported — and reversed the sign
+of the vector/hybrid gap. Two causes, both now fixed.
+
+**Self-reference.** Some files exist *because of* the golden set: the acceptance test
+runs the assessment queries verbatim, and `phase1-check` demonstrates them as shell
+commands. The lexical retriever ranked those files first for exactly those queries,
+finding the test that names the question rather than anything answering it.
+`eval_exclude` in the golden set file drops matching memories from every ranking
+*before* any metric sees them, over-fetching so a filtered run still scores k results,
+and the harness reports what it dropped per query. The README is deliberately not
+excluded — it holds real answers, and `tests/unit/test_golden_hygiene.py` keeps it
+honest instead, failing when any natural-language golden query appears verbatim in a
+tracked file. Code literals are exempt: a repository that did not contain
+`SKIP LOCKED` would make that query meaningless.
+
+**Sample size.** 21 queries made one query 5% of the mean. There are now 41, spread
+across the four things the earlier milestones showed matter: explanatory prose whose
+answer shares no words with the question, literals that appear only inside code,
+instructional questions whose answer repeats the question, and questions no single file
+answers.
+
+**The resolution floor**, measured rather than assumed, with `evaluate --repeat` and by
+perturbing the corpus:
+
+| probe | movement |
+|---|---|
+| same evaluation run three times | 0.0000 |
+| an unrelated file edited and re-ingested | 0.0000 |
+| a file inside the answer space edited | 0.0000 |
+| this README edited with neutral prose — the M2.2 failure, repeated | 0.0000 |
+| writing *this section*, which is about retrieval and several pages long | 0.0011 (nDCG only) |
+| *control:* a new file added that genuinely answers a query | 0.0122 |
+
+The control matters: without it, the zeroes would mean the probe was broken rather than
+the harness stable. Retrieval is deterministic, so a difference measured over an
+unchanged corpus is real at any size; across corpus states, one file entering the
+answer space moves MRR by about 0.012, and that is the margin a cross-corpus claim
+needs.
+
+The second-to-last row is the honest version of the first: a neutral paragraph moves
+nothing, and several pages *about retrieval* still move one metric by 0.0011 — an
+eighth of what the same operation cost M2.2, and now smaller than anything worth
+reporting.
 
 **The worst-queries section is the useful output.** The mean says whether something
 improved; the worst list says what to fix. The bottom of it is stable across runs:
-`SKIP LOCKED`, `what stops the same document being stored twice`, and `how do I run the
+the rare-literal query, the deduplication question, and the one about running
 worker`. The first two are one defect approached from opposite sides — a query whose
 answer is a rare literal token the model reads as ordinary English, and a query whose
 answer is phrased entirely in words the code never uses. Between them they are the case
 for M2.1's lexical half.
 
-The second failure the chunk ordinal exposes: `why do we store two timestamps` takes a
+The second failure the chunk ordinal exposes: the two-timestamps question takes a
 perfect MRR and loses two fifths of its recall, because `README.md` and `models.py` are
 both inside the top six on paragraphs that never mention `ingested_at`. Judged per
 memory that query looks solved.

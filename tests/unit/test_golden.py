@@ -78,7 +78,7 @@ def test_an_unresolvable_triple_is_reported_rather_than_dropped() -> None:
     golden = build_golden_set(
         payload(
             {
-                "query_text": "why do we store two timestamps",
+                "query_text": "why two clocks are recorded",
                 "filters": {},
                 "items": [
                     # Still there, and still the answer.

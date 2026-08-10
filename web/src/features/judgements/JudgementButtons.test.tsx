@@ -16,7 +16,7 @@ import { JudgementButtons, type JudgementTarget } from "./JudgementButtons";
 import { renderWithProviders, stubFetch } from "../../test/harness";
 
 const TARGET: JudgementTarget = {
-  queryText: "how does the job queue claim work",
+  queryText: "how a lease is renewed",
   sourceName: "self",
   externalKey: "src/memoryos/application/worker.py",
   memoryId: "11111111-1111-7111-8111-111111111111",
@@ -38,7 +38,7 @@ describe("judgement submission", () => {
     const call = calls.find((candidate) => candidate.url.includes("/judgements"));
     expect(call?.method).toBe("POST");
     expect(call?.body).toEqual({
-      query_text: "how does the job queue claim work",
+      query_text: "how a lease is renewed",
       // The durable identity. A memory id would be stale after a replay.
       source_name: "self",
       external_key: "src/memoryos/application/worker.py",
