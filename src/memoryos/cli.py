@@ -25,7 +25,16 @@ from memoryos.application.backfill import (
     gather_stats,
 )
 from memoryos.application.doctor import run_doctor
+from memoryos.application.evaluate import (
+    compare as compare_runs,
+)
+from memoryos.application.evaluate import (
+    evaluate,
+    format_report,
+    format_verbose,
+)
 from memoryos.application.evaluation import format_table, measure_recall
+from memoryos.application.golden import load_golden_set
 from memoryos.application.judgements import export_golden_set
 from memoryos.application.ports import SearchFilters
 from memoryos.application.rechunk import enqueue_rechunk, find_stale
@@ -232,6 +241,74 @@ async def run_eval_recall(
             "came back first;\nanything well below 1.0 points at the pipeline, not the "
             "index."
         )
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_evaluate(
+    settings: Settings,
+    *,
+    golden_path: Path,
+    k: int,
+    json_path: Path | None,
+    query: str | None,
+    verbose: bool,
+    compare_path: Path | None,
+    worst: int,
+) -> int:
+    """Score the golden set through the ordinary search path.
+
+    Exits non-zero only when the run could not happen — an empty golden set, a
+    missing export, a `--query` that names nothing. A *low score* is a result,
+    not a failure, and making the command fail on one would mean every later
+    milestone starts by disabling it.
+    """
+    if not golden_path.exists():
+        print(
+            f"no golden set at {golden_path}\n"
+            f"run: memoryos export-golden-set --output {golden_path}"
+        )
+        return 1
+
+    container = Container.build(settings)
+    try:
+        sessions = container.database.session_factory
+        golden = await load_golden_set(golden_path, sessions)
+        if query is not None:
+            selected = golden.select(query)
+            if not selected.queries:
+                print(f"no golden query matching {query!r}")
+                return 1
+            golden = selected
+
+        if not golden.queries:
+            print("no scoreable queries in the golden set")
+            for item in golden.excluded:
+                print(f"  excluded: {item.query_text}  ({item.reason})")
+            return 1
+
+        run = await evaluate(
+            golden, container.search(), sessions, k=k, now=datetime.now(UTC)
+        )
+        print(format_report(run, worst=worst))
+
+        if verbose:
+            print()
+            print(format_verbose(run))
+
+        if json_path is not None:
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            json_path.write_text(json.dumps(run.as_dict(), indent=2) + "\n")
+            print(f"\nwrote {json_path}")
+
+        if compare_path is not None:
+            if not compare_path.exists():
+                print(f"\nno baseline at {compare_path}")
+                return 1
+            print()
+            print(f"compared against {compare_path}")
+            print(compare_runs(json.loads(compare_path.read_text()), run).render())
     finally:
         await container.dispose()
     return 0
@@ -559,16 +636,53 @@ def build_parser() -> argparse.ArgumentParser:
         help="where to write the JSON",
     )
 
-    evaluate = commands.add_parser(
+    eval_recall = commands.add_parser(
         "eval-recall", help="measure index recall against an exhaustive scan"
     )
-    evaluate.add_argument("--queries", type=int, default=50)
-    evaluate.add_argument("-k", "--k", dest="k", type=int, default=10)
-    evaluate.add_argument(
+    eval_recall.add_argument("--queries", type=int, default=50)
+    eval_recall.add_argument("-k", "--k", dest="k", type=int, default=10)
+    eval_recall.add_argument(
         "--ef-search",
         dest="ef_search",
         default="40,100,200,400",
         help="comma-separated ef_search values to compare",
+    )
+
+    evaluate_command = commands.add_parser(
+        "evaluate", help="score the golden set through the ordinary search path"
+    )
+    evaluate_command.add_argument("-k", "--k", dest="k", type=int, default=10)
+    evaluate_command.add_argument(
+        "--golden",
+        type=Path,
+        default=Path("var/golden-set.json"),
+        help="the export to score against",
+    )
+    evaluate_command.add_argument(
+        "--json",
+        dest="json_path",
+        type=Path,
+        help="write the full result here, for comparison across runs",
+    )
+    evaluate_command.add_argument(
+        "--query", help="score only the golden query with this exact text"
+    )
+    evaluate_command.add_argument(
+        "--verbose",
+        action="store_true",
+        help="print every ranking with a relevant/not marker, to diagnose a bad score",
+    )
+    evaluate_command.add_argument(
+        "--compare",
+        dest="compare_path",
+        type=Path,
+        help="a previous --json run; prints per-metric deltas and any MRR regression",
+    )
+    evaluate_command.add_argument(
+        "--worst",
+        type=int,
+        default=3,
+        help="how many of the worst queries by MRR to list",
     )
     return parser
 
@@ -629,6 +743,20 @@ def main(argv: list[str] | None = None) -> int:
         values = [int(value) for value in args.ef_search.split(",") if value.strip()]
         return asyncio.run(
             run_eval_recall(settings, queries=args.queries, k=args.k, ef_search_values=values)
+        )
+
+    if args.command == "evaluate":
+        return asyncio.run(
+            run_evaluate(
+                settings,
+                golden_path=args.golden,
+                k=args.k,
+                json_path=args.json_path,
+                query=args.query,
+                verbose=args.verbose,
+                compare_path=args.compare_path,
+                worst=args.worst,
+            )
         )
 
     if args.command == "replay":

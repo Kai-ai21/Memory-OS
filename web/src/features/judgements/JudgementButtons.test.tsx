@@ -43,6 +43,9 @@ describe("judgement submission", () => {
       source_name: "self",
       external_key: "src/memoryos/application/worker.py",
       verdict: "relevant",
+      // Null: this verdict is about the memory, whichever chunk matched. A
+      // number here would narrow it to one chunk.
+      chunk_ordinal: null,
       // Snapshots of what the system said at the moment of judgement.
       memory_id: "11111111-1111-7111-8111-111111111111",
       chunk_id: "22222222-2222-7222-8222-222222222222",

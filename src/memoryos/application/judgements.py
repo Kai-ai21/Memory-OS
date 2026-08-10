@@ -37,6 +37,9 @@ class JudgementInput:
     source_name: str
     external_key: str
     verdict: Verdict
+    # Part of the identity: None judges the memory, a number judges that one
+    # chunk of it. See `models.QueryJudgement`.
+    chunk_ordinal: int | None = None
     memory_id: UUID | None = None
     chunk_id: UUID | None = None
     rank_at_judgement: int | None = None
@@ -60,6 +63,8 @@ async def record(
     query_text = judgement.query_text.strip()
     if not query_text:
         raise InvalidJudgement("a judgement needs the query it is about")
+    if judgement.chunk_ordinal is not None and judgement.chunk_ordinal < 0:
+        raise InvalidJudgement("a chunk ordinal is a position in a document, never negative")
     if judgement.verdict is Verdict.MISSING and judgement.rank_at_judgement is not None:
         # The point of `missing` is that the item was not in the ranking. A rank
         # on it would silently corrupt any recall computed from this table; the
@@ -74,6 +79,7 @@ async def record(
         "query_text": query_text,
         "source_name": judgement.source_name,
         "external_key": judgement.external_key,
+        "chunk_ordinal": judgement.chunk_ordinal,
         "memory_id": judgement.memory_id,
         "chunk_id": judgement.chunk_id,
         "verdict": judgement.verdict.value,
@@ -162,6 +168,9 @@ async def summarise(
 class GoldenItem:
     external_key: str
     source_name: str
+    # None for a verdict about the memory, an ordinal for one about a single
+    # chunk of it. Together with the two above it is the item's identity.
+    chunk_ordinal: int | None
     verdict: str
     rank_at_judgement: int | None
     score_at_judgement: float | None
@@ -180,11 +189,18 @@ class GoldenQuery:
 
     @property
     def relevant_keys(self) -> list[str]:
-        """The answer key: everything a good ranking should return for this query."""
+        """The answer key at memory granularity, deduplicated.
+
+        Kept memory-level even though items can now name a chunk, because that is
+        what this field has always meant to its readers. The harness scores
+        against `items`, which carry the ordinal.
+        """
         return sorted(
-            item.external_key
-            for item in self.items
-            if item.verdict in (Verdict.RELEVANT.value, Verdict.MISSING.value)
+            {
+                item.external_key
+                for item in self.items
+                if item.verdict in (Verdict.RELEVANT.value, Verdict.MISSING.value)
+            }
         )
 
 
@@ -220,6 +236,7 @@ class GoldenSet:
                         {
                             "external_key": item.external_key,
                             "source_name": item.source_name,
+                            "chunk_ordinal": item.chunk_ordinal,
                             "verdict": item.verdict,
                             "rank_at_judgement": item.rank_at_judgement,
                             "score_at_judgement": item.score_at_judgement,
@@ -252,6 +269,7 @@ async def export_golden_set(
         models.QueryJudgement.query_text,
         models.QueryJudgement.rank_at_judgement.nulls_last(),
         models.QueryJudgement.external_key,
+        models.QueryJudgement.chunk_ordinal.nulls_first(),
     )
     async with session_factory() as session:
         rows = list((await session.execute(stmt)).scalars())
@@ -291,6 +309,7 @@ async def export_golden_set(
                     GoldenItem(
                         external_key=row.external_key,
                         source_name=row.source_name,
+                        chunk_ordinal=row.chunk_ordinal,
                         verdict=row.verdict,
                         rank_at_judgement=row.rank_at_judgement,
                         score_at_judgement=(

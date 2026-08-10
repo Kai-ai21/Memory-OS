@@ -163,6 +163,9 @@ export function SearchPage() {
               sourceName={hit.source_name}
               filters={filters}
               verdict={verdicts[hit.external_key] ?? null}
+              // One map for both granularities: chunk verdicts are stored under
+              // `externalKey#ordinal`, which cannot collide with a bare key.
+              chunkVerdicts={verdicts}
               onJudged={(key, verdict) =>
                 setVerdicts((current) => ({ ...current, [key]: verdict }))
               }

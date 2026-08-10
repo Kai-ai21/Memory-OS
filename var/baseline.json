@@ -1,0 +1,695 @@
+{
+  "ran_at": "2026-08-10T05:24:07.932587+00:00",
+  "k": 10,
+  "golden_generated_at": "2026-08-10T05:10:40.781506+00:00",
+  "queries": 21,
+  "summary": {
+    "recall@10": {
+      "mean": 0.796334,
+      "p50": 0.857143,
+      "min": 0.0
+    },
+    "precision@10": {
+      "mean": 0.509524,
+      "p50": 0.6,
+      "min": 0.0
+    },
+    "MRR": {
+      "mean": 0.665608,
+      "p50": 1.0,
+      "min": 0.0
+    },
+    "nDCG@10": {
+      "mean": 0.677612,
+      "p50": 0.744993,
+      "min": 0.0
+    }
+  },
+  "results": [
+    {
+      "query_text": "ON DELETE CASCADE",
+      "k": 10,
+      "recall": 0.833333,
+      "precision": 0.5,
+      "mrr": 0.25,
+      "ndcg": 0.531186,
+      "retrieved": [
+        "self::src/memoryos/application/normalize.py",
+        "self::src/memoryos/application/replay.py",
+        "self::src/memoryos/application/ports.py",
+        "self::tests/integration/test_sync.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::src/memoryos/application/sync.py",
+        "self::tests/integration/test_schema.py",
+        "self::tests/integration/test_judgements.py",
+        "self::README.md",
+        "self::migrations/versions/0007_query_judgements.py"
+      ],
+      "relevant": [
+        "self::migrations/versions/0001_initial_schema.py",
+        "self::migrations/versions/0007_query_judgements.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::tests/integration/test_judgements.py",
+        "self::tests/integration/test_schema.py",
+        "self::tests/integration/test_sync.py"
+      ],
+      "missed": [
+        "self::migrations/versions/0001_initial_schema.py"
+      ],
+      "notes": []
+    },
+    {
+      "query_text": "SKIP LOCKED",
+      "k": 10,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0,
+      "retrieved": [
+        "self::tests/integration/test_sync.py",
+        "self::tests/unit/test_filesystem_connector.py",
+        "self::src/memoryos/adapters/chunking/structural.py",
+        "self::tests/integration/test_replay.py",
+        "self::src/memoryos/application/worker.py",
+        "self::tests/integration/test_repositories.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::src/memoryos/application/replay.py",
+        "self::tests/unit/test_worker_decisions.py",
+        "self::tests/integration/test_api_ui_endpoints.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::src/memoryos/adapters/db/job_queue.py",
+        "self::tests/integration/test_worker.py"
+      ],
+      "missed": [
+        "self::README.md",
+        "self::src/memoryos/adapters/db/job_queue.py",
+        "self::tests/integration/test_worker.py"
+      ],
+      "notes": []
+    },
+    {
+      "query_text": "bge-small",
+      "k": 10,
+      "recall": 0.857143,
+      "precision": 0.6,
+      "mrr": 1.0,
+      "ndcg": 0.872738,
+      "retrieved": [
+        "self::src/memoryos/adapters/embedding/sentence_transformers.py",
+        "self::tests/slow/test_real_model.py",
+        "self::tests/slow/test_real_search.py",
+        "self::tests/unit/test_embedding.py",
+        "self::tests/slow/test_query_prefix.py",
+        "self::README.md",
+        "self::migrations/versions/0001_initial_schema.py",
+        "self::tests/unit/test_search_grouping.py",
+        "self::tests/unit/test_window_alignment.py",
+        "self::tests/unit/test_chunker.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::src/memoryos/adapters/embedding/sentence_transformers.py",
+        "self::src/memoryos/config.py",
+        "self::tests/slow/test_query_prefix.py",
+        "self::tests/slow/test_real_model.py",
+        "self::tests/slow/test_real_search.py",
+        "self::tests/unit/test_window_alignment.py"
+      ],
+      "missed": [
+        "self::src/memoryos/config.py"
+      ],
+      "notes": []
+    },
+    {
+      "query_text": "content addressing and deduplication",
+      "k": 10,
+      "recall": 0.75,
+      "precision": 0.6,
+      "mrr": 0.333333,
+      "ndcg": 0.570485,
+      "retrieved": [
+        "self::tests/slow/test_acceptance.py",
+        "self::src/memoryos/adapters/chunking/structural.py",
+        "self::README.md",
+        "self::src/memoryos/domain/entities.py",
+        "self::tests/integration/test_embed.py",
+        "self::tests/unit/test_chunker.py",
+        "self::src/memoryos/application/normalize.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::src/memoryos/adapters/embedding/sentence_transformers.py",
+        "self::src/memoryos/domain/normalization.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::src/memoryos/application/embed.py",
+        "self::src/memoryos/application/normalize.py",
+        "self::src/memoryos/domain/entities.py",
+        "self::src/memoryos/domain/normalization.py",
+        "self::src/memoryos/domain/values.py",
+        "self::tests/integration/test_embed.py"
+      ],
+      "missed": [
+        "self::src/memoryos/application/embed.py",
+        "self::src/memoryos/domain/values.py"
+      ],
+      "notes": []
+    },
+    {
+      "query_text": "how are chunk sizes chosen",
+      "k": 10,
+      "recall": 1.0,
+      "precision": 0.5,
+      "mrr": 0.5,
+      "ndcg": 0.711306,
+      "retrieved": [
+        "self::tests/unit/test_search_grouping.py",
+        "self::README.md",
+        "self::tests/unit/test_entities.py",
+        "self::src/memoryos/adapters/chunking/structural.py",
+        "self::tests/unit/test_chunker.py",
+        "self::tests/unit/test_blob_store.py",
+        "self::tests/slow/test_real_model.py",
+        "self::src/memoryos/application/ports.py",
+        "self::src/memoryos/application/search.py",
+        "self::src/memoryos/application/normalize.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::src/memoryos/adapters/chunking/structural.py",
+        "self::src/memoryos/application/ports.py",
+        "self::tests/slow/test_real_model.py",
+        "self::tests/unit/test_chunker.py"
+      ],
+      "missed": [],
+      "notes": []
+    },
+    {
+      "query_text": "how do I run the worker",
+      "k": 10,
+      "recall": 0.5,
+      "precision": 0.1,
+      "mrr": 0.2,
+      "ndcg": 0.237198,
+      "retrieved": [
+        "self::src/memoryos/cli.py",
+        "self::tests/integration/test_worker.py",
+        "self::tests/unit/test_worker_decisions.py",
+        "self::src/memoryos/adapters/db/job_queue.py",
+        "self::src/memoryos/application/worker.py",
+        "self::tests/integration/test_job_queue.py",
+        "self::src/memoryos/domain/jobs.py",
+        "self::tests/conftest.py",
+        "self::tests/integration/test_evaluate.py",
+        "self::src/memoryos/application/jobs/handlers.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::src/memoryos/application/worker.py"
+      ],
+      "missed": [
+        "self::README.md"
+      ],
+      "notes": []
+    },
+    {
+      "query_text": "how do we prove a rebuild produced the same corpus",
+      "k": 10,
+      "recall": 1.0,
+      "precision": 0.7,
+      "mrr": 1.0,
+      "ndcg": 0.94474,
+      "retrieved": [
+        "self::tests/slow/test_replay_real.py",
+        "self::src/memoryos/application/verification.py",
+        "self::src/memoryos/application/replay.py",
+        "self::tests/integration/test_search.py",
+        "self::tests/integration/test_normalize.py",
+        "self::src/memoryos/cli.py",
+        "self::README.md",
+        "self::tests/integration/test_replay.py",
+        "self::src/memoryos/application/ports.py",
+        "self::tests/unit/test_embedding.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::src/memoryos/application/ports.py",
+        "self::src/memoryos/application/replay.py",
+        "self::src/memoryos/application/verification.py",
+        "self::src/memoryos/cli.py",
+        "self::tests/integration/test_replay.py",
+        "self::tests/slow/test_replay_real.py"
+      ],
+      "missed": [],
+      "notes": []
+    },
+    {
+      "query_text": "how does a long running job keep its claim alive",
+      "k": 10,
+      "recall": 1.0,
+      "precision": 0.8,
+      "mrr": 1.0,
+      "ndcg": 0.946645,
+      "retrieved": [
+        "self::tests/integration/test_job_queue.py",
+        "self::src/memoryos/application/worker.py",
+        "self::src/memoryos/domain/jobs.py",
+        "self::src/memoryos/adapters/db/job_queue.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::tests/integration/test_worker.py",
+        "self::migrations/versions/0003_jobs.py",
+        "self::src/memoryos/application/ports.py",
+        "self::tests/unit/test_worker_decisions.py",
+        "self::README.md"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::migrations/versions/0003_jobs.py",
+        "self::src/memoryos/adapters/db/job_queue.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::src/memoryos/application/ports.py",
+        "self::src/memoryos/application/worker.py",
+        "self::tests/integration/test_job_queue.py",
+        "self::tests/integration/test_worker.py"
+      ],
+      "missed": [],
+      "notes": []
+    },
+    {
+      "query_text": "how does the job queue claim work",
+      "k": 10,
+      "recall": 1.0,
+      "precision": 0.7,
+      "mrr": 1.0,
+      "ndcg": 0.940396,
+      "retrieved": [
+        "self::tests/integration/test_job_queue.py",
+        "self::src/memoryos/application/worker.py",
+        "self::tests/integration/test_api_ui_endpoints.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::tests/integration/test_worker.py",
+        "self::migrations/versions/0003_jobs.py",
+        "self::tests/unit/test_worker_decisions.py",
+        "self::src/memoryos/adapters/db/job_queue.py",
+        "self::README.md",
+        "self::src/memoryos/domain/jobs.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::migrations/versions/0003_jobs.py",
+        "self::src/memoryos/adapters/db/job_queue.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::src/memoryos/application/worker.py",
+        "self::tests/integration/test_job_queue.py",
+        "self::tests/integration/test_worker.py"
+      ],
+      "missed": [],
+      "notes": []
+    },
+    {
+      "query_text": "how does the system know a file changed since last time",
+      "k": 10,
+      "recall": 1.0,
+      "precision": 0.6,
+      "mrr": 1.0,
+      "ndcg": 0.90454,
+      "retrieved": [
+        "self::src/memoryos/application/sync.py",
+        "self::tests/integration/test_normalize.py",
+        "self::README.md",
+        "self::tests/integration/test_sync.py",
+        "self::tests/unit/test_filesystem_connector.py",
+        "self::src/memoryos/application/ports.py",
+        "self::tests/integration/test_replay.py",
+        "self::src/memoryos/adapters/connectors/filesystem.py#6",
+        "self::tests/unit/test_replay_rules.py",
+        "self::tests/unit/test_chunker.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::src/memoryos/adapters/connectors/filesystem.py#6",
+        "self::src/memoryos/application/ports.py",
+        "self::src/memoryos/application/sync.py",
+        "self::tests/integration/test_sync.py",
+        "self::tests/unit/test_filesystem_connector.py"
+      ],
+      "missed": [],
+      "notes": []
+    },
+    {
+      "query_text": "how is idempotency guaranteed end to end",
+      "k": 10,
+      "recall": 0.571429,
+      "precision": 0.4,
+      "mrr": 0.333333,
+      "ndcg": 0.41369,
+      "retrieved": [
+        "self::tests/conftest.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::README.md",
+        "self::tests/integration/test_search.py",
+        "self::src/memoryos/application/worker.py",
+        "self::tests/integration/test_schema.py",
+        "self::tests/integration/test_replay.py",
+        "self::tests/unit/test_blob_store.py",
+        "self::tests/integration/test_worker.py",
+        "self::tests/integration/test_judgements.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::src/memoryos/adapters/db/job_queue.py",
+        "self::src/memoryos/application/sync.py",
+        "self::src/memoryos/domain/values.py",
+        "self::tests/integration/test_replay.py",
+        "self::tests/integration/test_schema.py",
+        "self::tests/unit/test_blob_store.py"
+      ],
+      "missed": [
+        "self::src/memoryos/adapters/db/job_queue.py",
+        "self::src/memoryos/application/sync.py",
+        "self::src/memoryos/domain/values.py"
+      ],
+      "notes": []
+    },
+    {
+      "query_text": "prefix_chars",
+      "k": 10,
+      "recall": 1.0,
+      "precision": 0.7,
+      "mrr": 1.0,
+      "ndcg": 0.96521,
+      "retrieved": [
+        "self::migrations/versions/0008_chunk_prefix_chars.py",
+        "self::tests/integration/test_normalize.py",
+        "self::tests/unit/test_chunker.py",
+        "self::src/memoryos/domain/entities.py#7",
+        "self::src/memoryos/adapters/embedding/sentence_transformers.py",
+        "self::tests/unit/test_entities.py",
+        "self::README.md",
+        "self::src/memoryos/application/ports.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::tests/unit/test_parsers.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::migrations/versions/0008_chunk_prefix_chars.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::src/memoryos/application/ports.py",
+        "self::src/memoryos/domain/entities.py#7",
+        "self::tests/integration/test_normalize.py",
+        "self::tests/unit/test_chunker.py"
+      ],
+      "missed": [],
+      "notes": []
+    },
+    {
+      "query_text": "what does verify-replay compare",
+      "k": 10,
+      "recall": 1.0,
+      "precision": 0.6,
+      "mrr": 1.0,
+      "ndcg": 0.987671,
+      "retrieved": [
+        "self::src/memoryos/application/replay.py",
+        "self::src/memoryos/cli.py",
+        "self::README.md",
+        "self::tests/integration/test_replay.py",
+        "self::src/memoryos/application/verification.py",
+        "self::tests/integration/test_repositories.py",
+        "self::tests/unit/test_replay_rules.py",
+        "self::tests/slow/test_replay_real.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::src/memoryos/application/ports.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::src/memoryos/application/replay.py",
+        "self::src/memoryos/application/verification.py",
+        "self::src/memoryos/cli.py",
+        "self::tests/integration/test_replay.py",
+        "self::tests/slow/test_replay_real.py"
+      ],
+      "missed": [],
+      "notes": []
+    },
+    {
+      "query_text": "what happens if the model is swapped for a different one",
+      "k": 10,
+      "recall": 0.777778,
+      "precision": 0.7,
+      "mrr": 1.0,
+      "ndcg": 0.744993,
+      "retrieved": [
+        "self::tests/unit/test_embedding.py",
+        "self::tests/integration/test_replay.py",
+        "self::tests/integration/test_embed.py",
+        "self::migrations/versions/0004_embedding_cache.py",
+        "self::src/memoryos/adapters/db/shadow.py",
+        "self::tests/unit/test_replay_rules.py",
+        "self::README.md",
+        "self::src/memoryos/application/backfill.py",
+        "self::tests/slow/test_real_model.py",
+        "self::tests/unit/test_window_alignment.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::migrations/versions/0004_embedding_cache.py",
+        "self::src/memoryos/adapters/db/embedding_cache.py",
+        "self::src/memoryos/application/backfill.py",
+        "self::src/memoryos/container.py",
+        "self::tests/integration/test_embed.py",
+        "self::tests/slow/test_real_model.py",
+        "self::tests/unit/test_embedding.py",
+        "self::tests/unit/test_window_alignment.py"
+      ],
+      "missed": [
+        "self::src/memoryos/adapters/db/embedding_cache.py",
+        "self::src/memoryos/container.py"
+      ],
+      "notes": []
+    },
+    {
+      "query_text": "what happens when a file is deleted",
+      "k": 10,
+      "recall": 1.0,
+      "precision": 0.6,
+      "mrr": 1.0,
+      "ndcg": 0.875083,
+      "retrieved": [
+        "self::tests/integration/test_sync.py",
+        "self::tests/unit/test_blob_store.py",
+        "self::README.md",
+        "self::src/memoryos/adapters/blobs/filesystem.py",
+        "self::src/memoryos/application/normalize.py",
+        "self::src/memoryos/application/sync.py",
+        "self::tests/integration/test_replay.py",
+        "self::src/memoryos/application/replay.py",
+        "self::src/memoryos/application/ports.py",
+        "self::tests/unit/test_search_grouping.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::src/memoryos/application/normalize.py",
+        "self::src/memoryos/application/replay.py",
+        "self::src/memoryos/application/sync.py",
+        "self::tests/integration/test_replay.py",
+        "self::tests/integration/test_sync.py"
+      ],
+      "missed": [],
+      "notes": []
+    },
+    {
+      "query_text": "what stops the same document being stored twice",
+      "k": 10,
+      "recall": 0.25,
+      "precision": 0.1,
+      "mrr": 0.111111,
+      "ndcg": 0.117516,
+      "retrieved": [
+        "self::tests/integration/test_normalize.py",
+        "self::tests/integration/test_embed.py",
+        "self::src/memoryos/domain/normalization.py",
+        "self::tests/integration/test_replay.py",
+        "self::tests/unit/test_chunker.py",
+        "self::tests/integration/test_job_queue.py",
+        "self::tests/integration/test_judgements.py",
+        "self::tests/slow/test_acceptance.py",
+        "self::tests/unit/test_blob_store.py",
+        "self::tests/integration/test_sync.py"
+      ],
+      "relevant": [
+        "self::src/memoryos/application/sync.py",
+        "self::src/memoryos/domain/values.py#1",
+        "self::tests/integration/test_schema.py",
+        "self::tests/unit/test_blob_store.py"
+      ],
+      "missed": [
+        "self::src/memoryos/application/sync.py",
+        "self::src/memoryos/domain/values.py#1",
+        "self::tests/integration/test_schema.py"
+      ],
+      "notes": []
+    },
+    {
+      "query_text": "what stops two workers processing the same job",
+      "k": 10,
+      "recall": 1.0,
+      "precision": 0.7,
+      "mrr": 1.0,
+      "ndcg": 0.945308,
+      "retrieved": [
+        "self::tests/integration/test_job_queue.py",
+        "self::tests/integration/test_worker.py",
+        "self::src/memoryos/domain/jobs.py",
+        "self::src/memoryos/application/worker.py",
+        "self::src/memoryos/adapters/db/job_queue.py",
+        "self::tests/unit/test_worker_decisions.py",
+        "self::README.md",
+        "self::tests/slow/test_acceptance.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::tests/integration/test_sync.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::src/memoryos/adapters/db/job_queue.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::src/memoryos/application/worker.py",
+        "self::tests/integration/test_job_queue.py",
+        "self::tests/integration/test_worker.py",
+        "self::tests/unit/test_worker_decisions.py"
+      ],
+      "missed": [],
+      "notes": []
+    },
+    {
+      "query_text": "where does the text of a document actually live on disk",
+      "k": 10,
+      "recall": 0.833333,
+      "precision": 0.5,
+      "mrr": 0.25,
+      "ndcg": 0.521411,
+      "retrieved": [
+        "self::tests/unit/test_parsers.py",
+        "self::tests/unit/test_chunker.py",
+        "self::tests/integration/test_normalize.py",
+        "self::src/memoryos/application/normalize.py",
+        "self::README.md",
+        "self::tests/unit/test_normalization.py",
+        "self::src/memoryos/domain/entities.py",
+        "self::src/memoryos/application/ports.py",
+        "self::tests/unit/test_blob_store.py",
+        "self::src/memoryos/adapters/blobs/filesystem.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::src/memoryos/adapters/blobs/filesystem.py",
+        "self::src/memoryos/application/normalize.py",
+        "self::src/memoryos/application/ports.py",
+        "self::src/memoryos/config.py",
+        "self::tests/unit/test_blob_store.py"
+      ],
+      "missed": [
+        "self::src/memoryos/config.py"
+      ],
+      "notes": []
+    },
+    {
+      "query_text": "which layer is allowed to import which",
+      "k": 10,
+      "recall": 0.75,
+      "precision": 0.3,
+      "mrr": 1.0,
+      "ndcg": 0.787702,
+      "retrieved": [
+        "self::README.md",
+        "self::src/memoryos/application/ports.py",
+        "self::tests/integration/test_api_ui_endpoints.py",
+        "self::tests/integration/test_replay.py",
+        "self::src/memoryos/container.py",
+        "self::src/memoryos/adapters/db/mappers.py",
+        "self::src/memoryos/config.py",
+        "self::src/memoryos/application/verification.py",
+        "self::src/memoryos/adapters/parsers/markdown.py",
+        "self::src/memoryos/api/routes/memories.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::src/memoryos/application/ports.py",
+        "self::src/memoryos/container.py",
+        "self::src/memoryos/domain/values.py"
+      ],
+      "missed": [
+        "self::src/memoryos/domain/values.py"
+      ],
+      "notes": []
+    },
+    {
+      "query_text": "why do we store two timestamps",
+      "k": 10,
+      "recall": 0.6,
+      "precision": 0.3,
+      "mrr": 0.5,
+      "ndcg": 0.467048,
+      "retrieved": [
+        "self::README.md",
+        "self::src/memoryos/domain/entities.py#4",
+        "self::tests/slow/test_acceptance.py",
+        "self::tests/unit/test_entities.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::src/memoryos/application/replay.py",
+        "self::tests/integration/test_evaluate.py",
+        "self::src/memoryos/application/projection.py",
+        "self::src/memoryos/application/normalize.py",
+        "self::tests/integration/test_embed.py"
+      ],
+      "relevant": [
+        "self::README.md#5",
+        "self::src/memoryos/adapters/db/models.py#8",
+        "self::src/memoryos/application/projection.py",
+        "self::src/memoryos/domain/entities.py#4",
+        "self::tests/unit/test_entities.py"
+      ],
+      "missed": [
+        "self::README.md#5",
+        "self::src/memoryos/adapters/db/models.py#8"
+      ],
+      "notes": []
+    },
+    {
+      "query_text": "why is the embedding cache keyed by model",
+      "k": 10,
+      "recall": 1.0,
+      "precision": 0.7,
+      "mrr": 0.5,
+      "ndcg": 0.744977,
+      "retrieved": [
+        "self::migrations/versions/0004_embedding_cache.py",
+        "self::src/memoryos/adapters/db/embedding_cache.py",
+        "self::src/memoryos/application/embed.py",
+        "self::tests/unit/test_embedding.py",
+        "self::README.md",
+        "self::tests/integration/test_embed.py",
+        "self::src/memoryos/application/replay.py",
+        "self::src/memoryos/application/ports.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::src/memoryos/application/backfill.py"
+      ],
+      "relevant": [
+        "self::README.md",
+        "self::src/memoryos/adapters/db/embedding_cache.py",
+        "self::src/memoryos/adapters/db/models.py",
+        "self::src/memoryos/application/backfill.py",
+        "self::src/memoryos/application/ports.py",
+        "self::tests/integration/test_embed.py",
+        "self::tests/unit/test_embedding.py"
+      ],
+      "missed": [],
+      "notes": []
+    }
+  ],
+  "excluded": [],
+  "unresolved": [],
+  "warnings": []
+}

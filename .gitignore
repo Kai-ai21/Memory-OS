@@ -16,7 +16,16 @@ htmlcov/
 .vscode/
 .DS_Store
 .claude/settings.local.json
-var/
+# `var/*`, not `var/`: git cannot re-include a file whose parent directory is
+# excluded, so the two negations below would silently do nothing.
+var/*
+# Two exceptions, and they are the same exception twice: neither of these can be
+# regenerated from the repository. `golden-set.json` is human judgement, and the
+# only copy of it that survives `docker compose down -v`. `baseline.json` is the
+# measurement every later Phase 2 milestone reports its diff against — a
+# baseline that lives only on one machine is not a baseline.
+!var/golden-set.json
+!var/baseline.json
 
 # Web
 web/node_modules/

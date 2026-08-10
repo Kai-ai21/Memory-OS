@@ -35,6 +35,9 @@ class JudgementIn(BaseModel):
     source_name: str = Field(min_length=1)
     external_key: str = Field(min_length=1)
     verdict: Verdict
+    # Part of the identity, not a snapshot: null judges the memory, a number
+    # judges that one chunk of it. Ordinals are 0-based and survive a rebuild.
+    chunk_ordinal: int | None = Field(default=None, ge=0)
     # Snapshots of what the system said when the verdict was given.
     memory_id: UUID | None = None
     chunk_id: UUID | None = None
@@ -67,6 +70,7 @@ async def create_judgement(body: JudgementIn, container: ContainerDep) -> Judgem
                 source_name=body.source_name,
                 external_key=body.external_key,
                 verdict=body.verdict,
+                chunk_ordinal=body.chunk_ordinal,
                 memory_id=body.memory_id,
                 chunk_id=body.chunk_id,
                 rank_at_judgement=body.rank_at_judgement,
