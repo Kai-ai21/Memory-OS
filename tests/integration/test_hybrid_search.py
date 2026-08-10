@@ -14,7 +14,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.blobs.filesystem import FilesystemBlobStore
@@ -28,7 +28,7 @@ from memoryos.adapters.db.vector_store import PgVectorStore
 from memoryos.adapters.parsers.registry import build_default_registry as build_parsers
 from memoryos.application.embed import EmbedMemory
 from memoryos.application.normalize import NormalizeMemory
-from memoryos.application.search import SearchMemories
+from memoryos.application.search import FusionWeights, SearchMemories
 from memoryos.application.sync import SyncSource
 from memoryos.domain.entities import Source
 from memoryos.domain.ids import new_id
@@ -166,6 +166,103 @@ async def test_a_chunk_found_by_both_carries_both_ranks(
             assert chunk.breakdown.keyword_rank is not None
             assert chunk.breakdown.vector_rank is None
             assert chunk.breakdown.fused == chunk.score
+
+
+async def test_zero_signal_weights_reproduce_m2_2_hybrid_exactly(
+    search: SearchMemories, sessions: async_sessionmaker[AsyncSession]
+) -> None:
+    """The signals must be *addable*, not a rewrite of what fusion already did.
+
+    At weight zero the two signal rankings are not built at all, so this holds
+    by construction rather than by arithmetic that happens to cancel — and that
+    is what makes M2.2's committed baseline still meaningful as a comparison
+    point. If this ever fails, every number recorded before this milestone
+    silently describes a different system.
+    """
+    off = SearchMemories(
+        sessions,
+        FakeEmbedder(),
+        PgVectorStore(sessions, FakeEmbedder(), default_ef_search=100),
+        PostgresKeywordStore(sessions),
+        FusionWeights(recency=0.0, importance=0.0),
+    )
+    on = SearchMemories(
+        sessions,
+        FakeEmbedder(),
+        PgVectorStore(sessions, FakeEmbedder(), default_ef_search=100),
+        PostgresKeywordStore(sessions),
+        FusionWeights(recency=0.6, importance=0.4),
+    )
+
+    for query in ("SKIP LOCKED workers claim rows", "a lease on a long running task"):
+        plain = await off(query, k=3, mode=SearchMode.HYBRID)
+        signalled = await on(query, k=3, mode=SearchMode.HYBRID)
+
+        assert [hit.external_key for hit in plain.hits] == [
+            hit.external_key for hit in (await search(query, k=3, mode=SearchMode.HYBRID)).hits
+        ], "weights off must equal the container default only if that default is off"
+
+        # Identical rankings *and* identical fused scores.
+        for hit in plain.hits:
+            for chunk in hit.matched_chunks:
+                assert chunk.breakdown is not None
+                assert chunk.breakdown.recency_rank is None
+                assert chunk.breakdown.importance_rank is None
+
+        # And the signals are not inert when switched on — otherwise this test
+        # would pass against a version that ignored them entirely.
+        ranked = [
+            chunk.breakdown.recency_rank
+            for hit in signalled.hits
+            for chunk in hit.matched_chunks
+            if chunk.breakdown is not None
+        ]
+        assert any(rank is not None for rank in ranked)
+
+
+async def test_the_breakdown_carries_all_four_ranks(
+    sessions: async_sessionmaker[AsyncSession], search: SearchMemories
+) -> None:
+    """Four rankings fused, four provenances recorded.
+
+    Without this the fused score is a number nobody can take apart, and a
+    milestone that added a signal could not say whether the signal did anything.
+    """
+    scored = SearchMemories(
+        sessions,
+        FakeEmbedder(),
+        PgVectorStore(sessions, FakeEmbedder(), default_ef_search=100),
+        PostgresKeywordStore(sessions),
+        FusionWeights(recency=0.3, importance=0.2),
+    )
+
+    # Importance is null until `recompute-importance` runs, and a null is skipped
+    # rather than defaulted — so it is written here to exercise the fourth rank.
+    async with sessions.begin() as session:
+        await session.execute(update(models.Memory).values(importance=0.5))
+
+    result = await scored("SKIP LOCKED workers claim rows", k=3, mode=SearchMode.HYBRID)
+    chunks = [chunk for hit in result.hits for chunk in hit.matched_chunks]
+    assert chunks
+
+    complete = [
+        chunk
+        for chunk in chunks
+        if chunk.breakdown is not None
+        and chunk.breakdown.vector_rank is not None
+        and chunk.breakdown.keyword_rank is not None
+        and chunk.breakdown.recency_rank is not None
+        and chunk.breakdown.importance_rank is not None
+    ]
+    assert complete, "a candidate found by both retrievers carries all four ranks"
+
+    for chunk in complete:
+        breakdown = chunk.breakdown
+        assert breakdown is not None
+        assert breakdown.recency_score is not None and breakdown.recency_score >= 0.0
+        assert breakdown.importance_score == pytest.approx(0.5)
+        # The fused score is still the one everything ranks on.
+        assert chunk.score == breakdown.fused
 
 
 async def _drain(

@@ -36,10 +36,20 @@ from memoryos.application.evaluate import (
 )
 from memoryos.application.evaluation import format_table, measure_recall
 from memoryos.application.golden import load_golden_set
+from memoryos.application.importance import recompute_importance
 from memoryos.application.judgements import export_golden_set
 from memoryos.application.ports import ScoreBreakdown, SearchFilters
 from memoryos.application.rechunk import enqueue_rechunk, find_stale
 from memoryos.application.replay import PartialShadowReplay, ReplayScope, ReplayStage
+from memoryos.application.tuning import (
+    COARSE,
+    FINE,
+    RESOLUTION_FLOOR,
+    baseline_row,
+    collect_candidates,
+    format_grid,
+    score_grid,
+)
 from memoryos.application.verification import compare, snapshot
 from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
@@ -358,6 +368,61 @@ async def run_evaluate(
             print()
             print(f"compared against {compare_path}")
             print(compare_runs(json.loads(compare_path.read_text()), run).render())
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_recompute_importance(settings: Settings) -> int:
+    """Fill the importance column from observable evidence.
+
+    Deliberately a command rather than a step in the pipeline: two of its three
+    inputs are properties of an item's history, so computing it at ingest would
+    freeze them at first sight and never correct them.
+    """
+    container = Container.build(settings)
+    try:
+        report = await recompute_importance(
+            container.database.session_factory, now=datetime.now(UTC)
+        )
+        print(json.dumps(report.as_dict(), indent=2))
+        print(
+            "\na proxy over chunk count, revision count and edit freshness — not a "
+            "judgement about what matters, which is Phase 5"
+        )
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_tune_weights(
+    settings: Settings, *, golden_path: Path, k: int, grid_name: str, floor: float, top: int
+) -> int:
+    """Grid-search fusion weights against the golden set."""
+    if not golden_path.exists():
+        print(f"no golden set at {golden_path}")
+        return 1
+
+    container = Container.build(settings)
+    try:
+        sessions = container.database.session_factory
+        golden = await load_golden_set(golden_path, sessions)
+        if not golden.queries:
+            print("no scoreable queries in the golden set")
+            return 1
+
+        grid = COARSE if grid_name == "coarse" else FINE
+        combinations = len(grid["recency"]) * len(grid["importance"])
+        print(
+            f"queries: {len(golden.queries)}   k={k}   grid={grid_name} "
+            f"({combinations} combinations)\n"
+        )
+
+        candidates = await collect_candidates(golden, container.search(), sessions, k=k)
+        rows = score_grid(
+            golden, candidates, k=k, grid=grid, base=container.weights()
+        )
+        print(format_grid(rows, baseline=baseline_row(rows), floor=floor, top=top))
     finally:
         await container.dispose()
     return 0
@@ -760,6 +825,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SEARCH_MODE.value,
         help="which retriever to score; the same golden set judges all three",
     )
+    commands.add_parser(
+        "recompute-importance",
+        help="score every memory's importance from chunk count, revisions and freshness",
+    )
+
+    tune = commands.add_parser(
+        "tune-weights", help="grid-search fusion weights against the golden set"
+    )
+    tune.add_argument("-k", "--k", dest="k", type=int, default=10)
+    tune.add_argument(
+        "--golden", type=Path, default=Path("var/golden-set.json"), help="the export to score"
+    )
+    tune.add_argument("--grid", choices=["coarse", "fine"], default="coarse")
+    tune.add_argument("--top", type=int, default=5, help="how many combinations to list")
+    tune.add_argument(
+        "--floor",
+        type=float,
+        default=RESOLUTION_FLOOR,
+        help=(
+            "the smallest difference this harness can detect, from M2.3a. Gains "
+            "below it are reported as noise rather than as results"
+        ),
+    )
+
     evaluate_command.add_argument(
         "--repeat",
         type=int,
@@ -829,6 +918,21 @@ def main(argv: list[str] | None = None) -> int:
         values = [int(value) for value in args.ef_search.split(",") if value.strip()]
         return asyncio.run(
             run_eval_recall(settings, queries=args.queries, k=args.k, ef_search_values=values)
+        )
+
+    if args.command == "recompute-importance":
+        return asyncio.run(run_recompute_importance(settings))
+
+    if args.command == "tune-weights":
+        return asyncio.run(
+            run_tune_weights(
+                settings,
+                golden_path=args.golden,
+                k=args.k,
+                grid_name=args.grid,
+                floor=args.floor,
+                top=args.top,
+            )
         )
 
     if args.command == "evaluate":

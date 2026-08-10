@@ -412,6 +412,14 @@ class ScoreBreakdown:
     keyword_rank: int | None = None
     vector_score: float | None = None
     keyword_score: float | None = None
+    # The signal rankings. They rank the *candidates the retrievers found* and
+    # never introduce a chunk of their own — see `application/search.py` — so a
+    # null here means the chunk was not a candidate at all, not that it has no
+    # date.
+    recency_rank: int | None = None
+    importance_rank: int | None = None
+    recency_score: float | None = None
+    importance_score: float | None = None
 
     def as_dict(self) -> dict[str, float | int | None]:
         return {
@@ -420,6 +428,10 @@ class ScoreBreakdown:
             "keyword_rank": self.keyword_rank,
             "vector_score": self.vector_score,
             "keyword_score": self.keyword_score,
+            "recency_rank": self.recency_rank,
+            "importance_rank": self.importance_rank,
+            "recency_score": self.recency_score,
+            "importance_score": self.importance_score,
         }
 
 
