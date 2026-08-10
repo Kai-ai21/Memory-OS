@@ -55,7 +55,7 @@ DOCUMENTED_QUERY_PREFIXES = {
 #   6-document fixture, queue question:  margin +0.0060 -> -0.0007 (rank inverts)
 #   6-document fixture, baking question: margin +0.1344 -> +0.1556
 #   this repository, 719 chunks, the four M1.6 assessment queries: two of four
-#   change their top result, and "why do we store two timestamps" loses
+#   change their top result, and the two-timestamps question loses
 #   domain/entities.py — where the answer is actually written — to a test file.
 #
 # So it is off. `tests/slow/test_query_prefix.py` re-runs that comparison and

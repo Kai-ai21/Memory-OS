@@ -15,6 +15,7 @@ them unstable, which is exactly the distinction being checked.
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -31,7 +32,7 @@ from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.db.vector_store import PgVectorStore
 from memoryos.adapters.parsers.registry import build_default_registry as build_parsers
 from memoryos.application.embed import EmbedMemory
-from memoryos.application.evaluate import evaluate
+from memoryos.application.evaluate import evaluate, stability
 from memoryos.application.golden import load_golden_set
 from memoryos.application.normalize import NormalizeMemory
 from memoryos.application.search import SearchMemories
@@ -125,6 +126,89 @@ async def golden_path(
         )
     )
     return path
+
+
+async def test_exclusions_drop_memories_before_anything_is_scored(
+    golden_path: Path, sessions: async_sessionmaker[AsyncSession]
+) -> None:
+    """`eval_exclude` has to bite before the metrics, not after.
+
+    A filter applied to the *scores* would be cosmetic. This one removes the
+    memory from the ranking, which changes recall, precision and every rank
+    below it — and the harness reports what it removed, because a filter that
+    silently shortens results is one nobody can audit.
+    """
+    search = _search(sessions)
+    payload = json.loads(golden_path.read_text())
+
+    unfiltered = await _run(search, sessions, golden_path, payload, exclude=[])
+    filtered = await _run(search, sessions, golden_path, payload, exclude=["bread.md"])
+
+    lease = "how does the worker hold a lease"
+    before = next(r for r in unfiltered["results"] if r["query_text"] == lease)
+    after = next(r for r in filtered["results"] if r["query_text"] == lease)
+
+    assert any("bread.md" in key for key in before["retrieved"])
+    assert not any("bread.md" in key for key in after["retrieved"])
+    # Named in the output, with the pattern responsible.
+    assert after["excluded"] == {"bread.md": "bread.md"}
+    # And it moved a real number rather than only the listing: bread.md was an
+    # irrelevant result occupying a rank, so removing it can only improve
+    # precision at the same k.
+    assert after["precision"] >= before["precision"]
+
+
+async def test_repeat_reports_zero_variance_when_retrieval_is_deterministic(
+    golden_path: Path, sessions: async_sessionmaker[AsyncSession]
+) -> None:
+    """The floor this milestone exists to measure starts here.
+
+    Nothing in the read path samples: the HNSW index is fixed, `ef_search` is
+    fixed, and ties break on ids. So repetition alone must show exactly zero
+    spread — and if it ever does not, the resolution floor is being set by a
+    bug rather than by the corpus.
+    """
+    search = _search(sessions)
+    golden = await load_golden_set(golden_path, sessions)
+    runs = [
+        await evaluate(
+            golden, search, sessions, k=3, now=datetime(2026, 8, 10, tzinfo=UTC)
+        )
+        for _ in range(3)
+    ]
+
+    rows = stability(runs)
+    assert {row.metric for row in rows} == {"recall@3", "precision@3", "MRR", "nDCG@3"}
+    for row in rows:
+        assert row.stdev == 0.0, (row.metric, row.values)
+        assert row.spread == 0.0, (row.metric, row.values)
+    # Not vacuous: something was actually scored.
+    assert any(row.mean > 0 for row in rows)
+
+
+def _search(sessions: async_sessionmaker[AsyncSession]) -> SearchMemories:
+    return SearchMemories(
+        sessions,
+        FakeEmbedder(),
+        PgVectorStore(sessions, FakeEmbedder(), default_ef_search=100),
+        PostgresKeywordStore(sessions),
+    )
+
+
+async def _run(
+    search: SearchMemories,
+    sessions: async_sessionmaker[AsyncSession],
+    path: Path,
+    payload: dict[str, object],
+    *,
+    exclude: list[str],
+) -> dict[str, Any]:
+    path.write_text(json.dumps({**payload, "eval_exclude": exclude}))
+    golden = await load_golden_set(path, sessions)
+    run = await evaluate(
+        golden, search, sessions, k=3, now=datetime(2026, 8, 10, tzinfo=UTC)
+    )
+    return run.as_dict()
 
 
 async def test_evaluate_is_repeatable_over_an_unchanged_corpus(

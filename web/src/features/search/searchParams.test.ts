@@ -24,7 +24,7 @@ function roundTrip(state: SearchState): SearchState {
 describe("search params", () => {
   it("survives a round trip with everything set", () => {
     const state: SearchState = {
-      q: "how does the job queue claim work",
+      q: "how a lease is renewed",
       k: 25,
       sources: ["self", "notes"],
       kind: "code",
@@ -49,7 +49,7 @@ describe("search params", () => {
   });
 
   it("preserves a query containing characters that need encoding", () => {
-    const state: SearchState = { ...EMPTY, q: "why do we store two timestamps & k=5?" };
+    const state: SearchState = { ...EMPTY, q: "why two clocks are recorded & k=5?" };
     expect(roundTrip(state)).toEqual(state);
   });
 

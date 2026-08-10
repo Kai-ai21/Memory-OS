@@ -31,6 +31,7 @@ from memoryos.application.evaluate import (
 from memoryos.application.evaluate import (
     evaluate,
     format_report,
+    format_stability,
     format_verbose,
 )
 from memoryos.application.evaluation import format_table, measure_recall
@@ -286,6 +287,7 @@ async def run_evaluate(
     compare_path: Path | None,
     worst: int,
     mode: SearchMode,
+    repeat: int,
 ) -> int:
     """Score the golden set through the ordinary search path.
 
@@ -317,6 +319,23 @@ async def run_evaluate(
             for item in golden.excluded:
                 print(f"  excluded: {item.query_text}  ({item.reason})")
             return 1
+
+        if repeat > 1:
+            runs = [
+                await evaluate(
+                    golden,
+                    container.search(),
+                    sessions,
+                    k=k,
+                    now=datetime.now(UTC),
+                    mode=mode,
+                )
+                for _ in range(repeat)
+            ]
+            print(format_report(runs[-1], worst=worst))
+            print()
+            print(format_stability(runs))
+            return 0
 
         run = await evaluate(
             golden, container.search(), sessions, k=k, now=datetime.now(UTC), mode=mode
@@ -464,10 +483,22 @@ async def run_export_golden_set(settings: Settings, *, output: Path) -> int:
     silently omitting it would make a shrinking corpus look like a shrinking
     disagreement.
     """
+    # An `eval_exclude` already in the target file wins over the defaults. The
+    # list is meant to be edited next to the data it applies to, and an export
+    # that silently reverted a hand-tuned exclusion would quietly change what
+    # every later measurement means.
+    existing: list[str] | None = None
+    if output.exists():
+        previous = json.loads(output.read_text())
+        if isinstance(previous.get("eval_exclude"), list):
+            existing = [str(pattern) for pattern in previous["eval_exclude"]]
+
     container = Container.build(settings)
     try:
         golden = await export_golden_set(
-            container.database.session_factory, now=datetime.now(UTC)
+            container.database.session_factory,
+            now=datetime.now(UTC),
+            eval_exclude=existing,
         )
         payload = golden.as_dict()
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -729,6 +760,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SEARCH_MODE.value,
         help="which retriever to score; the same golden set judges all three",
     )
+    evaluate_command.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help=(
+            "run the evaluation N times and report each metric's standard "
+            "deviation; the floor below which a difference is not evidence"
+        ),
+    )
     return parser
 
 
@@ -803,6 +843,7 @@ def main(argv: list[str] | None = None) -> int:
                 compare_path=args.compare_path,
                 worst=args.worst,
                 mode=SearchMode(args.mode),
+                repeat=args.repeat,
             )
         )
 
