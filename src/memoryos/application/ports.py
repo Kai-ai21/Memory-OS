@@ -387,6 +387,43 @@ class SearchFilters:
 
 
 @dataclass(frozen=True, slots=True)
+class ScoreBreakdown:
+    """Where a chunk's score came from. The explainability guardrail.
+
+    Not optional, and not a debugging convenience. Once two retrievers are fused
+    into one number, that number is the only thing a reader sees, and it is
+    unfalsifiable without this: a result ranked fourth cannot be explained, a
+    regression cannot be attributed to a half, and M2.5's citations have nothing
+    to show beyond "the system says so". The cost is one dataclass; the
+    alternative is a ranking nobody can argue with.
+
+    `fused` is whatever the chunk was actually ranked by — the RRF score under
+    hybrid, and the retriever's own score under a single-retriever mode, so the
+    field never lies about what produced the order. The per-retriever scores are
+    kept raw and uncomparable, because normalising them is precisely what RRF
+    exists to avoid.
+
+    A null rank means that retriever did not return this chunk at all, which is
+    different from returning it last.
+    """
+
+    fused: float
+    vector_rank: int | None = None
+    keyword_rank: int | None = None
+    vector_score: float | None = None
+    keyword_score: float | None = None
+
+    def as_dict(self) -> dict[str, float | int | None]:
+        return {
+            "fused": self.fused,
+            "vector_rank": self.vector_rank,
+            "keyword_rank": self.keyword_rank,
+            "vector_score": self.vector_score,
+            "keyword_score": self.keyword_score,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ScoredChunk:
     chunk_id: UUID
     memory_id: UUID
@@ -412,6 +449,10 @@ class ScoredChunk:
     # can name the function it came from is the difference between "somewhere in
     # sync.py" and a reference somebody can check.
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Attached by the search use case, which is the only layer that knows how
+    # many retrievers ran. The stores leave it None: a store cannot describe a
+    # fusion it was not part of.
+    breakdown: ScoreBreakdown | None = None
 
 
 class ShadowWorkspace(Protocol):

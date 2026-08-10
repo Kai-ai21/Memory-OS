@@ -36,7 +36,7 @@ from memoryos.application.evaluate import (
 from memoryos.application.evaluation import format_table, measure_recall
 from memoryos.application.golden import load_golden_set
 from memoryos.application.judgements import export_golden_set
-from memoryos.application.ports import SearchFilters
+from memoryos.application.ports import ScoreBreakdown, SearchFilters
 from memoryos.application.rechunk import enqueue_rechunk, find_stale
 from memoryos.application.replay import PartialShadowReplay, ReplayScope, ReplayStage
 from memoryos.application.verification import compare, snapshot
@@ -44,8 +44,9 @@ from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
 from memoryos.container import Container
 from memoryos.domain.entities import Source
+from memoryos.domain.fusion import DEFAULT_RRF_K
 from memoryos.domain.ids import new_id
-from memoryos.domain.values import SearchMode, SourceKind
+from memoryos.domain.values import DEFAULT_SEARCH_MODE, SearchMode, SourceKind
 from memoryos.logging import configure_logging
 
 
@@ -209,6 +210,8 @@ async def run_search(
 
         if mode is SearchMode.KEYWORD:
             described = "keyword (ts_rank_cd)"
+        elif mode is SearchMode.HYBRID:
+            described = f"hybrid (rrf k={DEFAULT_RRF_K})"
         else:
             described = "exact" if exact else f"ann (ef_search={settings.hnsw_ef_search})"
         print(f'query: {result.query!r}   [{described}]')
@@ -223,6 +226,11 @@ async def run_search(
             excerpt = " ".join(best.text.split())[:160]
             print(f"{rank}. {hit.score:.4f}  {hit.external_key}")
             print(f"     chunks matched: {len(hit.matched_chunks)}  best: #{best.ordinal}")
+            # Where the score came from. Under hybrid the fused number is
+            # meaningless on its own — 0.0328 says nothing until you know it is
+            # rank 2 in one retriever and rank 4 in the other.
+            if best.breakdown is not None:
+                print(f"     {_describe(best.breakdown)}")
             print(f"     {excerpt}\n")
     finally:
         await container.dispose()
@@ -255,6 +263,16 @@ async def run_eval_recall(
     finally:
         await container.dispose()
     return 0
+
+
+def _describe(breakdown: ScoreBreakdown) -> str:
+    """One line of provenance: which retriever ranked this where."""
+    parts = []
+    if breakdown.vector_rank is not None:
+        parts.append(f"vector #{breakdown.vector_rank} ({breakdown.vector_score:.4f})")
+    if breakdown.keyword_rank is not None:
+        parts.append(f"keyword #{breakdown.keyword_rank} ({breakdown.keyword_score:.4f})")
+    return "from: " + ("  ".join(parts) if parts else "nothing")
 
 
 async def run_evaluate(
@@ -578,8 +596,11 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument(
         "--mode",
         choices=[value.value for value in SearchMode],
-        default=SearchMode.VECTOR.value,
-        help="which retriever answers: 'vector' embeds the query, 'keyword' matches terms",
+        default=DEFAULT_SEARCH_MODE.value,
+        help=(
+            "which retriever answers: 'hybrid' fuses both with RRF, 'vector' embeds "
+            "the query, 'keyword' matches terms"
+        ),
     )
 
     replay = commands.add_parser(
@@ -705,8 +726,8 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_command.add_argument(
         "--mode",
         choices=[value.value for value in SearchMode],
-        default=SearchMode.VECTOR.value,
-        help="which retriever to score; the same golden set judges both",
+        default=DEFAULT_SEARCH_MODE.value,
+        help="which retriever to score; the same golden set judges all three",
     )
     return parser
 

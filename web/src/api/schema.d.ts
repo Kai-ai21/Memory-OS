@@ -235,6 +235,28 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * BreakdownOut
+         * @description Where the score came from, per retriever.
+         *
+         *     Returned on every hit in every mode. Once two retrievers are fused into one
+         *     number, that number is the only thing a client can show, and without this it
+         *     cannot say *why* — which is both how a bad ranking gets debugged and what
+         *     M2.5's citations will render. A null rank means that retriever did not
+         *     return the chunk, which is not the same as returning it last.
+         */
+        BreakdownOut: {
+            /** Fused */
+            fused: number;
+            /** Keyword Rank */
+            keyword_rank?: number | null;
+            /** Keyword Score */
+            keyword_score?: number | null;
+            /** Vector Rank */
+            vector_rank?: number | null;
+            /** Vector Score */
+            vector_score?: number | null;
+        };
         /** CreateSource */
         CreateSource: {
             /** Exclude */
@@ -493,7 +515,7 @@ export interface components {
              */
             k: number;
             kind?: components["schemas"]["MemoryKind"] | null;
-            /** @default vector */
+            /** @default hybrid */
             mode: components["schemas"]["SearchMode"];
             /** Q */
             q: string;
@@ -504,17 +526,17 @@ export interface components {
          * SearchMode
          * @description Which retriever answers a query.
          *
-         *     Two, deliberately not combined. They fail in opposite directions — the
-         *     vector half is blind to opaque exact tokens, the keyword half is blind to
-         *     paraphrase — and M2.0's harness exists to measure whether that complement is
-         *     real before M2.2 fuses them. Fusing first and measuring afterwards would
-         *     make it impossible to tell which half was carrying the result.
+         *     They fail in opposite directions — the vector half is blind to opaque exact
+         *     tokens, the keyword half is blind to paraphrase — and M2.1 measured that
+         *     complement before M2.2 fused it, so that it was possible to tell which half
+         *     carries which query. `SKIP LOCKED` goes from recall 0.000 to 1.000 between
+         *     them; the paraphrase queries go the other way, to exactly 0.000.
          *
-         *     `VECTOR` is the default everywhere, so nothing that predates this enum
-         *     changes behaviour.
+         *     `HYBRID` is the product. The other two remain because the only way to know
+         *     what fusion is doing is to be able to run each half alone.
          * @enum {string}
          */
-        SearchMode: "vector" | "keyword";
+        SearchMode: "vector" | "keyword" | "hybrid";
         /** SearchOut */
         SearchOut: {
             /** Hits */
@@ -697,6 +719,7 @@ export interface components {
         };
         /** ChunkOut */
         memoryos__api__routes__search__ChunkOut: {
+            breakdown?: components["schemas"]["BreakdownOut"] | null;
             /** Char End */
             char_end: number;
             /** Char Start */

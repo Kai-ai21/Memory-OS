@@ -26,6 +26,10 @@ var/*
 # baseline that lives only on one machine is not a baseline.
 !var/golden-set.json
 !var/baseline.json
+# The hybrid baseline sits *alongside* the vector one rather than replacing it.
+# Two systems now exist, the vector number is what M2.0 recorded Phase 2 starting
+# from, and overwriting it would lose the only fixed point later milestones have.
+!var/baseline-hybrid.json
 
 # Web
 web/node_modules/

@@ -12,7 +12,7 @@ from memoryos.adapters.db import models
 from memoryos.application.ports import SearchFilters
 from memoryos.application.search import SearchResult
 from memoryos.container import Container
-from memoryos.domain.values import MemoryKind, SearchMode
+from memoryos.domain.values import DEFAULT_SEARCH_MODE, MemoryKind, SearchMode
 
 router = APIRouter(tags=["search"])
 
@@ -25,6 +25,23 @@ def get_container(request: Request) -> Container:
 ContainerDep = Annotated[Container, Depends(get_container)]
 
 
+class BreakdownOut(BaseModel):
+    """Where the score came from, per retriever.
+
+    Returned on every hit in every mode. Once two retrievers are fused into one
+    number, that number is the only thing a client can show, and without this it
+    cannot say *why* — which is both how a bad ranking gets debugged and what
+    M2.5's citations will render. A null rank means that retriever did not
+    return the chunk, which is not the same as returning it last.
+    """
+
+    fused: float
+    vector_rank: int | None = None
+    keyword_rank: int | None = None
+    vector_score: float | None = None
+    keyword_score: float | None = None
+
+
 class ChunkOut(BaseModel):
     chunk_id: UUID
     ordinal: int
@@ -32,6 +49,7 @@ class ChunkOut(BaseModel):
     score: float
     char_start: int
     char_end: int
+    breakdown: BreakdownOut | None = None
     # What the chunker knew about where this span came from, e.g.
     # `{"definition": "SyncSource._ingest"}`. Half of what makes the offsets
     # above usable as a citation rather than just a highlight range.
@@ -81,10 +99,11 @@ class SearchIn(BaseModel):
     include_deleted: bool = False
     ef_search: int | None = None
     exact: bool = False
-    # Defaulted to vector, so every caller written before M2.1 gets exactly what
-    # it got before. `ef_search` and `exact` are vector-only knobs and are
-    # ignored under `keyword` — there is no approximate index to tune.
-    mode: SearchMode = SearchMode.VECTOR
+    # Hybrid: both retrievers, fused by RRF. `vector` and `keyword` remain
+    # reachable because the only way to know what fusion is doing is to be able
+    # to run each half alone. `ef_search` and `exact` are vector-only knobs and
+    # do nothing under `keyword`.
+    mode: SearchMode = DEFAULT_SEARCH_MODE
 
 
 async def build_filters(container: Container, body: SearchIn) -> SearchFilters:
@@ -142,6 +161,11 @@ def to_response(result: SearchResult) -> SearchOut:
                         char_start=chunk.char_start,
                         char_end=chunk.char_end,
                         metadata=chunk.metadata,
+                        breakdown=(
+                            None
+                            if chunk.breakdown is None
+                            else BreakdownOut(**chunk.breakdown.as_dict())  # type: ignore[arg-type]
+                        ),
                     )
                     for chunk in hit.matched_chunks
                 ],
@@ -176,7 +200,7 @@ async def search(
     include_deleted: bool = False,
     ef_search: int | None = None,
     exact: bool = False,
-    mode: SearchMode = SearchMode.VECTOR,
+    mode: SearchMode = DEFAULT_SEARCH_MODE,
 ) -> SearchOut:
     return await run_search(
         container,

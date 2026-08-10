@@ -6,8 +6,8 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 
 ## Status
 
-**Phase 1 complete**, plus M2.0a (the search interface), M2.0 (the evaluation harness) and
-M2.1 (keyword search).
+**Phase 1 complete**, plus M2.0a (the search interface), M2.0 (the evaluation harness),
+M2.1 (keyword search) and M2.2 (hybrid retrieval).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -15,9 +15,9 @@ text into chunks sized for the embedding model, embeds them, and answers questio
 meaning. Then it can throw all of that away and rebuild it from the log, and prove the result is
 identical.
 
-Semantic and lexical search, side by side and not yet combined — fusion, reranking, and
-synthesis are the rest of Phase 2. What it retrieves is measured rather than assumed: see
-[Evaluation](#evaluation).
+Semantic and lexical retrieval, fused by reciprocal rank into one ranked list — reranking,
+recency and synthesis are the rest of Phase 2. What it retrieves is measured rather than
+assumed: see [Evaluation](#evaluation).
 
 ### What Phase 1 built
 
@@ -334,6 +334,56 @@ Three query choices, each with a plausible wrong alternative:
 A query that reduces to no lexemes — `"the and of"` — returns an empty list. Finding nothing is
 an answer, not an error.
 
+### Hybrid, and why RRF
+
+`--mode hybrid` is the default. Both retrievers run concurrently under `asyncio.gather` — they
+are independent queries and serialising them would add the embedding latency to the keyword
+latency for nothing — and their two rankings are fused by reciprocal rank.
+
+The obvious alternative, `0.7 * cosine + 0.3 * ts_rank_cd`, does not work and no amount of
+tuning fixes it. The two numbers are not on comparable scales: cosine from this model occupies
+a narrow band where almost all the range carries no signal, and `ts_rank_cd` is unbounded and
+depends on term frequencies across the whole corpus, so the same document scores differently
+after ingesting unrelated files. Every normalisation that would make them comparable encodes an
+assumption about the score distribution that stops holding as the corpus grows, and it fails
+silently — the ranking degrades and nothing errors.
+
+RRF discards the scores and keeps the ordering, which is the part both retrievers mean the same
+thing by:
+
+```
+score(d) = Σ  weight / (k + rank(d))        k = 60
+```
+
+`k = 60` is from the original paper and its job is to flatten the curve, so that agreement
+outweighs enthusiasm: a document ranked third by both retrievers scores 1/63 + 1/63 and beats
+one ranked first by only one at 1/61. **Not tuned, and deliberately not tuned before M2.3** —
+with two retrievers and 21 golden queries there is not enough signal to tell a real improvement
+from a fit to this corpus.
+
+Every returned chunk carries a `ScoreBreakdown`: the fused score, and the rank and raw score
+from each retriever that found it. This is not a debugging convenience. Once two retrievers
+collapse into one number, that number is the only thing anybody sees, and without the
+breakdown a fourth-place result cannot be explained, a regression cannot be attributed to a
+half, and M2.5's citations have nothing to show.
+
+**Depth is load-bearing.** Each leg fetches `max(k * 3, k * 5)` chunks, the second term being
+the same fanout a single-retriever search uses because chunks still collapse into memories at
+about 5:1. Taking only the fusion figure left the vector leg shallower inside hybrid than
+outside it, and it cost real recall — a pinned answer chunk sat in the band between the two
+depths and simply was not in the list to be fused. A hybrid handicapped against its own vector
+half measures fanout, not fusion.
+
+**What it bought, and what it cost.** Hybrid beats vector on recall, MRR and nDCG, and sits a
+hair below it on precision; it beats keyword on all four. It is never worse than *both*
+retrievers on any query — the RRF floor holds — but it is also never better than both, and on
+six queries it lands below whichever single retriever was right. The mechanism is worth
+understanding before M2.3: when one retriever is uninformative but not *empty*, its rank-1
+result still receives the full 1/61, which is enough to displace the other retriever's rank-2.
+Equal weights assume both retrievers are equally trustworthy for every query, and they are not.
+That is the argument for the weights parameter that already exists on the fusion function and
+for whatever M2.4's reranker does with it.
+
 **What the measurement said.** Over the same 21-query golden set, vector wins roughly half the
 queries outright, keyword wins four, and the rest tie. The summary undersells it: the query
 that named this milestone's motivation went from recall 0.000 on vector to recall 1.000 on
@@ -484,7 +534,18 @@ both inside the top six on paragraphs that never mention `ingested_at`. Judged p
 memory that query looks solved.
 
 `var/baseline.json` is committed. It is the record of where Phase 2 started, and every
-later milestone in this phase reports its `--compare` diff against it.
+later milestone in this phase reports its `--compare` diff against it. `var/baseline-hybrid.json`
+sits alongside it rather than replacing it: two retrieval systems now exist, and the vector
+number is the fixed point the phase is measured from. A run records which mode produced it, and
+`--compare` says so loudly when the two disagree, because comparing a keyword run against a
+vector baseline otherwise reads as a catastrophic regression.
+
+**A contamination this milestone surfaced.** `tests/slow/test_acceptance.py` contains several
+golden queries verbatim, because it is the acceptance test for them — and the corpus is this
+repository. The lexical retriever therefore ranks that file first for those queries, finding
+the test that names the question rather than anything that answers it, and RRF then promotes
+it. It is the same hazard the keyword section warns about, arriving through a file that has a
+legitimate reason to hold the strings. Worth fixing before the golden set grows further.
 
 ## Replay
 
