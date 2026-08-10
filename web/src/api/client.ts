@@ -99,6 +99,10 @@ type Ok<T> = T extends { responses: { 200: { content: { "application/json": infe
 export type SearchResult = Ok<paths["/search"]["get"]>;
 export type MemoryHit = SearchResult["hits"][number];
 export type MatchedChunk = MemoryHit["matched_chunks"][number];
+// Present unless the caller passed `explain=false`, hence the NonNullable: the
+// components that render these are only mounted when they exist.
+export type Citation = NonNullable<MemoryHit["citations"]>[number];
+export type Explanation = NonNullable<MemoryHit["explanation"]>;
 export type MemoryDetail = Ok<paths["/memories/{memory_id}"]["get"]>;
 export type MemoryChunk = MemoryDetail["chunks"][number];
 export type Source = Ok<paths["/sources"]["get"]>[number];

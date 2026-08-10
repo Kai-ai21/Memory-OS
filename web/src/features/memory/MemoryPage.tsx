@@ -13,7 +13,7 @@
  */
 
 import { useMemo } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { api, type MemoryChunk } from "../../api/client";
@@ -22,6 +22,12 @@ import { count, isCode, range, shortHash, timestamp } from "../../lib/format";
 
 export function MemoryPage() {
   const { id = "" } = useParams();
+  // `?offset=` is where a citation points. Landing on the cited span rather than
+  // at the top of the file is the difference between a reference and a
+  // suggestion to go looking.
+  const [params] = useSearchParams();
+  const offset = Number(params.get("offset"));
+  const target = Number.isFinite(offset) && params.has("offset") ? offset : null;
   const memory = useQuery({ queryKey: ["memory", id], queryFn: () => api.memory(id) });
 
   if (memory.isLoading) return <Loading rows={6} />;
@@ -65,7 +71,12 @@ export function MemoryPage() {
         <SectionHeading right={`${detail.chunks.length} boundaries`}>
           content with chunk boundaries
         </SectionHeading>
-        <BoundedContent content={detail.content} chunks={detail.chunks} code={code} />
+        <BoundedContent
+          content={detail.content}
+          chunks={detail.chunks}
+          code={code}
+          target={target}
+        />
       </section>
 
       <section className="flex flex-col gap-2">
@@ -147,10 +158,13 @@ function BoundedContent({
   content,
   chunks,
   code,
+  target,
 }: {
   content: string | null;
   chunks: MemoryChunk[];
   code: boolean;
+  /** Where a citation pointed, so the cited slice can be marked and scrolled to. */
+  target?: number | null;
 }) {
   const pieces = useMemo(() => {
     if (!content) return [];
@@ -186,11 +200,24 @@ function BoundedContent({
 
   return (
     <div className="border border-rule bg-raised" data-testid="bounded-content">
-      {pieces.map((piece, index) => (
+      {pieces.map((piece, index) => {
+        // The slice a citation landed on. Marked rather than scrolled-to with a
+        // ref: the page is short enough that an anchor is enough, and a
+        // highlight survives the reader scrolling away and back.
+        const cited =
+          target !== null &&
+          target !== undefined &&
+          target >= piece.from &&
+          target < piece.from + piece.text.length;
+        return (
         <div
           key={piece.from}
-          className={index > 0 ? "border-t border-dashed border-edge/45" : ""}
+          id={`offset-${piece.from}`}
+          className={`${index > 0 ? "border-t border-dashed border-edge/45" : ""}${
+            cited ? " bg-amber/10" : ""
+          }`}
           data-testid="boundary-slice"
+          data-cited={cited ? "true" : undefined}
         >
           <div className="flex gap-3 px-3 py-2">
             <span className="meta w-8 shrink-0 pt-0.5 text-right text-faint">
@@ -201,7 +228,8 @@ function BoundedContent({
             </div>
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

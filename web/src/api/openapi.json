@@ -125,6 +125,137 @@
         "title": "BreakdownOut",
         "type": "object"
       },
+      "CitationOut": {
+        "properties": {
+          "char_end": {
+            "title": "Char End",
+            "type": "integer"
+          },
+          "char_start": {
+            "title": "Char Start",
+            "type": "integer"
+          },
+          "chunk_ordinal": {
+            "title": "Chunk Ordinal",
+            "type": "integer"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExcerptOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "definition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition"
+          },
+          "excerpt": {
+            "title": "Excerpt",
+            "type": "string"
+          },
+          "external_key": {
+            "title": "External Key",
+            "type": "string"
+          },
+          "memory_id": {
+            "format": "uuid",
+            "title": "Memory Id",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "prefix_chars": {
+            "title": "Prefix Chars",
+            "type": "integer"
+          },
+          "source_name": {
+            "title": "Source Name",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "memory_id",
+          "source_name",
+          "external_key",
+          "chunk_ordinal",
+          "char_start",
+          "char_end",
+          "prefix_chars",
+          "excerpt",
+          "version"
+        ],
+        "title": "CitationOut",
+        "type": "object"
+      },
+      "ContributionOut": {
+        "properties": {
+          "contribution": {
+            "title": "Contribution",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "share": {
+            "title": "Share",
+            "type": "number"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "rank",
+          "weight",
+          "contribution",
+          "share"
+        ],
+        "title": "ContributionOut",
+        "type": "object"
+      },
       "CreateSource": {
         "properties": {
           "exclude": {
@@ -228,6 +359,82 @@
         "title": "DoctorOut",
         "type": "object"
       },
+      "ExcerptOut": {
+        "description": "A quotable window with the matched span located inside it.\n\n`span_start`/`span_end` index into `text`, not into the memory, so a client\nhighlights without redoing the offset arithmetic \u2014 which is exactly the\narithmetic that gets it wrong.",
+        "properties": {
+          "span_end": {
+            "title": "Span End",
+            "type": "integer"
+          },
+          "span_start": {
+            "title": "Span Start",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "truncated_end": {
+            "title": "Truncated End",
+            "type": "boolean"
+          },
+          "truncated_start": {
+            "title": "Truncated Start",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text",
+          "span_start",
+          "span_end",
+          "truncated_start",
+          "truncated_end"
+        ],
+        "title": "ExcerptOut",
+        "type": "object"
+      },
+      "ExplanationOut": {
+        "properties": {
+          "contributions": {
+            "items": {
+              "$ref": "#/components/schemas/ContributionOut"
+            },
+            "title": "Contributions",
+            "type": "array"
+          },
+          "final_rank": {
+            "title": "Final Rank",
+            "type": "integer"
+          },
+          "fused_score": {
+            "title": "Fused Score",
+            "type": "number"
+          },
+          "rerank_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Score"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "final_rank",
+          "fused_score",
+          "contributions",
+          "why"
+        ],
+        "title": "ExplanationOut",
+        "type": "object"
+      },
       "FindingOut": {
         "properties": {
           "check": {
@@ -279,6 +486,30 @@
       },
       "HitOut": {
         "properties": {
+          "citations": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/CitationOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citations"
+          },
+          "explanation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExplanationOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "external_key": {
             "title": "External Key",
             "type": "string"
@@ -831,6 +1062,11 @@
           "exact": {
             "default": false,
             "title": "Exact",
+            "type": "boolean"
+          },
+          "explain": {
+            "default": true,
+            "title": "Explain",
             "type": "boolean"
           },
           "include_deleted": {
@@ -1796,6 +2032,16 @@
             "schema": {
               "default": true,
               "title": "Rerank",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "explain",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Explain",
               "type": "boolean"
             }
           }

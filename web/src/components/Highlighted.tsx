@@ -30,10 +30,21 @@ interface Props {
   code?: boolean;
   /** Show the whole lead-in and the full height rather than clamping. */
   full?: boolean;
+  /**
+   * `charStart`/`charEnd` already index into `text`.
+   *
+   * True for a citation excerpt, where the API located the span inside the
+   * window it built and there is no borrowed prefix to recover — the whole
+   * point of sending those offsets is that the UI does not redo the arithmetic
+   * that M1.4a got wrong.
+   */
+  absolute?: boolean;
 }
 
-export function Highlighted({ text, charStart, charEnd, code, full }: Props) {
-  const span = ownSpan(text, charStart, charEnd);
+export function Highlighted({ text, charStart, charEnd, code, full, absolute }: Props) {
+  const span = absolute
+    ? { start: charStart, end: charEnd }
+    : ownSpan(text, charStart, charEnd);
   const className = `${code ? "code-content" : "prose-content"}${full ? "" : " clamped"}`;
 
   if (!span) {

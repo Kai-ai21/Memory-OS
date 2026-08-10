@@ -8,7 +8,8 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 
 **Phase 1 complete**, plus M2.0a (the search interface), M2.0 (the evaluation harness),
 M2.1 (keyword search), M2.2 (hybrid retrieval), M2.3a (measurement reliability),
-M2.3b (ranking signals, measured and switched off) and M2.4 (cross-encoder reranking).
+M2.3b (ranking signals, measured and switched off), M2.4 (cross-encoder reranking)
+and M2.5 (citations and explainability).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -437,6 +438,41 @@ k=50 — wide enough that nothing is truncated — the retrieved sets are identi
 decimal places while MRR and nDCG move. recall@**10** does shift slightly, and that is
 arithmetic rather than a bug: reordering changes which ten memories fall above the
 cutoff, so a relevant memory can cross it in either direction.
+
+### Citations and explanations
+
+Every result carries the spans it quotes and a reconstruction of why it ranked where
+it did. `GET /search` returns both; `?explain=false` omits them, which is the only
+thing that skips reading the parent memory's normalized text. `memoryos search
+--explain` prints the same thing.
+
+A citation names `(memory, chunk ordinal, char_start, char_end, version)` and quotes
+the span. The version is on it because a citation to a memory that has since changed
+has to say what it referred to. The excerpt is widened to surrounding context — a bare
+chunk is often uninterpretable, since "the second approach" means nothing without the
+first — with the boundaries snapped to sentence or line breaks and the span's offsets
+*within the excerpt* included, so a client highlights without redoing the arithmetic.
+
+The explanation reconstructs the fusion: each ranking's `weight / (k + rank)` term, and
+that term as a **share** of the fused score. The share is the number that answers "why
+is this third?", and because it is recomputed from the same arithmetic that produced
+the ranking, a test can require the shares to sum to 1.0 — an explanation that has
+drifted from the ranker is worse than none. The one-sentence `why` is assembled from
+those numbers, never generated: it has to be available on every result, cost nothing,
+and say the same thing twice.
+
+**`memoryos verify-citations` is the milestone's real deliverable.** It asserts one
+identity on real rows:
+
+```
+memory.content[char_start:char_end] == chunk.content[prefix_chars:]
+```
+
+M1.4a broke exactly that, and nothing noticed — row counts were right, offsets were in
+bounds, every test passed, and highlights pointed a few hundred characters from the
+answer. This is the standing check that would have caught it on day one. It exits
+non-zero on any mismatch, and a test corrupts a chunk on purpose to prove it can fail,
+because a verification that cannot fail proves nothing.
 
 ### Ranking signals, and why they are off
 

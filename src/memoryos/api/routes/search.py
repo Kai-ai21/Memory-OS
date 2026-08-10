@@ -9,9 +9,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from memoryos.adapters.db import models
+from memoryos.application.citations import ExplainedHit, explain_hits
 from memoryos.application.ports import SearchFilters
 from memoryos.application.search import SearchResult
 from memoryos.container import Container
+from memoryos.domain.citation import Citation
+from memoryos.domain.fusion import DEFAULT_RRF_K
 from memoryos.domain.values import DEFAULT_SEARCH_MODE, MemoryKind, SearchMode
 
 router = APIRouter(tags=["search"])
@@ -50,6 +53,61 @@ class BreakdownOut(BaseModel):
     rerank_rank: int | None = None
 
 
+class ExcerptOut(BaseModel):
+    """A quotable window with the matched span located inside it.
+
+    `span_start`/`span_end` index into `text`, not into the memory, so a client
+    highlights without redoing the offset arithmetic — which is exactly the
+    arithmetic that gets it wrong.
+    """
+
+    text: str
+    span_start: int
+    span_end: int
+    truncated_start: bool
+    truncated_end: bool
+
+
+class CitationOut(BaseModel):
+    memory_id: UUID
+    source_name: str
+    external_key: str
+    chunk_ordinal: int
+    char_start: int
+    char_end: int
+    prefix_chars: int
+    # Exactly `memory.content[char_start:char_end]`, with the overlap head a
+    # chunk borrows from its predecessor removed. `verify-citations` asserts it.
+    excerpt: str
+    definition: str | None = None
+    occurred_at: datetime | None = None
+    # Which version was quoted. A citation to a memory that has since changed
+    # has to say what it referred to.
+    version: int
+    context: ExcerptOut | None = None
+
+
+class ContributionOut(BaseModel):
+    name: str
+    rank: int
+    score: float | None = None
+    weight: float
+    contribution: float
+    # This ranking's percentage of the fused score. The one number that answers
+    # "why is this third?".
+    share: float
+
+
+class ExplanationOut(BaseModel):
+    final_rank: int
+    fused_score: float
+    contributions: list[ContributionOut]
+    rerank_score: float | None = None
+    # Assembled from the numbers above, never generated. Deterministic, free,
+    # and available on every result.
+    why: str
+
+
 class ChunkOut(BaseModel):
     chunk_id: UUID
     ordinal: int
@@ -78,6 +136,11 @@ class HitOut(BaseModel):
     # Phase 2's citations need, and it is available because M1.1 split these
     # tables rather than storing text on the memory.
     matched_chunks: list[ChunkOut]
+    # Present unless the caller passed `explain=false`. Both require reading the
+    # parent memory's full normalized text, which is the only large column a
+    # search touches.
+    citations: list[CitationOut] | None = None
+    explanation: ExplanationOut | None = None
 
 
 class TimingOut(BaseModel):
@@ -116,6 +179,9 @@ class SearchIn(BaseModel):
     # The expensive half. False returns the fused ordering, which is what makes
     # the reranker's contribution measurable rather than assumed.
     rerank: bool = True
+    # Citations and the ranking explanation. Both cost one extra query for the
+    # memories' normalized text; a caller that only needs the ranking can skip it.
+    explain: bool = True
 
 
 async def build_filters(container: Container, body: SearchIn) -> SearchFilters:
@@ -151,7 +217,10 @@ async def build_filters(container: Container, body: SearchIn) -> SearchFilters:
     )
 
 
-def to_response(result: SearchResult) -> SearchOut:
+def to_response(
+    result: SearchResult, explained: list[ExplainedHit] | None = None
+) -> SearchOut:
+    extras = {item.hit.memory_id: item for item in (explained or [])}
     return SearchOut(
         query=result.query,
         timing=TimingOut(**result.timing.as_dict()),
@@ -181,9 +250,51 @@ def to_response(result: SearchResult) -> SearchOut:
                     )
                     for chunk in hit.matched_chunks
                 ],
+                citations=(
+                    None
+                    if hit.memory_id not in extras
+                    else [
+                        _citation_out(citation)
+                        for citation in extras[hit.memory_id].citations
+                    ]
+                ),
+                explanation=(
+                    None
+                    if hit.memory_id not in extras
+                    else ExplanationOut(
+                        **extras[hit.memory_id].explanation.as_dict()  # type: ignore[arg-type]
+                    )
+                ),
             )
             for hit in result.hits
         ],
+    )
+
+
+def _citation_out(citation: Citation) -> CitationOut:
+    return CitationOut(
+        memory_id=citation.memory_id,
+        source_name=citation.source_name,
+        external_key=citation.external_key,
+        chunk_ordinal=citation.chunk_ordinal,
+        char_start=citation.char_start,
+        char_end=citation.char_end,
+        prefix_chars=citation.prefix_chars,
+        excerpt=citation.excerpt,
+        definition=citation.definition,
+        occurred_at=citation.occurred_at,
+        version=citation.version,
+        context=(
+            None
+            if citation.context is None
+            else ExcerptOut(
+                text=citation.context.text,
+                span_start=citation.context.span_start,
+                span_end=citation.context.span_end,
+                truncated_start=citation.context.truncated_start,
+                truncated_end=citation.context.truncated_end,
+            )
+        ),
     )
 
 
@@ -198,7 +309,15 @@ async def run_search(container: Container, body: SearchIn) -> SearchOut:
         mode=body.mode,
         rerank=body.rerank,
     )
-    return to_response(result)
+    explained = None
+    if body.explain:
+        explained = await explain_hits(
+            container.database.session_factory,
+            result.hits,
+            weights=container.weights(),
+            rrf_k=DEFAULT_RRF_K,
+        )
+    return to_response(result, explained)
 
 
 @router.get("/search", response_model=SearchOut)
@@ -215,6 +334,7 @@ async def search(
     exact: bool = False,
     mode: SearchMode = DEFAULT_SEARCH_MODE,
     rerank: bool = True,
+    explain: bool = True,
 ) -> SearchOut:
     return await run_search(
         container,
@@ -230,6 +350,7 @@ async def search(
             exact=exact,
             mode=mode,
             rerank=rerank,
+            explain=explain,
         ),
     )
 

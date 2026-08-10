@@ -22,6 +22,7 @@ import { Highlighted } from "../../components/Highlighted";
 import { Tag } from "../../components/primitives";
 import { isCode, range, score as fmtScore, timestamp } from "../../lib/format";
 import { JudgementButtons, type JudgementTarget } from "../judgements/JudgementButtons";
+import { ExplanationPanel } from "./Explanation";
 import type { Verdict } from "../../api/client";
 
 interface Props {
@@ -154,6 +155,15 @@ export function ResultRow({
           </button>
         ) : null}
       </div>
+
+      {/* Diagnostics, collapsed. The one-line `why` shows always; the shares and
+          the cited spans are one click away, because the ranking is what the
+          reader came for and this explains it rather than competing with it. */}
+      <ExplanationPanel
+        explanation={hit.explanation}
+        citations={hit.citations}
+        code={code}
+      />
     </article>
   );
 }

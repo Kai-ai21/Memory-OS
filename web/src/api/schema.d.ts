@@ -269,6 +269,50 @@ export interface components {
             /** Vector Score */
             vector_score?: number | null;
         };
+        /** CitationOut */
+        CitationOut: {
+            /** Char End */
+            char_end: number;
+            /** Char Start */
+            char_start: number;
+            /** Chunk Ordinal */
+            chunk_ordinal: number;
+            context?: components["schemas"]["ExcerptOut"] | null;
+            /** Definition */
+            definition?: string | null;
+            /** Excerpt */
+            excerpt: string;
+            /** External Key */
+            external_key: string;
+            /**
+             * Memory Id
+             * Format: uuid
+             */
+            memory_id: string;
+            /** Occurred At */
+            occurred_at?: string | null;
+            /** Prefix Chars */
+            prefix_chars: number;
+            /** Source Name */
+            source_name: string;
+            /** Version */
+            version: number;
+        };
+        /** ContributionOut */
+        ContributionOut: {
+            /** Contribution */
+            contribution: number;
+            /** Name */
+            name: string;
+            /** Rank */
+            rank: number;
+            /** Score */
+            score?: number | null;
+            /** Share */
+            share: number;
+            /** Weight */
+            weight: number;
+        };
         /** CreateSource */
         CreateSource: {
             /** Exclude */
@@ -302,6 +346,39 @@ export interface components {
             /** Model Window */
             model_window: number;
         };
+        /**
+         * ExcerptOut
+         * @description A quotable window with the matched span located inside it.
+         *
+         *     `span_start`/`span_end` index into `text`, not into the memory, so a client
+         *     highlights without redoing the offset arithmetic — which is exactly the
+         *     arithmetic that gets it wrong.
+         */
+        ExcerptOut: {
+            /** Span End */
+            span_end: number;
+            /** Span Start */
+            span_start: number;
+            /** Text */
+            text: string;
+            /** Truncated End */
+            truncated_end: boolean;
+            /** Truncated Start */
+            truncated_start: boolean;
+        };
+        /** ExplanationOut */
+        ExplanationOut: {
+            /** Contributions */
+            contributions: components["schemas"]["ContributionOut"][];
+            /** Final Rank */
+            final_rank: number;
+            /** Fused Score */
+            fused_score: number;
+            /** Rerank Score */
+            rerank_score?: number | null;
+            /** Why */
+            why: string;
+        };
         /** FindingOut */
         FindingOut: {
             /** Check */
@@ -322,6 +399,9 @@ export interface components {
         };
         /** HitOut */
         HitOut: {
+            /** Citations */
+            citations?: components["schemas"]["CitationOut"][] | null;
+            explanation?: components["schemas"]["ExplanationOut"] | null;
             /** External Key */
             external_key: string;
             /** Kind */
@@ -516,6 +596,11 @@ export interface components {
              * @default false
              */
             exact: boolean;
+            /**
+             * Explain
+             * @default true
+             */
+            explain: boolean;
             /**
              * Include Deleted
              * @default false
@@ -981,6 +1066,7 @@ export interface operations {
                 exact?: boolean;
                 mode?: components["schemas"]["SearchMode"];
                 rerank?: boolean;
+                explain?: boolean;
             };
             header?: never;
             path?: never;
