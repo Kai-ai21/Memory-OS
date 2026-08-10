@@ -1,0 +1,15 @@
+{
+  "note": "Questions this corpus cannot answer. An answer to any of them is a fabrication, and catching that is worth more than any accuracy metric. Kept separate from var/golden-set.json because they have no relevant judgements by construction — the retrieval harness would correctly exclude them, and refusal is a property of answering rather than of ranking.",
+  "queries": [
+    "what is our AWS billing setup",
+    "who is on the engineering team",
+    "what is the on-call rotation this month",
+    "how much did we spend on infrastructure last quarter",
+    "what did the customer say in the support ticket about billing",
+    "when is the next board meeting",
+    "what are the salary bands for senior engineers",
+    "which vendor did we choose for SSO",
+    "what is the SLA we promised to enterprise customers",
+    "what were the results of the Q3 user research interviews"
+  ]
+}

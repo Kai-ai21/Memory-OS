@@ -20,6 +20,8 @@ from memoryos.adapters.connectors.filesystem import (
 )
 from memoryos.adapters.db import models
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
+from memoryos.adapters.llm.gemini import MissingApiKey
+from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
 from memoryos.application.backfill import (
     enqueue_embedding,
     find_unembedded,
@@ -60,6 +62,7 @@ from memoryos.container import Container
 from memoryos.domain.entities import Source
 from memoryos.domain.fusion import DEFAULT_RRF_K
 from memoryos.domain.ids import new_id
+from memoryos.domain.jobs import PermanentError, TransientError
 from memoryos.domain.values import DEFAULT_SEARCH_MODE, SearchMode, SourceKind
 from memoryos.logging import configure_logging
 
@@ -423,6 +426,122 @@ async def run_evaluate(
     finally:
         await container.dispose()
     return 0
+
+
+async def run_ask(
+    settings: Settings, *, question: str, k: int, show_context: bool
+) -> int:
+    """Answer in prose, grounded in retrieved memories.
+
+    Exits non-zero when the answer is not fully grounded — an ungrounded answer
+    is a defect even when it reads well, and a script piping this somewhere
+    should be able to tell without parsing prose.
+    """
+    container = Container.build(settings)
+    try:
+        try:
+            result = await container.answer()(question, k=k)
+        except MissingApiKey as exc:
+            print(str(exc))
+            return 2
+        except (TransientError, PermanentError) as exc:
+            print(f"the language model could not answer: {exc}")
+            return 1
+
+        verification = result.verification
+        print(f"Q: {result.question}\n")
+        print(verification.marked() if not verification.grounded else result.answer)
+        print()
+
+        if result.citations:
+            print("citations")
+            for explained in result.citations:
+                for citation in explained.citations[:1]:
+                    print(f"  {citation.locator}")
+                    if citation.definition:
+                        print(f"      in {citation.definition}()")
+                    print(f"      {' '.join(citation.excerpt.split())[:150]}")
+        else:
+            print("citations: none — the answer cited no passage")
+
+        print()
+        print(
+            f"grounding: {verification.citation_rate:.0%} of "
+            f"{verification.factual_sentences} factual sentences cited"
+            + (
+                f", {len(verification.hallucinated_indices)} invented citation(s) "
+                f"{verification.hallucinated_indices}"
+                if verification.hallucinated_indices
+                else ""
+            )
+            + (" · refusal" if verification.is_refusal else "")
+        )
+        dropped = len(result.context.dropped)
+        print(
+            f"context:   {len(result.context.passages)} passages, "
+            f"{result.context.tokens_used}/{result.context.token_budget} tokens"
+            + (f", {dropped} dropped for budget" if dropped else "")
+        )
+        timing = result.timing.as_dict()
+        print(
+            "timing:    "
+            + "  ".join(f"{name.removesuffix('_ms')} {value}ms" for name, value in timing.items())
+        )
+
+        if show_context:
+            print("\npassages sent to the model")
+            for passage in result.context.passages:
+                print(f"  {passage.label}  ({passage.tokens} tokens)")
+    finally:
+        await container.dispose()
+    return 0 if verification.grounded else 1
+
+
+async def run_eval_answers(
+    settings: Settings, *, golden_path: Path, refusals_path: Path, k: int, json_path: Path | None
+) -> int:
+    """Run every golden question and every out-of-corpus question through `/answer`.
+
+    Exits non-zero when any out-of-corpus question was answered rather than
+    declined, or when any answer cited an index it was never given. Those are
+    fabrications, and a measurement that reported them at exit 0 would be a
+    measurement nobody acts on.
+    """
+    if not golden_path.exists():
+        print(f"no golden set at {golden_path}")
+        return 1
+
+    container = Container.build(settings)
+    try:
+        sessions = container.database.session_factory
+        golden = await load_golden_set(golden_path, sessions)
+        refusals = load_refusal_queries(refusals_path)
+        try:
+            ask = container.answer()
+        except MissingApiKey as exc:
+            print(str(exc))
+            return 2
+
+        print(
+            f"asking {len(golden.queries)} corpus questions and "
+            f"{len(refusals)} out-of-corpus questions\n"
+        )
+        report = await evaluate_answers(
+            ask,
+            questions=[query.query_text for query in golden.queries],
+            refusals=refusals,
+            k=k,
+        )
+        print(report.render())
+
+        if json_path is not None:
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            json_path.write_text(json.dumps(report.as_dict(), indent=2) + "\n")
+            print(f"\nwrote {json_path}")
+    finally:
+        await container.dispose()
+
+    return 0 if report.refusal_rate == 1.0 and report.hallucinated_rate == 0.0 else 1
 
 
 async def run_verify_citations(
@@ -868,6 +987,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="recompute every vector during the rebuild rather than reusing cached ones",
     )
 
+    ask = commands.add_parser(
+        "ask", help="answer a question in prose, grounded in retrieved memories"
+    )
+    ask.add_argument("question")
+    ask.add_argument("-k", "--k", dest="k", type=int, default=10)
+    ask.add_argument(
+        "--show-context",
+        action="store_true",
+        help="list the passages that were sent to the model",
+    )
+
+    eval_answers = commands.add_parser(
+        "eval-answers",
+        help="ask every golden question plus out-of-corpus ones, and report grounding",
+    )
+    eval_answers.add_argument("-k", "--k", dest="k", type=int, default=10)
+    eval_answers.add_argument(
+        "--golden", type=Path, default=Path("var/golden-set.json")
+    )
+    eval_answers.add_argument(
+        "--refusals",
+        type=Path,
+        default=Path("var/refusal-queries.json"),
+        help="questions the corpus cannot answer; the system must decline them",
+    )
+    eval_answers.add_argument("--json", dest="json_path", type=Path)
+
     verify_citations_command = commands.add_parser(
         "verify-citations",
         help="assert every chunk's offsets point at the text the chunk claims",
@@ -1055,6 +1201,27 @@ def main(argv: list[str] | None = None) -> int:
         values = [int(value) for value in args.ef_search.split(",") if value.strip()]
         return asyncio.run(
             run_eval_recall(settings, queries=args.queries, k=args.k, ef_search_values=values)
+        )
+
+    if args.command == "ask":
+        return asyncio.run(
+            run_ask(
+                settings,
+                question=args.question,
+                k=args.k,
+                show_context=args.show_context,
+            )
+        )
+
+    if args.command == "eval-answers":
+        return asyncio.run(
+            run_eval_answers(
+                settings,
+                golden_path=args.golden,
+                refusals_path=args.refusals,
+                k=args.k,
+                json_path=args.json_path,
+            )
         )
 
     if args.command == "verify-citations":

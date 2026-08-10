@@ -8,8 +8,8 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 
 **Phase 1 complete**, plus M2.0a (the search interface), M2.0 (the evaluation harness),
 M2.1 (keyword search), M2.2 (hybrid retrieval), M2.3a (measurement reliability),
-M2.3b (ranking signals, measured and switched off), M2.4 (cross-encoder reranking)
-and M2.5 (citations and explainability).
+M2.3b (ranking signals, measured and switched off), M2.4 (cross-encoder reranking),
+M2.5 (citations and explainability) and M2.6 (grounded answers). **Phase 2 complete.**
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -17,9 +17,9 @@ text into chunks sized for the embedding model, embeds them, and answers questio
 meaning. Then it can throw all of that away and rebuild it from the log, and prove the result is
 identical.
 
-Semantic and lexical retrieval, fused by reciprocal rank and rescored by a cross-encoder —
-citations and synthesis are the rest of Phase 2. What it retrieves is measured rather than
-assumed: see [Evaluation](#evaluation).
+Semantic and lexical retrieval, fused by reciprocal rank, rescored by a cross-encoder, and
+answered in prose that cites its sources or declines. What it retrieves is measured rather
+than assumed: see [Evaluation](#evaluation).
 
 ### What Phase 1 built
 
@@ -438,6 +438,52 @@ k=50 — wide enough that nothing is truncated — the retrieved sets are identi
 decimal places while MRR and nDCG move. recall@**10** does shift slightly, and that is
 arithmetic rather than a bug: reordering changes which ten memories fall above the
 cutoff, so a relevant memory can cross it in either direction.
+
+### Grounded answers
+
+```bash
+memoryos ask "how does the job queue prevent two workers claiming the same job"
+memoryos eval-answers --json var/answers.json
+```
+
+```
+POST /answer   { "q": "...", "k": 10 }
+```
+
+This is the only part of the system that can *invent* something. Everything else returns
+text it retrieved — wrong, badly ranked or stale, but never fabricated. A model asked to
+answer from context will smooth over a gap with a fluent claim from its training data,
+and nothing in the prose marks it as different from a grounded one.
+
+So the guardrail is mechanical rather than prompted. The prompt asks for citations and
+for refusal when the passages fall short; `domain/grounding.py` then checks what came
+back, and the response carries that check rather than a promise:
+
+- **Citation indices outside the supplied range** are the unambiguous failure — the
+  model referenced a passage that was never in the prompt. Reported, and they resolve to
+  no citation, because there is nothing behind them.
+- **Factual sentences with no citation** are flagged, never removed. Quietly deleting a
+  sentence mid-answer produces prose that reads complete while missing a step; a marker
+  says which part is not grounded.
+- **A refusal scores 1.0**, not 0. It contains no claims to cite, and scoring it zero
+  would make the safest answer look like the worst one.
+
+Context assembly counts tokens with the model's own tokenizer — M1.6.1's lesson — and
+**drops whole passages rather than truncating one**. A passage cut mid-sentence is worse
+than an absent one: the model cannot tell the sentence was severed, completes the thought
+from training data, and produces a fabricated claim carrying a citation to a real
+passage. That is the most convincing wrong answer this system can make.
+
+Passages go *before* the question in the user message, because long-context models attend
+better to material preceding the instruction, and the instruction — refuse if the
+passages fall short — is the part that must not be forgotten.
+
+`var/refusal-queries.json` holds ten questions this corpus cannot answer. An answer to
+any of them is a fabrication, and the refusal rate on that set is worth more than any
+accuracy metric. `eval-answers` exits non-zero if any is answered rather than declined.
+
+Answering is the only feature that needs a credential (`MEMOS_GEMINI_API_KEY`). Without
+one, search, retrieval and every measurement above work unchanged, and `ask` says so.
 
 ### Citations and explanations
 

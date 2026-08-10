@@ -19,9 +19,11 @@ from memoryos.adapters.embedding.sentence_transformers import (
     SentenceTransformerEmbedder,
     build_embedder,
 )
+from memoryos.adapters.llm.gemini import GeminiLanguageModel
 from memoryos.adapters.parsers.registry import ParserRegistry
 from memoryos.adapters.parsers.registry import build_default_registry as build_parser_registry
 from memoryos.adapters.reranking.cross_encoder import CrossEncoderReranker
+from memoryos.application.answering import AnswerQuestion
 from memoryos.application.embed import EmbedMemory
 from memoryos.application.jobs.handlers import build_default_registry
 from memoryos.application.jobs.registry import HandlerRegistry
@@ -114,6 +116,29 @@ class Container:
             weights or self.weights(),
             self.reranker,
             rerank_candidates=self.settings.rerank_candidates,
+        )
+
+    def answer(self) -> AnswerQuestion:
+        """The grounded-answer use case.
+
+        The language model is constructed here rather than at `build`, so a
+        deployment with no key still has a working search — `MissingApiKey`
+        surfaces when somebody asks a question, which is the only operation
+        that needs one.
+
+        The embedder doubles as the token counter: it is the `TokenCounter` the
+        chunker already sizes against, so the budget is counted in the same
+        unit the corpus was built in.
+        """
+        return AnswerQuestion(
+            self.database.session_factory,
+            self.search(),
+            GeminiLanguageModel(
+                self.settings.gemini_api_key, model_name=self.settings.llm_model
+            ),
+            self.embedder,
+            weights=self.weights(),
+            token_budget=self.settings.answer_token_budget,
         )
 
     def weights(self) -> FusionWeights:
