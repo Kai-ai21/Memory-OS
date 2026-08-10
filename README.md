@@ -7,7 +7,8 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 ## Status
 
 **Phase 1 complete**, plus M2.0a (the search interface), M2.0 (the evaluation harness),
-M2.1 (keyword search), M2.2 (hybrid retrieval) and M2.3a (measurement reliability).
+M2.1 (keyword search), M2.2 (hybrid retrieval), M2.3a (measurement reliability) and
+M2.3b (ranking signals, measured and switched off).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -395,6 +396,46 @@ queries, fusion would buy nothing and the milestone would be worth cancelling.
 The failures are as complementary as the wins: every query in the set whose answer is written
 in words the question never uses scores near-perfectly on vector and exactly **0.000** on
 keyword, because not one term in the question appears in the answer.
+
+### Ranking signals, and why they are off
+
+M2.3b added recency and importance as two more rankings into the same RRF, with
+`MEMOS_WEIGHT_RECENCY` and `MEMOS_WEIGHT_IMPORTANCE` controlling how much they count,
+and `memoryos tune-weights` searching that space against the golden set. Both default
+to **zero**, and that is the result rather than an unfinished feature.
+
+Recency decays exponentially with a 180-day half-life, and an undated item scores 0.5
+rather than 0 — an unknown date is not evidence of age, the same principle as the
+constraint that forbids substituting `ingested_at` for a missing `occurred_at`.
+Importance is a labelled proxy over three observable things: chunk count log-scaled so
+it does not become a proxy for file size, revision count, and edit freshness. No model
+assigns it; `memoryos recompute-importance` computes it, off the ingest path because
+two of its three inputs are properties of an item's history rather than of the bytes
+just read.
+
+Both enter fusion as *rankings over the candidates the retrievers already found*, never
+as multipliers on a fused score and never as a source of new candidates. A file can be
+promoted for being recent; it cannot appear for it.
+
+Then the grid was searched, 97 combinations across a coarse and a fine pass, and it
+said no:
+
+- **Recency monotonically lowers nDCG.** 0.735 at weight 0, 0.731 at 0.15, 0.721 at
+  0.30, 0.707 at 0.60 — at every importance level tried. On a repository of
+  explanatory prose, when a file was last edited says almost nothing about whether it
+  answers a question about the design.
+- **The best importance weight gains 0.0109**, which is below the 0.0122 resolution
+  floor. Not evidence. Shipping it would be shipping noise with a decimal point.
+
+There is one real effect worth recording: recency trades recall for MRR. At weight 0.6
+it lifts MRR from 0.762 to 0.839 while dropping recall from 0.852 to 0.779 — it pushes
+one right answer to the top and several others out of the top ten. For a system whose
+next milestones are citations and synthesis, that is the wrong trade.
+
+The tuning had no train/test split. 41 queries cannot spare a held-out set without
+every score moving further than the effect being measured, so the winner is compared
+against the floor rather than against the runner-up, and `tune-weights` prints that
+judgement itself instead of leaving it to the reader.
 
 **A hygiene rule this section had to learn.** Do not write golden-set queries verbatim into the
 corpus. This repository is what gets indexed, so a paragraph quoting a query string makes that

@@ -15,8 +15,9 @@ argued with afterwards.
 
 import asyncio
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from statistics import mean
 from uuid import UUID
 
@@ -34,9 +35,14 @@ from memoryos.application.ports import (
     VectorStore,
 )
 from memoryos.domain.fusion import DEFAULT_RRF_K, reciprocal_rank_fusion
+from memoryos.domain.signals import recency_score
 from memoryos.domain.values import DEFAULT_SEARCH_MODE, MemoryKind, SearchMode
 
 logger = structlog.get_logger(__name__)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 # Chunks fetched per requested memory. Several chunks of one document commonly
 # match together, so retrieving only k would routinely yield fewer than k
@@ -105,6 +111,58 @@ class SearchResult:
     mode: SearchMode = SearchMode.VECTOR
 
 
+@dataclass(frozen=True, slots=True)
+class FusionWeights:
+    """How much each ranking counts. Defaults match `config.Settings`.
+
+    Signals default to zero because the grid search said so, not because they
+    are unimplemented — see the settings comment for the numbers.
+    """
+
+    vector: float = 1.0
+    keyword: float = 1.0
+    recency: float = 0.0
+    importance: float = 0.0
+
+    @property
+    def signals_are_off(self) -> bool:
+        """True when this is M2.2 hybrid exactly, with no signal contribution."""
+        return self.recency == 0.0 and self.importance == 0.0
+
+    def as_dict(self) -> dict[str, float]:
+        return {
+            "vector": self.vector,
+            "keyword": self.keyword,
+            "recency": self.recency,
+            "importance": self.importance,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SignalTable:
+    """Per-chunk signal scores for one query's candidates.
+
+    **Signals rank candidates; they never introduce them.** The two rankings
+    below cover exactly the chunks the retrievers already found, so a file can
+    be promoted for being recent but cannot appear for it. Ranking the whole
+    corpus by date and fusing that in would surface last week's untouched notes
+    for every query, which is not a ranking signal but a different product.
+
+    Ordering by `recency_score` descending is identical to ordering by
+    `occurred_at` descending, so the recency *ranking* does not change as the
+    clock moves even though the scores do. The one exception is an undated
+    chunk, pinned at 0.5: dated items decay past it over months, so its position
+    drifts slowly. That is the intended meaning of "one half-life old".
+    """
+
+    recency: dict[str, float] = field(default_factory=dict)
+    importance: dict[str, float] = field(default_factory=dict)
+
+    def ranking(self, scores: dict[str, float]) -> list[str]:
+        """Chunk ids best first, ties broken by id so a rerun agrees."""
+        return [key for key, _ in sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+
 class SearchMemories:
     def __init__(
         self,
@@ -112,11 +170,19 @@ class SearchMemories:
         embedder: Embedder,
         vector_store: VectorStore,
         keyword_store: KeywordStore,
+        weights: FusionWeights | None = None,
+        *,
+        now: Callable[[], datetime] = _utcnow,
     ) -> None:
         self._sessions = session_factory
         self._embedder = embedder
         self._store = vector_store
         self._keywords = keyword_store
+        self._weights = weights or FusionWeights()
+        # Injected so a test can pin the clock. Recency ranks by `occurred_at`
+        # order, which is invariant under a changing `now` — see `SignalTable` —
+        # so this affects the reported scores rather than the ranking.
+        self._now = now
 
     async def __call__(
         self,
@@ -220,11 +286,81 @@ class SearchMemories:
             self._keywords.search(query, k=wanted, filters=filters),
         )
 
+        signals = await self.signals_for(vector_chunks, keyword_chunks)
+
         return (
-            fuse(vector_chunks, keyword_chunks, rrf_k=rrf_k),
+            fuse(
+                vector_chunks,
+                keyword_chunks,
+                signals=signals,
+                weights=self._weights,
+                rrf_k=rrf_k,
+            ),
             embed_ms,
             embed_started,
         )
+
+    async def vector_candidates(
+        self, query: str, *, k: int, filters: SearchFilters
+    ) -> list[ScoredChunk]:
+        """The vector leg alone. For the tuner, which re-fuses without re-retrieving."""
+        return await self._vector_chunks(
+            await self._embed(query), k=k, filters=filters, ef_search=None, exact=False
+        )
+
+    async def keyword_candidates(
+        self, query: str, *, k: int, filters: SearchFilters
+    ) -> list[ScoredChunk]:
+        """The keyword leg alone. Counterpart to `vector_candidates`."""
+        return await self._keywords.search(query, k=k, filters=filters)
+
+    async def memory_metadata(
+        self, memory_ids: list[UUID]
+    ) -> dict[UUID, tuple[str, str | None, str, object, str]]:
+        """Public because the tuner groups chunks into memories without re-searching."""
+        return await self._memory_metadata(memory_ids)
+
+    async def signals_for(
+        self, *chunk_lists: Sequence[ScoredChunk]
+    ) -> SignalTable:
+        """Signal scores for every candidate chunk, keyed by chunk id.
+
+        One query for the memories behind the candidates, then arithmetic. The
+        chunk inherits its memory's recency and importance: a signal about *when
+        a document was written* has no per-chunk refinement to offer, and
+        pretending otherwise would invent precision.
+        """
+        candidates = {
+            str(chunk.chunk_id): chunk.memory_id
+            for chunks in chunk_lists
+            for chunk in chunks
+        }
+        if not candidates:
+            return SignalTable()
+
+        stmt = select(
+            models.Memory.id, models.Memory.occurred_at, models.Memory.importance
+        ).where(models.Memory.id.in_(set(candidates.values())))
+        async with self._sessions() as session:
+            rows = {row[0]: (row[1], row[2]) for row in await session.execute(stmt)}
+
+        now = self._now()
+        recency: dict[str, float] = {}
+        importance: dict[str, float] = {}
+        for chunk_id, memory_id in candidates.items():
+            row = rows.get(memory_id)
+            if row is None:
+                continue
+            occurred_at, weight = row
+            recency[chunk_id] = recency_score(occurred_at, now)
+            # A null column means `recompute-importance` has not run. Skipped
+            # rather than defaulted: scoring it 0.0 would rank every unscored
+            # memory last, and 0.5 would invent a middle the data has not
+            # earned. An absent entry simply does not appear in the ranking.
+            if weight is not None:
+                importance[chunk_id] = float(weight)
+
+        return SignalTable(recency=recency, importance=importance)
 
     async def _embed(self, query: str) -> list[float]:
         # Same reasoning as the embed pipeline: CPU-bound matrix work does not
@@ -312,18 +448,33 @@ def fuse(
     vector_chunks: Sequence[ScoredChunk],
     keyword_chunks: Sequence[ScoredChunk],
     *,
+    signals: SignalTable | None = None,
+    weights: FusionWeights | None = None,
     rrf_k: int = DEFAULT_RRF_K,
 ) -> list[ScoredChunk]:
-    """One ranking from two, each chunk carrying where it came from.
+    """One ranking from four, each chunk carrying where it came from.
 
-    Degrades rather than fails when a retriever returns nothing. A stopword-only
-    query produces no keyword results at all, and an empty ranking contributes
-    no terms to the sum, so fusion collapses to the vector ordering — reordered
-    by 1/(k+rank), which is monotonic in rank, so the ordering is exactly
-    preserved. The same holds the other way for a query the embedder cannot
-    place. Neither case is special-cased, because a special case is a branch
-    that only runs in the situation nobody tests.
+    Signals enter as *additional rankings*, not as multipliers on a fused score.
+    A post-hoc multiplier would be a second, differently-shaped mechanism whose
+    interaction with RRF nobody could reason about, and it would put recency on
+    a scale that has to be reconciled with a fused score — the exact problem
+    RRF exists to avoid. As rankings they go through the same 1/(k+rank) sum,
+    carry their own weight, and stay individually inspectable in the breakdown.
+
+    Weighting them below the retrievers is the whole design. At 0.3, a signal's
+    top-ranked chunk contributes 0.3/61 against a retriever's 1/61, so recency
+    can break a tie between two plausible answers and cannot manufacture one.
+
+    Degrades rather than fails when any ranking is empty. A stopword-only query
+    produces no keyword results, an unscored corpus produces no importance
+    ranking, and an empty ranking contributes no terms to the sum — so fusion
+    collapses to whatever remains, reordered by a function monotonic in rank,
+    which preserves that ordering exactly. Nothing is special-cased, because a
+    special case is a branch that only runs where nobody tests.
     """
+    resolved = weights or FusionWeights()
+    table = signals or SignalTable()
+
     by_id: dict[str, ScoredChunk] = {}
     vector_ranks: dict[str, int] = {}
     keyword_ranks: dict[str, int] = {}
@@ -341,12 +492,36 @@ def fuse(
     vector_scores = {str(chunk.chunk_id): chunk.score for chunk in vector_chunks}
     keyword_scores = {str(chunk.chunk_id): chunk.score for chunk in keyword_chunks}
 
+    # A signal contributes nothing at weight 0, so the ranking is not even
+    # built. That is what makes "weights at zero reproduces M2.2 exactly" true
+    # by construction rather than by arithmetic that happens to cancel.
+    recency_ranking = (
+        table.ranking(table.recency) if resolved.recency and table.recency else []
+    )
+    importance_ranking = (
+        table.ranking(table.importance)
+        if resolved.importance and table.importance
+        else []
+    )
+    recency_ranks = {key: rank for rank, key in enumerate(recency_ranking, start=1)}
+    importance_ranks = {
+        key: rank for rank, key in enumerate(importance_ranking, start=1)
+    }
+
     fused = reciprocal_rank_fusion(
         [
             [str(chunk.chunk_id) for chunk in vector_chunks],
             [str(chunk.chunk_id) for chunk in keyword_chunks],
+            recency_ranking,
+            importance_ranking,
         ],
         k=rrf_k,
+        weights=[
+            resolved.vector,
+            resolved.keyword,
+            resolved.recency,
+            resolved.importance,
+        ],
     )
 
     return [
@@ -362,6 +537,10 @@ def fuse(
                 keyword_rank=keyword_ranks.get(identifier),
                 vector_score=vector_scores.get(identifier),
                 keyword_score=keyword_scores.get(identifier),
+                recency_rank=recency_ranks.get(identifier),
+                importance_rank=importance_ranks.get(identifier),
+                recency_score=table.recency.get(identifier),
+                importance_score=table.importance.get(identifier),
             ),
         )
         for identifier, score in fused

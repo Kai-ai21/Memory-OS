@@ -41,6 +41,26 @@ class Settings(BaseSettings):
     # HNSW search width per query. Higher recall, higher latency; measured
     # rather than guessed by `memoryos eval-recall`.
     hnsw_ef_search: int = 100
+    # How much each ranking counts in the fusion.
+    #
+    # **Both signals default to zero, and that is the M2.3b result rather than a
+    # placeholder.** A 97-combination grid search over the 41-query golden set
+    # found that recency monotonically *lowers* nDCG at every importance level
+    # it was tried with — 0.735 at weight 0, 0.731 at 0.15, 0.721 at 0.30, 0.707
+    # at 0.60 — and that the best importance weight, 0.10, gains 0.0109, which
+    # is below the 0.0122 resolution floor M2.3a measured. A gain under the
+    # floor is not evidence, so shipping it would be shipping noise with a
+    # decimal point.
+    #
+    # The machinery stays and the weights stay tunable: `MEMOS_WEIGHT_RECENCY`
+    # and `MEMOS_WEIGHT_IMPORTANCE` turn them on for a corpus where the answer
+    # may differ. This one is a repository of explanatory prose, where when a
+    # file was last edited says almost nothing about whether it answers a
+    # question about the design.
+    weight_vector: float = 1.0
+    weight_keyword: float = 1.0
+    weight_recency: float = 0.0
+    weight_importance: float = 0.0
     log_level: str = "INFO"
     log_json: bool = False
     # Browser origins allowed to call this API. Empty by default, which means no

@@ -27,7 +27,7 @@ from memoryos.application.jobs.registry import HandlerRegistry
 from memoryos.application.normalize import NormalizeMemory
 from memoryos.application.ports import Chunker, Embedder
 from memoryos.application.replay import ReplayCorpus
-from memoryos.application.search import SearchMemories
+from memoryos.application.search import FusionWeights, SearchMemories
 from memoryos.application.sync import SyncSource
 from memoryos.config import Settings
 
@@ -94,9 +94,22 @@ class Container:
             self.database.session_factory, self.blobs, self.parsers, self.chunker
         )
 
-    def search(self) -> SearchMemories:
+    def search(self, weights: FusionWeights | None = None) -> SearchMemories:
         return SearchMemories(
-            self.database.session_factory, self.embedder, self.vectors, self.keywords
+            self.database.session_factory,
+            self.embedder,
+            self.vectors,
+            self.keywords,
+            weights or self.weights(),
+        )
+
+    def weights(self) -> FusionWeights:
+        """Fusion weights from settings, so `MEMOS_WEIGHT_*` reaches every caller."""
+        return FusionWeights(
+            vector=self.settings.weight_vector,
+            keyword=self.settings.weight_keyword,
+            recency=self.settings.weight_recency,
+            importance=self.settings.weight_importance,
         )
 
     def embed(self) -> EmbedMemory:
