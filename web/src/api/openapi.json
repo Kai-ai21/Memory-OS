@@ -8,6 +8,28 @@
             "title": "Fused",
             "type": "number"
           },
+          "importance_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Importance Rank"
+          },
+          "importance_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Importance Score"
+          },
           "keyword_rank": {
             "anyOf": [
               {
@@ -29,6 +51,50 @@
               }
             ],
             "title": "Keyword Score"
+          },
+          "recency_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recency Rank"
+          },
+          "recency_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recency Score"
+          },
+          "rerank_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Rank"
+          },
+          "rerank_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Score"
           },
           "vector_rank": {
             "anyOf": [
@@ -796,6 +862,11 @@
             "title": "Q",
             "type": "string"
           },
+          "rerank": {
+            "default": true,
+            "title": "Rerank",
+            "type": "boolean"
+          },
           "source": {
             "anyOf": [
               {
@@ -1030,6 +1101,10 @@
             "title": "Embed Ms",
             "type": "integer"
           },
+          "rerank_ms": {
+            "title": "Rerank Ms",
+            "type": "integer"
+          },
           "search_ms": {
             "title": "Search Ms",
             "type": "integer"
@@ -1042,6 +1117,7 @@
         "required": [
           "embed_ms",
           "search_ms",
+          "rerank_ms",
           "total_ms"
         ],
         "title": "TimingOut",
@@ -1711,6 +1787,16 @@
             "schema": {
               "$ref": "#/components/schemas/SearchMode",
               "default": "hybrid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "rerank",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Rerank",
+              "type": "boolean"
             }
           }
         ],

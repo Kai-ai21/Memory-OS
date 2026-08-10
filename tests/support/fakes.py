@@ -10,9 +10,9 @@ exactly what the one slow test exists to check.
 import hashlib
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
-from memoryos.application.ports import Embedder
+from memoryos.application.ports import Embedder, Reranker
 
 FAKE_MODEL_ID = "fake/deterministic@1"
 
@@ -98,3 +98,53 @@ class FakeEmbedder(Embedder):
         raw = [seed[index % len(seed)] / 255.0 - 0.5 for index in range(width)]
         norm = math.sqrt(sum(value * value for value in raw)) or 1.0
         return [value / norm for value in raw]
+
+
+class FakeReranker(Reranker):
+    """Deterministic pair scores, so a test never loads a cross-encoder.
+
+    Legitimate for the same reason `FakeEmbedder` is: `Reranker` is a port this
+    project owns, and what the fake honours is a contract we wrote. It cannot
+    establish that reranking *improves* anything — that is what the golden set
+    and the one slow test are for — but it can establish that the pipeline
+    reorders by whatever the reranker says, truncates before asking, and records
+    the answer.
+
+    The default scores by input position descending, which reverses the
+    shortlist. A reversal is the strongest possible signal that the pipeline
+    honours the reranker rather than quietly keeping the fused order: any
+    partial ordering could be a coincidence, and the identity ordering would be
+    indistinguishable from ignoring the model entirely.
+    """
+
+    def __init__(
+        self,
+        model_id: str = "fake/cross-encoder@1",
+        *,
+        max_length: int = 64,
+        scorer: Callable[[str, str], float] | None = None,
+    ) -> None:
+        self._model_id = model_id
+        self._max_length = max_length
+        self._scorer = scorer
+        self.calls: list[tuple[str, list[str]]] = []
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id
+
+    @property
+    def max_length(self) -> int:
+        return self._max_length
+
+    def rerank(self, query: str, documents: Sequence[str]) -> list[float]:
+        self.calls.append((query, list(documents)))
+        if self._scorer is not None:
+            return [self._scorer(query, document) for document in documents]
+        # Descending in input position: the first candidate scores lowest, so a
+        # pipeline that honours the reranker returns the shortlist reversed.
+        return [float(index) for index in range(len(documents))]
+
+    @property
+    def pairs_scored(self) -> int:
+        return sum(len(documents) for _, documents in self.calls)

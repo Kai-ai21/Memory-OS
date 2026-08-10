@@ -248,10 +248,22 @@ export interface components {
         BreakdownOut: {
             /** Fused */
             fused: number;
+            /** Importance Rank */
+            importance_rank?: number | null;
+            /** Importance Score */
+            importance_score?: number | null;
             /** Keyword Rank */
             keyword_rank?: number | null;
             /** Keyword Score */
             keyword_score?: number | null;
+            /** Recency Rank */
+            recency_rank?: number | null;
+            /** Recency Score */
+            recency_score?: number | null;
+            /** Rerank Rank */
+            rerank_rank?: number | null;
+            /** Rerank Score */
+            rerank_score?: number | null;
             /** Vector Rank */
             vector_rank?: number | null;
             /** Vector Score */
@@ -519,6 +531,11 @@ export interface components {
             mode: components["schemas"]["SearchMode"];
             /** Q */
             q: string;
+            /**
+             * Rerank
+             * @default true
+             */
+            rerank: boolean;
             /** Source */
             source?: string[] | null;
         };
@@ -626,6 +643,8 @@ export interface components {
         TimingOut: {
             /** Embed Ms */
             embed_ms: number;
+            /** Rerank Ms */
+            rerank_ms: number;
             /** Search Ms */
             search_ms: number;
             /** Total Ms */
@@ -961,6 +980,7 @@ export interface operations {
                 ef_search?: number | null;
                 exact?: boolean;
                 mode?: components["schemas"]["SearchMode"];
+                rerank?: boolean;
             };
             header?: never;
             path?: never;
