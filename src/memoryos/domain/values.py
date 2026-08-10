@@ -91,6 +91,23 @@ class Verdict(StrEnum):
     MISSING = auto()
 
 
+class SearchMode(StrEnum):
+    """Which retriever answers a query.
+
+    Two, deliberately not combined. They fail in opposite directions — the
+    vector half is blind to opaque exact tokens, the keyword half is blind to
+    paraphrase — and M2.0's harness exists to measure whether that complement is
+    real before M2.2 fuses them. Fusing first and measuring afterwards would
+    make it impossible to tell which half was carrying the result.
+
+    `VECTOR` is the default everywhere, so nothing that predates this enum
+    changes behaviour.
+    """
+
+    VECTOR = auto()
+    KEYWORD = auto()
+
+
 class EmbeddingRole(StrEnum):
     """Which side of a retrieval a piece of text is on.
 

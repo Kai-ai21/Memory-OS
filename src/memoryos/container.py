@@ -12,6 +12,7 @@ from memoryos.adapters.connectors.filesystem import FilesystemConnector
 from memoryos.adapters.db.embedding_cache import PostgresEmbeddingCache
 from memoryos.adapters.db.engine import Database
 from memoryos.adapters.db.job_queue import PostgresJobQueue
+from memoryos.adapters.db.keyword_store import PostgresKeywordStore
 from memoryos.adapters.db.shadow import PostgresShadowSchema
 from memoryos.adapters.db.vector_store import PgVectorStore
 from memoryos.adapters.embedding.sentence_transformers import (
@@ -42,6 +43,7 @@ class Container:
     embedder: SentenceTransformerEmbedder
     cache: PostgresEmbeddingCache
     vectors: PgVectorStore
+    keywords: PostgresKeywordStore
     chunker: StructuralChunker
 
     @classmethod
@@ -67,6 +69,10 @@ class Container:
                 embedder,
                 default_ef_search=settings.hnsw_ef_search,
             ),
+            # No model, no configuration, nothing to warm up: the index is
+            # maintained by Postgres from a generated column, so the lexical
+            # half of retrieval costs a session factory.
+            keywords=PostgresKeywordStore(database.session_factory),
         )
 
     def registry(self) -> HandlerRegistry:
@@ -89,7 +95,9 @@ class Container:
         )
 
     def search(self) -> SearchMemories:
-        return SearchMemories(self.database.session_factory, self.embedder, self.vectors)
+        return SearchMemories(
+            self.database.session_factory, self.embedder, self.vectors, self.keywords
+        )
 
     def embed(self) -> EmbedMemory:
         return EmbedMemory(

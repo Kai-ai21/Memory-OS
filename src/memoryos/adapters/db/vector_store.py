@@ -8,6 +8,7 @@ from sqlalchemy import ColumnElement, Select, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
+from memoryos.adapters.db.filters import memory_predicates
 from memoryos.application.ports import Embedder, ScoredChunk, SearchFilters, VectorStore
 
 logger = structlog.get_logger(__name__)
@@ -142,29 +143,17 @@ class PgVectorStore(VectorStore):
 def _predicates(filters: SearchFilters) -> list[ColumnElement[bool]]:
     """Everything a result must satisfy besides being close.
 
-    `is_current` is unconditional: a superseded version's chunks describe text
-    that is no longer what the item says, and surfacing them would be a
-    correctness bug rather than a ranking one.
+    The eligibility half lives in `db/filters.py`, shared with the keyword store:
+    the two retrievers must agree exactly about which rows are visible, and M2.2
+    fuses their outputs, where a disagreement would look like a ranking artefact
+    instead of a bug.
     """
-    clauses: list[ColumnElement[bool]] = [
-        # A chunk with no vector cannot be compared. Excluded rather than
-        # allowed to blow up mid-scan.
+    return [
+        # Vector-specific, so not shared: a chunk with no vector cannot be
+        # compared. Excluded rather than allowed to blow up mid-scan.
         models.MemoryChunk.embedding.is_not(None),
-        models.Memory.is_current.is_(True),
+        *memory_predicates(filters),
     ]
-
-    if not filters.include_deleted:
-        clauses.append(models.Memory.deleted_at.is_(None))
-    if filters.source_ids:
-        clauses.append(models.Memory.source_id.in_(list(filters.source_ids)))
-    if filters.kinds:
-        clauses.append(models.Memory.kind.in_([kind.value for kind in filters.kinds]))
-    if filters.occurred_after is not None:
-        clauses.append(models.Memory.occurred_at >= filters.occurred_after)
-    if filters.occurred_before is not None:
-        clauses.append(models.Memory.occurred_at <= filters.occurred_before)
-
-    return clauses
 
 
 def _to_chunks(rows: Sequence[Any]) -> list[ScoredChunk]:

@@ -22,6 +22,7 @@ from memoryos.adapters.chunking.structural import StructuralChunker
 from memoryos.adapters.connectors.filesystem import FilesystemConnector
 from memoryos.adapters.db import models
 from memoryos.adapters.db.embedding_cache import PostgresEmbeddingCache
+from memoryos.adapters.db.keyword_store import PostgresKeywordStore
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.db.shadow import PostgresShadowSchema
 from memoryos.adapters.db.vector_store import PgVectorStore
@@ -67,7 +68,9 @@ class Corpus:
         self.blobs = blobs
         self.embedder = embedder
         self.chunker = StructuralChunker(embedder)
-        self.search = SearchMemories(sessions, embedder, PgVectorStore(sessions, embedder))
+        self.search = SearchMemories(
+            sessions, embedder, PgVectorStore(sessions, embedder), PostgresKeywordStore(sessions)
+        )
         self.replay = ReplayCorpus(
             sessions,
             make_normalize=lambda factory: NormalizeMemory(

@@ -26,6 +26,7 @@ from memoryos.adapters.chunking.structural import StructuralChunker
 from memoryos.adapters.connectors.filesystem import FilesystemConnector
 from memoryos.adapters.db import models
 from memoryos.adapters.db.embedding_cache import PostgresEmbeddingCache
+from memoryos.adapters.db.keyword_store import PostgresKeywordStore
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.db.vector_store import PgVectorStore
 from memoryos.adapters.parsers.registry import build_default_registry as build_parsers
@@ -130,7 +131,10 @@ async def test_evaluate_is_repeatable_over_an_unchanged_corpus(
     golden_path: Path, tmp_path: Path, sessions: async_sessionmaker[AsyncSession]
 ) -> None:
     search = SearchMemories(
-        sessions, FakeEmbedder(), PgVectorStore(sessions, FakeEmbedder(), default_ef_search=100)
+        sessions,
+        FakeEmbedder(),
+        PgVectorStore(sessions, FakeEmbedder(), default_ef_search=100),
+        PostgresKeywordStore(sessions),
     )
 
     first, second = [

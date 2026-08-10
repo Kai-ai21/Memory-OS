@@ -493,11 +493,28 @@ export interface components {
              */
             k: number;
             kind?: components["schemas"]["MemoryKind"] | null;
+            /** @default vector */
+            mode: components["schemas"]["SearchMode"];
             /** Q */
             q: string;
             /** Source */
             source?: string[] | null;
         };
+        /**
+         * SearchMode
+         * @description Which retriever answers a query.
+         *
+         *     Two, deliberately not combined. They fail in opposite directions — the
+         *     vector half is blind to opaque exact tokens, the keyword half is blind to
+         *     paraphrase — and M2.0's harness exists to measure whether that complement is
+         *     real before M2.2 fuses them. Fusing first and measuring afterwards would
+         *     make it impossible to tell which half was carrying the result.
+         *
+         *     `VECTOR` is the default everywhere, so nothing that predates this enum
+         *     changes behaviour.
+         * @enum {string}
+         */
+        SearchMode: "vector" | "keyword";
         /** SearchOut */
         SearchOut: {
             /** Hits */
@@ -920,6 +937,7 @@ export interface operations {
                 include_deleted?: boolean;
                 ef_search?: number | null;
                 exact?: boolean;
+                mode?: components["schemas"]["SearchMode"];
             };
             header?: never;
             path?: never;

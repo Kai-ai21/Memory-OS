@@ -470,3 +470,37 @@ class VectorStore(Protocol):
         exhaustive to compare it against.
         """
         ...
+
+
+class KeywordStore(Protocol):
+    """Lexical retrieval, and the deliberate opposite of `VectorStore`.
+
+    They fail in complementary ways, which is the entire argument for having
+    both. An embedding of `SKIP LOCKED` carries almost no meaning, so the vector
+    half scores that query 0.000 on this corpus; a term index finds it
+    immediately, because the term is rare and appears in one place. Run it the
+    other way — "microservices" against a document that says "service-oriented
+    split" — and the term index scores nothing at all.
+
+    **The return type is `ScoredChunk`, the same shape `VectorStore` returns.**
+    That is the whole reason this protocol is shaped like the one above: M2.2
+    fuses the two rankings, and a fusion that first has to translate between two
+    result types is a fusion with a place for the two halves to disagree about
+    what a chunk is.
+
+    Scores are *not* comparable across the two: this returns `ts_rank_cd`
+    output, unbounded and corpus-relative, while the vector store returns a
+    similarity in [-1, 1]. Anything combining them has to rank-normalise first,
+    which is exactly what RRF does and why M2.2 is a separate milestone.
+    """
+
+    async def search(
+        self, query: str, *, k: int, filters: SearchFilters
+    ) -> list[ScoredChunk]:
+        """The top k chunks matching `query`, best first.
+
+        Returns an empty list — never raises — when the query reduces to no
+        lexemes, which is what "the of and" does. A query that finds nothing is
+        an ordinary answer, not an error.
+        """
+        ...
