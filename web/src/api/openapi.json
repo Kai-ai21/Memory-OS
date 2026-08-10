@@ -729,6 +729,10 @@
               }
             ]
           },
+          "mode": {
+            "$ref": "#/components/schemas/SearchMode",
+            "default": "vector"
+          },
           "q": {
             "minLength": 1,
             "title": "Q",
@@ -754,6 +758,15 @@
         ],
         "title": "SearchIn",
         "type": "object"
+      },
+      "SearchMode": {
+        "description": "Which retriever answers a query.\n\nTwo, deliberately not combined. They fail in opposite directions \u2014 the\nvector half is blind to opaque exact tokens, the keyword half is blind to\nparaphrase \u2014 and M2.0's harness exists to measure whether that complement is\nreal before M2.2 fuses them. Fusing first and measuring afterwards would\nmake it impossible to tell which half was carrying the result.\n\n`VECTOR` is the default everywhere, so nothing that predates this enum\nchanges behaviour.",
+        "enum": [
+          "vector",
+          "keyword"
+        ],
+        "title": "SearchMode",
+        "type": "string"
       },
       "SearchOut": {
         "properties": {
@@ -1620,6 +1633,15 @@
               "default": false,
               "title": "Exact",
               "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SearchMode",
+              "default": "vector"
             }
           }
         ],

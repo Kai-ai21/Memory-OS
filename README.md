@@ -6,7 +6,8 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 
 ## Status
 
-**Phase 1 complete**, plus M2.0a (the search interface) and M2.0 (the evaluation harness).
+**Phase 1 complete**, plus M2.0a (the search interface), M2.0 (the evaluation harness) and
+M2.1 (keyword search).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -14,8 +15,9 @@ text into chunks sized for the embedding model, embeds them, and answers questio
 meaning. Then it can throw all of that away and rebuild it from the log, and prove the result is
 identical.
 
-Semantic search only — BM25, fusion, reranking, and synthesis are Phase 2. What it retrieves
-is now measured rather than assumed: see [Evaluation](#evaluation).
+Semantic and lexical search, side by side and not yet combined — fusion, reranking, and
+synthesis are the rest of Phase 2. What it retrieves is measured rather than assumed: see
+[Evaluation](#evaluation).
 
 ### What Phase 1 built
 
@@ -273,11 +275,12 @@ tell you whether the vectors mean anything.
 ```bash
 memoryos search "how does the job queue claim work" -k 5
 memoryos search "..." --exact          # sequential scan, to see what the index missed
+memoryos search "..." --mode keyword   # the lexical half, see below
 memoryos eval-recall --queries 50 --ef-search 40,100,200,400
 ```
 
 ```
-GET  /search?q=...&k=10&source=NAME&kind=note&after=...&before=...
+GET  /search?q=...&k=10&source=NAME&kind=note&after=...&before=...&mode=vector
 POST /search                            # same, for long queries
 ```
 
@@ -302,6 +305,54 @@ compares the index against an exhaustive scan across several `ef_search` values.
 20,000-chunk corpus: recall@10 rises 0.94 → 1.00 as `ef_search` goes 40 → 400, and p50 latency
 rises 2.2ms → 6.3ms. Below roughly 2,000 chunks Postgres correctly ignores the index
 altogether and scans, so the numbers there say nothing about HNSW.
+
+### Keyword search
+
+`--mode keyword` answers from a Postgres full-text index instead of the embedding. Nothing is
+combined yet — two retrievers, measured against each other. Fusion is M2.2, and it is separate
+so that this comparison exists first.
+
+`memory_chunks.search_vector` is a **generated** `tsvector` column with a GIN index, not a
+trigger and not a pipeline step. Postgres recomputes it on every insert and update, so it
+cannot drift from `content`; no application code writes it, and none can. A rechunk that
+rewrites `content` therefore cannot leave the lexical index describing text that is no longer
+there. It also means the migration backfills the whole corpus by itself — adding this needed no
+re-ingest.
+
+Three query choices, each with a plausible wrong alternative:
+
+- **`websearch_to_tsquery`**, not `to_tsquery`, which takes an operator language and raises a
+  syntax error on ordinary text — turning a user's stray `&` into a 500. Not `plainto_tsquery`
+  either, which never throws but also never understands `"a quoted phrase"` or `-exclusion`.
+- **`ts_rank_cd`**, not `ts_rank`. Cover density accounts for how close the matched terms sit,
+  which is the difference between a chunk containing `SKIP LOCKED` as a phrase and one that
+  mentions skipping in a docstring and locking forty lines later.
+- **The same eligibility clauses as the vector store**, imported from `db/filters.py` rather
+  than retyped. The two retrievers may disagree about ranking; they must agree exactly about
+  which rows exist, or M2.2 will fuse a disagreement and it will look like a ranking artefact.
+
+A query that reduces to no lexemes — `"the and of"` — returns an empty list. Finding nothing is
+an answer, not an error.
+
+**What the measurement said.** Over the same 21-query golden set, vector wins roughly half the
+queries outright, keyword wins four, and the rest tie. The summary undersells it: the query
+that named this milestone's motivation went from recall 0.000 on vector to recall 1.000 on
+keyword — the one question the semantic half could not answer at all, the lexical half answers
+completely — and the union of what the two modes retrieve sits about six points of recall above
+vector alone. That headroom is what M2.2 exists to collect. Had the two won on the same
+queries, fusion would buy nothing and the milestone would be worth cancelling.
+
+The failures are as complementary as the wins: every query in the set whose answer is written
+in words the question never uses scores near-perfectly on vector and exactly **0.000** on
+keyword, because not one term in the question appears in the answer.
+
+**A hygiene rule this section had to learn.** Do not write golden-set queries verbatim into the
+corpus. This repository is what gets indexed, so a paragraph quoting a query string makes that
+paragraph a literal match for it — and the lexical retriever is built to find literal matches.
+An earlier draft of this section quoted three queries and moved two of them from 0.000 to
+1.000, measuring the README rather than the retriever. Describe the queries; do not quote them.
+`SKIP LOCKED` is the exception that cannot be avoided, because it is a real clause this project
+uses and documented long before it became a test case.
 
 ## Search interface
 

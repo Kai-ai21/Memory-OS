@@ -19,6 +19,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Computed,
     DateTime,
     ForeignKey,
     Identity,
@@ -31,7 +32,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from memoryos.domain.jobs import DEFAULT_MAX_ATTEMPTS, JobStatus
@@ -303,6 +304,18 @@ class MemoryChunk(Base):
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
     embedding_model: Mapped[str | None] = mapped_column(Text)
     embedded_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    # The lexical half of retrieval, derived from `content` by Postgres itself.
+    # Declared here rather than only in the migration so the shadow schema — which
+    # is copied from this metadata — gets it too, and so `alembic check` has
+    # something to compare against.
+    #
+    # Never read in Python. It is a query-side structure: `keyword_store.py`
+    # matches against it with `@@` and ranks with `ts_rank_cd`, and nothing loads
+    # it into a mapped instance. A generated column cannot be written either, so
+    # the pipeline neither knows nor needs to know it exists.
+    search_vector: Mapped[str | None] = mapped_column(
+        TSVECTOR, Computed("to_tsvector('english', content)", persisted=True)
+    )
 
     __table_args__ = (
         UniqueConstraint("memory_id", "ordinal", name="uq_memory_chunks_memory_ordinal"),
@@ -586,4 +599,15 @@ Index(
     postgresql_using="hnsw",
     postgresql_with={"m": 16, "ef_construction": 64},
     postgresql_ops={"embedding": "vector_ip_ops"},
+)
+
+# The lexical index, and the counterpart to the one above. GIN rather than GiST:
+# slower to build, much faster to query, and this is written once per chunk and
+# read on every keyword search. Unlike the HNSW index it is *not* deferred during
+# a shadow rebuild — an inverted index has no graph connectivity to degrade from
+# being grown incrementally, so there is nothing to gain by building it late.
+Index(
+    "ix_memory_chunks_search",
+    MemoryChunk.search_vector,
+    postgresql_using="gin",
 )

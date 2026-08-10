@@ -17,6 +17,7 @@ from memoryos.adapters.chunking.structural import StructuralChunker
 from memoryos.adapters.connectors.filesystem import FilesystemConnector
 from memoryos.adapters.db import models
 from memoryos.adapters.db.embedding_cache import PostgresEmbeddingCache
+from memoryos.adapters.db.keyword_store import PostgresKeywordStore
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.db.vector_store import PgVectorStore
 from memoryos.adapters.embedding.sentence_transformers import SentenceTransformerEmbedder
@@ -114,7 +115,9 @@ async def searcher(
         for memory_id in targets:
             await handler(memory_id)
 
-    return SearchMemories(sessions, embedder, PgVectorStore(sessions, embedder))
+    return SearchMemories(
+        sessions, embedder, PgVectorStore(sessions, embedder), PostgresKeywordStore(sessions)
+    )
 
 
 async def test_a_topical_query_returns_that_topic_above_the_others(

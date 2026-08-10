@@ -13,6 +13,7 @@ from memoryos.adapters.chunking.structural import StructuralChunker
 from memoryos.adapters.connectors.filesystem import FilesystemConnector
 from memoryos.adapters.db import models
 from memoryos.adapters.db.embedding_cache import PostgresEmbeddingCache
+from memoryos.adapters.db.keyword_store import PostgresKeywordStore
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.db.vector_store import PgVectorStore
 from memoryos.adapters.parsers.registry import build_default_registry as build_parsers
@@ -101,7 +102,7 @@ def build_corpus(
         sessions=sessions,
         embedder=embedder,
         store=store,
-        search=SearchMemories(sessions, embedder, store),
+        search=SearchMemories(sessions, embedder, store, PostgresKeywordStore(sessions)),
         sync=SyncSource(sessions, FilesystemConnector(blobs), blobs),
         normalize=NormalizeMemory(sessions, blobs, build_parsers(), StructuralChunker(embedder)),
         embed=EmbedMemory(sessions, embedder, cache),
@@ -536,7 +537,9 @@ async def test_search_on_an_empty_corpus_returns_nothing(
 ) -> None:
     embedder = FakeEmbedder()
     store = PgVectorStore(sessions, embedder)
-    result = await SearchMemories(sessions, embedder, store)("anything", k=5)
+    result = await SearchMemories(
+        sessions, embedder, store, PostgresKeywordStore(sessions)
+    )("anything", k=5)
 
     assert result.hits == []
 

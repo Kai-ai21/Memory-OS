@@ -45,7 +45,7 @@ from memoryos.config import Settings, get_settings
 from memoryos.container import Container
 from memoryos.domain.entities import Source
 from memoryos.domain.ids import new_id
-from memoryos.domain.values import SourceKind
+from memoryos.domain.values import SearchMode, SourceKind
 from memoryos.logging import configure_logging
 
 
@@ -178,7 +178,13 @@ async def run_embed(
 
 
 async def run_search(
-    settings: Settings, *, query: str, k: int, source: str | None, exact: bool
+    settings: Settings,
+    *,
+    query: str,
+    k: int,
+    source: str | None,
+    exact: bool,
+    mode: SearchMode,
 ) -> int:
     container = Container.build(settings)
     try:
@@ -197,10 +203,15 @@ async def run_search(
                 return 1
             filters = SearchFilters(source_ids=source_ids)
 
-        result = await container.search()(query, k=k, filters=filters, exact=exact)
+        result = await container.search()(
+            query, k=k, filters=filters, exact=exact, mode=mode
+        )
 
-        mode = "exact" if exact else f"ann (ef_search={settings.hnsw_ef_search})"
-        print(f'query: {result.query!r}   [{mode}]')
+        if mode is SearchMode.KEYWORD:
+            described = "keyword (ts_rank_cd)"
+        else:
+            described = "exact" if exact else f"ann (ef_search={settings.hnsw_ef_search})"
+        print(f'query: {result.query!r}   [{described}]')
         print(
             f"timing: embed {result.timing.embed_ms}ms  "
             f"search {result.timing.search_ms}ms  total {result.timing.total_ms}ms\n"
@@ -256,6 +267,7 @@ async def run_evaluate(
     verbose: bool,
     compare_path: Path | None,
     worst: int,
+    mode: SearchMode,
 ) -> int:
     """Score the golden set through the ordinary search path.
 
@@ -289,7 +301,7 @@ async def run_evaluate(
             return 1
 
         run = await evaluate(
-            golden, container.search(), sessions, k=k, now=datetime.now(UTC)
+            golden, container.search(), sessions, k=k, now=datetime.now(UTC), mode=mode
         )
         print(format_report(run, worst=worst))
 
@@ -563,6 +575,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="sequential scan instead of the index, for spot-checking what it missed",
     )
+    search.add_argument(
+        "--mode",
+        choices=[value.value for value in SearchMode],
+        default=SearchMode.VECTOR.value,
+        help="which retriever answers: 'vector' embeds the query, 'keyword' matches terms",
+    )
 
     replay = commands.add_parser(
         "replay", help="rebuild the derived tables from the event log and blobs"
@@ -684,6 +702,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=3,
         help="how many of the worst queries by MRR to list",
     )
+    evaluate_command.add_argument(
+        "--mode",
+        choices=[value.value for value in SearchMode],
+        default=SearchMode.VECTOR.value,
+        help="which retriever to score; the same golden set judges both",
+    )
     return parser
 
 
@@ -736,6 +760,7 @@ def main(argv: list[str] | None = None) -> int:
                 k=args.k,
                 source=args.source,
                 exact=args.exact,
+                mode=SearchMode(args.mode),
             )
         )
 
@@ -756,6 +781,7 @@ def main(argv: list[str] | None = None) -> int:
                 verbose=args.verbose,
                 compare_path=args.compare_path,
                 worst=args.worst,
+                mode=SearchMode(args.mode),
             )
         )
 

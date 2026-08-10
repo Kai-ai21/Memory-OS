@@ -27,7 +27,7 @@ from memoryos.application.golden import GoldenQuery, GoldenSet
 from memoryos.application.metrics import EvalResult, score
 from memoryos.application.ports import SearchFilters
 from memoryos.application.search import MemoryHit, SearchMemories
-from memoryos.domain.values import MemoryKind
+from memoryos.domain.values import MemoryKind, SearchMode
 
 logger = structlog.get_logger(__name__)
 
@@ -75,6 +75,10 @@ class EvaluationRun:
     ran_at: str
     runs: list[QueryRun]
     golden: GoldenSet
+    # Which retriever produced these numbers. Recorded because the whole of M2.1
+    # is two runs over one golden set, and a comparison that silently crossed
+    # modes would read as a catastrophic regression.
+    mode: SearchMode = SearchMode.VECTOR
     # Present when the corpus could not be reached in the shape the golden set
     # expects; carried rather than raised so a partial run still reports.
     warnings: list[str] = field(default_factory=list)
@@ -108,6 +112,7 @@ class EvaluationRun:
         return {
             "ran_at": self.ran_at,
             "k": self.k,
+            "mode": self.mode.value,
             "golden_generated_at": self.golden.generated_at,
             "queries": len(self.runs),
             "summary": {
@@ -142,6 +147,7 @@ async def evaluate(
     *,
     k: int,
     now: datetime,
+    mode: SearchMode = SearchMode.VECTOR,
 ) -> EvaluationRun:
     """Score every golden query. One search per query, through the real path."""
     runs: list[QueryRun] = []
@@ -151,7 +157,7 @@ async def evaluate(
         filters, filter_warnings = await _resolve_filters(query.filters, session_factory)
         warnings.extend(f"{query.query_text}: {note}" for note in filter_warnings)
 
-        result = await search(query.query_text, k=k, filters=filters)
+        result = await search(query.query_text, k=k, filters=filters, mode=mode)
         rows = _rows(query, result.hits)
         runs.append(
             QueryRun(
@@ -166,9 +172,14 @@ async def evaluate(
             )
         )
 
-    logger.info("evaluate.finished", queries=len(runs), k=k)
+    logger.info("evaluate.finished", queries=len(runs), k=k, mode=mode.value)
     return EvaluationRun(
-        k=k, ran_at=now.isoformat(), runs=runs, golden=golden, warnings=warnings
+        k=k,
+        ran_at=now.isoformat(),
+        runs=runs,
+        golden=golden,
+        mode=mode,
+        warnings=warnings,
     )
 
 
@@ -238,7 +249,7 @@ async def _resolve_filters(
 
 
 def format_report(run: EvaluationRun, *, worst: int = 3) -> str:
-    lines = [f"queries: {len(run.runs)}   |  k={run.k}", ""]
+    lines = [f"queries: {len(run.runs)}   |  k={run.k}   |  mode={run.mode.value}", ""]
     lines.append(f"{'':<14}{'mean':>8}{'p50':>8}{'min':>8}")
     for summary in run.summaries():
         lines.append(
@@ -312,9 +323,22 @@ class Comparison:
     regressions: list[tuple[str, float, float]]
     added: list[str]
     removed: list[str]
+    # Set when the two runs used different retrievers. Not an error — comparing
+    # keyword against the vector baseline is exactly what M2.1 does — but the
+    # numbers below then describe two systems rather than one change, and a
+    # reader has to be told which they are looking at.
+    modes: tuple[str, str] | None = None
 
     def render(self) -> str:
-        lines = [f"{'':<14}{'baseline':>10}{'now':>10}{'delta':>10}"]
+        lines: list[str] = []
+        if self.modes is not None:
+            baseline_mode, current_mode = self.modes
+            lines += [
+                f"NOTE: different retrievers — baseline is {baseline_mode}, this run "
+                f"is {current_mode}. These are two systems, not one change.",
+                "",
+            ]
+        lines.append(f"{'':<14}{'baseline':>10}{'now':>10}{'delta':>10}")
         for metric, before, after in self.deltas:
             # Rounded before formatting, and negative zero flattened. The
             # baseline is stored to six places and recomputed in full precision,
@@ -371,11 +395,19 @@ def compare(baseline: Mapping[str, Any], run: EvaluationRun) -> Comparison:
         key=lambda row: row[2] - row[1],
     )
 
+    # Older runs predate the field; absent means vector, which is what they were.
+    before_mode = str(baseline.get("mode", SearchMode.VECTOR.value))
+
     return Comparison(
         deltas=deltas,
         regressions=regressions,
         added=sorted(set(now_mrr) - set(before_mrr)),
         removed=sorted(set(before_mrr) - set(now_mrr)),
+        modes=(
+            None
+            if before_mode == run.mode.value
+            else (before_mode, run.mode.value)
+        ),
     )
 
 

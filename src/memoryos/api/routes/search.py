@@ -12,7 +12,7 @@ from memoryos.adapters.db import models
 from memoryos.application.ports import SearchFilters
 from memoryos.application.search import SearchResult
 from memoryos.container import Container
-from memoryos.domain.values import MemoryKind
+from memoryos.domain.values import MemoryKind, SearchMode
 
 router = APIRouter(tags=["search"])
 
@@ -81,6 +81,10 @@ class SearchIn(BaseModel):
     include_deleted: bool = False
     ef_search: int | None = None
     exact: bool = False
+    # Defaulted to vector, so every caller written before M2.1 gets exactly what
+    # it got before. `ef_search` and `exact` are vector-only knobs and are
+    # ignored under `keyword` — there is no approximate index to tune.
+    mode: SearchMode = SearchMode.VECTOR
 
 
 async def build_filters(container: Container, body: SearchIn) -> SearchFilters:
@@ -155,6 +159,7 @@ async def run_search(container: Container, body: SearchIn) -> SearchOut:
         filters=filters,
         ef_search=body.ef_search,
         exact=body.exact,
+        mode=body.mode,
     )
     return to_response(result)
 
@@ -171,6 +176,7 @@ async def search(
     include_deleted: bool = False,
     ef_search: int | None = None,
     exact: bool = False,
+    mode: SearchMode = SearchMode.VECTOR,
 ) -> SearchOut:
     return await run_search(
         container,
@@ -184,6 +190,7 @@ async def search(
             include_deleted=include_deleted,
             ef_search=ef_search,
             exact=exact,
+            mode=mode,
         ),
     )
 

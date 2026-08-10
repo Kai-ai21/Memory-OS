@@ -1,4 +1,13 @@
-"""Semantic search: chunks are what match, memories are what you get back."""
+"""Search: chunks are what match, memories are what you get back.
+
+Two retrievers behind one use case. `mode` chooses which — vector by default,
+so every caller that predates M2.1 is unaffected — and everything downstream of
+the chosen retriever is shared: the same fanout, the same grouping into
+memories, the same max-scoring, the same response shape. That sharing is the
+point. When M2.2 fuses the two rankings it fuses `list[ScoredChunk]` against
+`list[ScoredChunk]`, with one grouping step after it, rather than reconciling
+two parallel pipelines that drifted apart.
+"""
 
 import asyncio
 import time
@@ -11,8 +20,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
-from memoryos.application.ports import Embedder, ScoredChunk, SearchFilters, VectorStore
-from memoryos.domain.values import MemoryKind
+from memoryos.application.ports import (
+    Embedder,
+    KeywordStore,
+    ScoredChunk,
+    SearchFilters,
+    VectorStore,
+)
+from memoryos.domain.values import MemoryKind, SearchMode
 
 logger = structlog.get_logger(__name__)
 
@@ -58,6 +73,7 @@ class SearchResult:
     query: str
     hits: list[MemoryHit] = field(default_factory=list)
     timing: SearchTiming = field(default_factory=SearchTiming)
+    mode: SearchMode = SearchMode.VECTOR
 
 
 class SearchMemories:
@@ -66,10 +82,12 @@ class SearchMemories:
         session_factory: async_sessionmaker[AsyncSession],
         embedder: Embedder,
         vector_store: VectorStore,
+        keyword_store: KeywordStore,
     ) -> None:
         self._sessions = session_factory
         self._embedder = embedder
         self._store = vector_store
+        self._keywords = keyword_store
 
     async def __call__(
         self,
@@ -79,27 +97,38 @@ class SearchMemories:
         filters: SearchFilters | None = None,
         ef_search: int | None = None,
         exact: bool = False,
+        mode: SearchMode = SearchMode.VECTOR,
     ) -> SearchResult:
         started = time.monotonic()
         resolved = filters or SearchFilters()
-
-        embed_started = time.monotonic()
-        # Same reasoning as the embed pipeline: CPU-bound matrix work does not
-        # belong on the event loop, even for a single short query.
-        #
-        # `embed_query`, not `embed_passage`: this text is what the caller is
-        # searching *with*, and the model was trained to see the two differently.
-        (vector,) = await asyncio.to_thread(self._embedder.embed_query, [query])
-        embed_ms = _elapsed_ms(embed_started)
-
-        search_started = time.monotonic()
         wanted = max(k * CHUNK_FANOUT, k)
-        if exact:
-            chunks = await self._store.search_exact(vector, k=wanted, filters=resolved)
+
+        embed_ms = 0
+        search_started = time.monotonic()
+        if mode is SearchMode.KEYWORD:
+            # No embedding at all, which is most of why this mode is ~200x
+            # faster on a cold process: the model never loads.
+            chunks = await self._keywords.search(query, k=wanted, filters=resolved)
         else:
-            chunks = await self._store.search(
-                vector, k=wanted, filters=resolved, ef_search=ef_search
-            )
+            embed_started = time.monotonic()
+            # Same reasoning as the embed pipeline: CPU-bound matrix work does
+            # not belong on the event loop, even for a single short query.
+            #
+            # `embed_query`, not `embed_passage`: this text is what the caller
+            # is searching *with*, and the model was trained to see the two
+            # differently.
+            (vector,) = await asyncio.to_thread(self._embedder.embed_query, [query])
+            embed_ms = _elapsed_ms(embed_started)
+
+            search_started = time.monotonic()
+            if exact:
+                chunks = await self._store.search_exact(
+                    vector, k=wanted, filters=resolved
+                )
+            else:
+                chunks = await self._store.search(
+                    vector, k=wanted, filters=resolved, ef_search=ef_search
+                )
         search_ms = _elapsed_ms(search_started)
 
         hits = await self._to_hits(chunks, k=k)
@@ -112,10 +141,13 @@ class SearchMemories:
             query_length=len(query),
             chunks=len(chunks),
             hits=len(hits),
-            exact=exact,
+            mode=mode.value,
+            # Only meaningful in vector mode; there is no approximate index to
+            # bypass on the keyword side.
+            exact=exact and mode is SearchMode.VECTOR,
             **timing.as_dict(),
         )
-        return SearchResult(query=query, hits=hits, timing=timing)
+        return SearchResult(query=query, hits=hits, timing=timing, mode=mode)
 
     async def _to_hits(self, chunks: list[ScoredChunk], *, k: int) -> list[MemoryHit]:
         if not chunks:
