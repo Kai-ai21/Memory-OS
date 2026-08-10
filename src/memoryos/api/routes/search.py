@@ -40,6 +40,14 @@ class BreakdownOut(BaseModel):
     keyword_rank: int | None = None
     vector_score: float | None = None
     keyword_score: float | None = None
+    recency_rank: int | None = None
+    importance_rank: int | None = None
+    recency_score: float | None = None
+    importance_score: float | None = None
+    # Null means the cross-encoder never saw this chunk — it fell outside the
+    # shortlist, or reranking was off. Not the same as scoring badly.
+    rerank_score: float | None = None
+    rerank_rank: int | None = None
 
 
 class ChunkOut(BaseModel):
@@ -75,6 +83,7 @@ class HitOut(BaseModel):
 class TimingOut(BaseModel):
     embed_ms: int
     search_ms: int
+    rerank_ms: int
     total_ms: int
 
 
@@ -104,6 +113,9 @@ class SearchIn(BaseModel):
     # to run each half alone. `ef_search` and `exact` are vector-only knobs and
     # do nothing under `keyword`.
     mode: SearchMode = DEFAULT_SEARCH_MODE
+    # The expensive half. False returns the fused ordering, which is what makes
+    # the reranker's contribution measurable rather than assumed.
+    rerank: bool = True
 
 
 async def build_filters(container: Container, body: SearchIn) -> SearchFilters:
@@ -184,6 +196,7 @@ async def run_search(container: Container, body: SearchIn) -> SearchOut:
         ef_search=body.ef_search,
         exact=body.exact,
         mode=body.mode,
+        rerank=body.rerank,
     )
     return to_response(result)
 
@@ -201,6 +214,7 @@ async def search(
     ef_search: int | None = None,
     exact: bool = False,
     mode: SearchMode = DEFAULT_SEARCH_MODE,
+    rerank: bool = True,
 ) -> SearchOut:
     return await run_search(
         container,
@@ -215,6 +229,7 @@ async def search(
             ef_search=ef_search,
             exact=exact,
             mode=mode,
+            rerank=rerank,
         ),
     )
 

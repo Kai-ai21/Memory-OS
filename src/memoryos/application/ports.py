@@ -420,6 +420,12 @@ class ScoreBreakdown:
     importance_rank: int | None = None
     recency_score: float | None = None
     importance_score: float | None = None
+    # The cross-encoder's verdict, and where it placed this chunk. Null when
+    # reranking was off or the chunk fell outside the shortlist — which is the
+    # distinction that matters, because a chunk the reranker never saw is not
+    # the same as one it scored badly.
+    rerank_score: float | None = None
+    rerank_rank: int | None = None
 
     def as_dict(self) -> dict[str, float | int | None]:
         return {
@@ -432,6 +438,8 @@ class ScoreBreakdown:
             "importance_rank": self.importance_rank,
             "recency_score": self.recency_score,
             "importance_score": self.importance_score,
+            "rerank_score": self.rerank_score,
+            "rerank_rank": self.rerank_rank,
         }
 
 
@@ -521,6 +529,49 @@ class VectorStore(Protocol):
         Ground truth for recall measurement, and nothing else. There is no way
         to know what the approximate index traded away without something
         exhaustive to compare it against.
+        """
+        ...
+
+
+class Reranker(Protocol):
+    """A cross-encoder: reads the query and the document *together*.
+
+    The `Embedder` above is a bi-encoder. It encodes a query and a document
+    separately, which is what lets every document vector be computed once at
+    ingest and searched with a vector lookup — and it is exactly what limits it,
+    because the model never sees the pair. It has to compress a document into
+    384 numbers without knowing what will be asked of it.
+
+    A cross-encoder reads both at once and scores the pair directly, which is far
+    more accurate and impossible to precompute: there is one forward pass per
+    query-document pair, at query time. That asymmetry is the whole design.
+    Retrieve fifty cheaply, score those fifty expensively, return ten.
+
+    **It cannot recover what retrieval missed.** A document that was not in the
+    shortlist cannot be ranked into it, however relevant. That is why this runs
+    after fusion rather than instead of it, and why M2.1 and M2.2 came first.
+
+    Synchronous, and deliberately so. This is CPU-bound matrix work, the same as
+    embedding; making it `async` would advertise concurrency the implementation
+    does not have. Callers push it to a thread.
+    """
+
+    @property
+    def model_id(self) -> str:
+        """Identity of the loaded model, for logging and for the breakdown."""
+        ...
+
+    @property
+    def max_length(self) -> int:
+        """Tokens the model reads per pair. Longer input is truncated to fit."""
+        ...
+
+    def rerank(self, query: str, documents: Sequence[str]) -> list[float]:
+        """Relevance scores, one per document, in the order given.
+
+        Higher is better. The scale is the model's own and is not comparable to
+        a cosine similarity or a fused RRF score — which is why the caller
+        replaces the score outright rather than combining it with anything.
         """
         ...
 

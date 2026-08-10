@@ -84,6 +84,9 @@ class EvaluationRun:
     # several runs over one golden set, and a comparison that silently crossed
     # modes would read as a catastrophic regression.
     mode: SearchMode = DEFAULT_SEARCH_MODE
+    # Whether the cross-encoder ran. Recorded for the same reason `mode` is: a
+    # comparison that silently crossed this boundary would read as a result.
+    reranked: bool = True
     # Present when the corpus could not be reached in the shape the golden set
     # expects; carried rather than raised so a partial run still reports.
     warnings: list[str] = field(default_factory=list)
@@ -118,6 +121,7 @@ class EvaluationRun:
             "ran_at": self.ran_at,
             "k": self.k,
             "mode": self.mode.value,
+            "reranked": self.reranked,
             "golden_generated_at": self.golden.generated_at,
             "queries": len(self.runs),
             "summary": {
@@ -157,6 +161,7 @@ async def evaluate(
     k: int,
     now: datetime,
     mode: SearchMode = DEFAULT_SEARCH_MODE,
+    rerank: bool = True,
 ) -> EvaluationRun:
     """Score every golden query. One search per query, through the real path."""
     runs: list[QueryRun] = []
@@ -170,7 +175,9 @@ async def evaluate(
         # filtered run still scores k results rather than k minus the corpus's
         # self-references. Without this, excluding a file would improve
         # precision purely by shortening the list.
-        hits = await _retrieve(search, query, k=k, filters=filters, mode=mode, golden=golden)
+        hits = await _retrieve(
+            search, query, k=k, filters=filters, mode=mode, golden=golden, rerank=rerank
+        )
         excluded = {
             hit.external_key: pattern
             for hit in hits
@@ -200,6 +207,7 @@ async def evaluate(
         runs=runs,
         golden=golden,
         mode=mode,
+        reranked=rerank,
         warnings=warnings,
     )
 
@@ -212,6 +220,7 @@ async def _retrieve(
     filters: SearchFilters,
     mode: SearchMode,
     golden: GoldenSet,
+    rerank: bool = True,
 ) -> list[MemoryHit]:
     """Ask for enough results that k survive the exclusions.
 
@@ -219,7 +228,7 @@ async def _retrieve(
     pass actually lost something — most queries retrieve nothing excluded and
     pay nothing.
     """
-    hits = await search(query.query_text, k=k, filters=filters, mode=mode)
+    hits = await search(query.query_text, k=k, filters=filters, mode=mode, rerank=rerank)
     if not golden.exclude:
         return list(hits.hits)
 
@@ -229,7 +238,9 @@ async def _retrieve(
     if dropped == 0:
         return list(hits.hits)
 
-    widened = await search(query.query_text, k=k + dropped, filters=filters, mode=mode)
+    widened = await search(
+        query.query_text, k=k + dropped, filters=filters, mode=mode, rerank=rerank
+    )
     return list(widened.hits)
 
 
@@ -299,7 +310,11 @@ async def _resolve_filters(
 
 
 def format_report(run: EvaluationRun, *, worst: int = 3) -> str:
-    lines = [f"queries: {len(run.runs)}   |  k={run.k}   |  mode={run.mode.value}", ""]
+    lines = [
+        f"queries: {len(run.runs)}   |  k={run.k}   |  mode={run.mode.value}"
+        f"   |  rerank={'on' if run.reranked else 'off'}",
+        "",
+    ]
     lines.append(f"{'':<14}{'mean':>8}{'p50':>8}{'min':>8}")
     for summary in run.summaries():
         lines.append(

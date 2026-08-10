@@ -197,6 +197,7 @@ async def run_search(
     source: str | None,
     exact: bool,
     mode: SearchMode,
+    rerank: bool,
 ) -> int:
     container = Container.build(settings)
     try:
@@ -216,7 +217,7 @@ async def run_search(
             filters = SearchFilters(source_ids=source_ids)
 
         result = await container.search()(
-            query, k=k, filters=filters, exact=exact, mode=mode
+            query, k=k, filters=filters, exact=exact, mode=mode, rerank=rerank
         )
 
         if mode is SearchMode.KEYWORD:
@@ -228,7 +229,9 @@ async def run_search(
         print(f'query: {result.query!r}   [{described}]')
         print(
             f"timing: embed {result.timing.embed_ms}ms  "
-            f"search {result.timing.search_ms}ms  total {result.timing.total_ms}ms\n"
+            f"search {result.timing.search_ms}ms  "
+            f"rerank {result.timing.rerank_ms}ms  "
+            f"total {result.timing.total_ms}ms\n"
         )
         if not result.hits:
             print("no results")
@@ -298,6 +301,7 @@ async def run_evaluate(
     worst: int,
     mode: SearchMode,
     repeat: int,
+    rerank: bool,
 ) -> int:
     """Score the golden set through the ordinary search path.
 
@@ -339,6 +343,7 @@ async def run_evaluate(
                     k=k,
                     now=datetime.now(UTC),
                     mode=mode,
+                    rerank=rerank,
                 )
                 for _ in range(repeat)
             ]
@@ -348,7 +353,13 @@ async def run_evaluate(
             return 0
 
         run = await evaluate(
-            golden, container.search(), sessions, k=k, now=datetime.now(UTC), mode=mode
+            golden,
+            container.search(),
+            sessions,
+            k=k,
+            now=datetime.now(UTC),
+            mode=mode,
+            rerank=rerank,
         )
         print(format_report(run, worst=worst))
 
@@ -690,6 +701,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="sequential scan instead of the index, for spot-checking what it missed",
     )
     search.add_argument(
+        "--no-rerank",
+        dest="rerank",
+        action="store_false",
+        help="skip the cross-encoder and return the fused ordering",
+    )
+    search.add_argument(
         "--mode",
         choices=[value.value for value in SearchMode],
         default=DEFAULT_SEARCH_MODE.value,
@@ -850,6 +867,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     evaluate_command.add_argument(
+        "--no-rerank",
+        dest="rerank",
+        action="store_false",
+        help="score the fused ordering without the cross-encoder, to measure its effect",
+    )
+    evaluate_command.add_argument(
         "--repeat",
         type=int,
         default=1,
@@ -911,6 +934,7 @@ def main(argv: list[str] | None = None) -> int:
                 source=args.source,
                 exact=args.exact,
                 mode=SearchMode(args.mode),
+                rerank=args.rerank,
             )
         )
 
@@ -948,6 +972,7 @@ def main(argv: list[str] | None = None) -> int:
                 worst=args.worst,
                 mode=SearchMode(args.mode),
                 repeat=args.repeat,
+                rerank=args.rerank,
             )
         )
 

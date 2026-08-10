@@ -29,6 +29,7 @@ from memoryos.adapters.db import models
 from memoryos.application.ports import (
     Embedder,
     KeywordStore,
+    Reranker,
     ScoreBreakdown,
     ScoredChunk,
     SearchFilters,
@@ -71,6 +72,13 @@ CHUNK_FANOUT = 5
 # A hybrid handicapped against its own vector half measures fanout, not fusion.
 FUSION_FANOUT = 3
 
+# How many fused chunks reach the cross-encoder when no setting says otherwise.
+# Half the fanout, deliberately: see `config.Settings.rerank_candidates` for the
+# measurement. A deeper shortlist is both slower and *worse*, because it lets the
+# model promote a chunk from a depth where its judgement is no better than
+# fusion's.
+DEFAULT_RERANK_CANDIDATES = 25
+
 
 @dataclass(frozen=True, slots=True)
 class MemoryHit:
@@ -93,12 +101,17 @@ class MemoryHit:
 class SearchTiming:
     embed_ms: int = 0
     search_ms: int = 0
+    # The cross-encoder's share. Separate from `search_ms` because the whole
+    # retrieve-then-rerank trade is a latency decision, and a single total would
+    # hide which half to cut when it gets too slow.
+    rerank_ms: int = 0
     total_ms: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
             "embed_ms": self.embed_ms,
             "search_ms": self.search_ms,
+            "rerank_ms": self.rerank_ms,
             "total_ms": self.total_ms,
         }
 
@@ -171,7 +184,9 @@ class SearchMemories:
         vector_store: VectorStore,
         keyword_store: KeywordStore,
         weights: FusionWeights | None = None,
+        reranker: Reranker | None = None,
         *,
+        rerank_candidates: int = DEFAULT_RERANK_CANDIDATES,
         now: Callable[[], datetime] = _utcnow,
     ) -> None:
         self._sessions = session_factory
@@ -179,6 +194,11 @@ class SearchMemories:
         self._store = vector_store
         self._keywords = keyword_store
         self._weights = weights or FusionWeights()
+        # None means no reranking is possible at all, which is different from a
+        # caller passing `rerank=False` for one query. Both paths return the
+        # fused ordering; only one of them is a configuration.
+        self._reranker = reranker
+        self._rerank_candidates = rerank_candidates
         # Injected so a test can pin the clock. Recency ranks by `occurred_at`
         # order, which is invariant under a changing `now` — see `SignalTable` —
         # so this affects the reported scores rather than the ranking.
@@ -194,6 +214,7 @@ class SearchMemories:
         exact: bool = False,
         mode: SearchMode = DEFAULT_SEARCH_MODE,
         rrf_k: int = DEFAULT_RRF_K,
+        rerank: bool = True,
     ) -> SearchResult:
         started = time.monotonic()
         resolved = filters or SearchFilters()
@@ -231,10 +252,19 @@ class SearchMemories:
             )
         search_ms = _elapsed_ms(search_started)
 
+        rerank_ms = 0
+        if rerank and self._reranker is not None and chunks:
+            rerank_started = time.monotonic()
+            chunks = await self._rerank(query, chunks)
+            rerank_ms = _elapsed_ms(rerank_started)
+
         hits = await self._to_hits(chunks, k=k)
 
         timing = SearchTiming(
-            embed_ms=embed_ms, search_ms=search_ms, total_ms=_elapsed_ms(started)
+            embed_ms=embed_ms,
+            search_ms=search_ms,
+            rerank_ms=rerank_ms,
+            total_ms=_elapsed_ms(started),
         )
         logger.info(
             "search.finished",
@@ -242,6 +272,7 @@ class SearchMemories:
             chunks=len(chunks),
             hits=len(hits),
             mode=mode.value,
+            reranked=rerank_ms > 0,
             # Only meaningful in vector mode; there is no approximate index to
             # bypass on the keyword side.
             exact=exact and mode is SearchMode.VECTOR,
@@ -299,6 +330,68 @@ class SearchMemories:
             embed_ms,
             embed_started,
         )
+
+    async def _rerank(
+        self, query: str, chunks: Sequence[ScoredChunk]
+    ) -> list[ScoredChunk]:
+        """Rescore the shortlist with the cross-encoder and reorder by it.
+
+        **The shortlist is a prefix, and the tail is kept.** Only the top
+        `rerank_candidates` fused chunks are scored — that bound is the entire
+        cost control — but the rest are appended below them rather than dropped.
+        Discarding them would let the shortlist size silently change *recall*,
+        turning a reordering step into a filtering one, and recall is the number
+        this milestone must leave untouched.
+
+        The reranker's score replaces the fused score for the same reason the
+        fused score replaced the retriever's: everything downstream ranks on
+        `ScoredChunk.score`, and a list mixing RRF scores with cross-encoder
+        logits would sort into nonsense. The fused score survives in the
+        breakdown alongside it.
+        """
+        assert self._reranker is not None  # guarded by the caller
+        shortlist = list(chunks[: self._rerank_candidates])
+        tail = list(chunks[self._rerank_candidates :])
+
+        # CPU-bound matrix work, the same as embedding, and the port is
+        # synchronous precisely so this decision is made here rather than hidden
+        # behind an `async def` that never awaits.
+        scores = await asyncio.to_thread(
+            self._reranker.rerank, query, [chunk.text for chunk in shortlist]
+        )
+
+        scored = sorted(
+            zip(shortlist, scores, strict=True),
+            # Descending by score, ties broken by chunk id so a rerun of the
+            # same query cannot reorder.
+            key=lambda pair: (-pair[1], str(pair[0].chunk_id)),
+        )
+
+        reranked = [
+            replace(
+                chunk,
+                score=score,
+                breakdown=replace(
+                    chunk.breakdown or ScoreBreakdown(fused=chunk.score),
+                    rerank_score=score,
+                    rerank_rank=rank,
+                ),
+            )
+            for rank, (chunk, score) in enumerate(scored, start=1)
+        ]
+
+        # The tail is placed strictly below everything the model scored, in its
+        # existing fused order. Left with their RRF scores they would interleave
+        # nonsensically — a fused 0.03 outranking a cross-encoder's -5 — because
+        # the two numbers share no scale. Fusion already judged them worse than
+        # the shortlist, so below is where they belong, and they keep no rerank
+        # rank, which is what distinguishes "scored badly" from "never seen".
+        floor = min(scores, default=0.0)
+        demoted = [
+            replace(chunk, score=floor - 1e-6 * (offset + 1))
+            for offset, chunk in enumerate(tail)
+        ]
+        return reranked + demoted
 
     async def vector_candidates(
         self, query: str, *, k: int, filters: SearchFilters

@@ -21,6 +21,7 @@ from memoryos.adapters.embedding.sentence_transformers import (
 )
 from memoryos.adapters.parsers.registry import ParserRegistry
 from memoryos.adapters.parsers.registry import build_default_registry as build_parser_registry
+from memoryos.adapters.reranking.cross_encoder import CrossEncoderReranker
 from memoryos.application.embed import EmbedMemory
 from memoryos.application.jobs.handlers import build_default_registry
 from memoryos.application.jobs.registry import HandlerRegistry
@@ -44,6 +45,7 @@ class Container:
     cache: PostgresEmbeddingCache
     vectors: PgVectorStore
     keywords: PostgresKeywordStore
+    reranker: CrossEncoderReranker | None
     chunker: StructuralChunker
 
     @classmethod
@@ -73,6 +75,15 @@ class Container:
             # maintained by Postgres from a generated column, so the lexical
             # half of retrieval costs a session factory.
             keywords=PostgresKeywordStore(database.session_factory),
+            # Constructed even when disabled — construction loads nothing, and a
+            # None here is what `rerank_enabled=false` means downstream.
+            reranker=(
+                CrossEncoderReranker(
+                    settings.reranker_model, cache_dir=settings.hf_home
+                )
+                if settings.rerank_enabled
+                else None
+            ),
         )
 
     def registry(self) -> HandlerRegistry:
@@ -101,6 +112,8 @@ class Container:
             self.vectors,
             self.keywords,
             weights or self.weights(),
+            self.reranker,
+            rerank_candidates=self.settings.rerank_candidates,
         )
 
     def weights(self) -> FusionWeights:

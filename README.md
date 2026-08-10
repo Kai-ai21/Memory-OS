@@ -7,8 +7,8 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 ## Status
 
 **Phase 1 complete**, plus M2.0a (the search interface), M2.0 (the evaluation harness),
-M2.1 (keyword search), M2.2 (hybrid retrieval), M2.3a (measurement reliability) and
-M2.3b (ranking signals, measured and switched off).
+M2.1 (keyword search), M2.2 (hybrid retrieval), M2.3a (measurement reliability),
+M2.3b (ranking signals, measured and switched off) and M2.4 (cross-encoder reranking).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -16,8 +16,8 @@ text into chunks sized for the embedding model, embeds them, and answers questio
 meaning. Then it can throw all of that away and rebuild it from the log, and prove the result is
 identical.
 
-Semantic and lexical retrieval, fused by reciprocal rank into one ranked list — reranking,
-recency and synthesis are the rest of Phase 2. What it retrieves is measured rather than
+Semantic and lexical retrieval, fused by reciprocal rank and rescored by a cross-encoder —
+citations and synthesis are the rest of Phase 2. What it retrieves is measured rather than
 assumed: see [Evaluation](#evaluation).
 
 ### What Phase 1 built
@@ -396,6 +396,47 @@ queries, fusion would buy nothing and the milestone would be worth cancelling.
 The failures are as complementary as the wins: every query in the set whose answer is written
 in words the question never uses scores near-perfectly on vector and exactly **0.000** on
 keyword, because not one term in the question appears in the answer.
+
+### Reranking
+
+`--mode hybrid` retrieves a shortlist; a cross-encoder then rescores it. The embedder is
+a **bi-encoder** — query and document encoded separately, which is what lets every
+document vector be computed once at ingest and searched with a vector lookup, and
+exactly what limits it: the model compresses a document into 384 numbers without
+knowing what will be asked of it. A **cross-encoder** reads the pair together and scores
+it directly. Far more accurate, and impossible to precompute — one forward pass per
+query-document pair, at query time. So: retrieve cheaply, rescore a shortlist
+expensively, return ten.
+
+**It cannot recover what retrieval missed.** A document outside the shortlist cannot be
+ranked into it, which is why this runs after fusion rather than instead of it.
+
+The pair is truncated to the model's reported window before it is scored, and that is
+the M1.6.1 lesson applied to a second model. The failure available here is worse than
+the original: the pair is `[CLS] query [SEP] document [SEP]`, so an over-long document
+does not merely lose its tail — it can push the *query* out of the window and leave the
+model scoring a document against nothing.
+
+**The shortlist is 25, and that is measured rather than assumed.** The obvious choice is
+50, matching the fanout. Measured over the 41-query golden set:
+
+| shortlist | nDCG@10 | MRR | recall@10 | p95 total |
+|---|---|---|---|---|
+| off | 0.718 | 0.750 | 0.831 | 39ms |
+| 15 | 0.781 | 0.858 | 0.838 | — |
+| **25** | **0.788** | 0.829 | 0.839 | **280ms** |
+| 50 | 0.761 | 0.802 | 0.820 | 473ms |
+
+A deeper shortlist is both slower *and* worse. It lets the model promote a chunk fusion
+ranked fortieth into the top ten, and at that depth its judgement is not better than
+fusion's — bounding the shortlist bounds how far a candidate can jump.
+
+**Reranking reorders and adds nothing, and that is checked rather than asserted.** At
+k=50 — wide enough that nothing is truncated — the retrieved sets are identical for all
+41 queries with and without reranking, and recall@50 and precision@50 match to four
+decimal places while MRR and nDCG move. recall@**10** does shift slightly, and that is
+arithmetic rather than a bug: reordering changes which ten memories fall above the
+cutoff, so a relevant memory can cross it in either direction.
 
 ### Ranking signals, and why they are off
 
