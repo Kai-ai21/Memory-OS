@@ -9,6 +9,7 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 from sqlalchemy import select
 
@@ -24,6 +25,7 @@ from memoryos.application.backfill import (
     find_unembedded,
     gather_stats,
 )
+from memoryos.application.citations import ExplainedHit, explain_hits
 from memoryos.application.doctor import run_doctor
 from memoryos.application.evaluate import (
     compare as compare_runs,
@@ -51,6 +53,7 @@ from memoryos.application.tuning import (
     score_grid,
 )
 from memoryos.application.verification import compare, snapshot
+from memoryos.application.verify_citations import verify_citations
 from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
 from memoryos.container import Container
@@ -198,6 +201,7 @@ async def run_search(
     exact: bool,
     mode: SearchMode,
     rerank: bool,
+    explain: bool,
 ) -> int:
     container = Container.build(settings)
     try:
@@ -233,6 +237,15 @@ async def run_search(
             f"rerank {result.timing.rerank_ms}ms  "
             f"total {result.timing.total_ms}ms\n"
         )
+        explanations = None
+        if explain:
+            explanations = await explain_hits(
+                container.database.session_factory,
+                result.hits,
+                weights=container.weights(),
+                rrf_k=DEFAULT_RRF_K,
+            )
+
         if not result.hits:
             print("no results")
         for rank, hit in enumerate(result.hits, start=1):
@@ -240,6 +253,8 @@ async def run_search(
             excerpt = " ".join(best.text.split())[:160]
             print(f"{rank}. {hit.score:.4f}  {hit.external_key}")
             print(f"     chunks matched: {len(hit.matched_chunks)}  best: #{best.ordinal}")
+            if explanations is not None:
+                _print_explanation(explanations[rank - 1])
             # Where the score came from. Under hybrid the fused number is
             # meaningless on its own — 0.0328 says nothing until you know it is
             # rank 2 in one retriever and rank 4 in the other.
@@ -277,6 +292,32 @@ async def run_eval_recall(
     finally:
         await container.dispose()
     return 0
+
+
+def _print_explanation(explained: ExplainedHit) -> None:
+    """The breakdown for one result: why it ranked, and what it quotes."""
+    explanation = explained.explanation
+    print(f"     {explanation.why}")
+    for item in explanation.contributions:
+        bar = "#" * max(1, round(item.share * 20))
+        score = "     -" if item.score is None else f"{item.score:>6.3f}"
+        print(
+            f"       {item.name:<11} rank {item.rank:>3}  score {score}  "
+            f"w={item.weight:<4g} {item.share:>5.1%} {bar}"
+        )
+    if explanation.rerank_score is not None:
+        print(f"       {'reranked':<11} score {explanation.rerank_score:>6.3f}")
+
+    for citation in explained.citations[:2]:
+        print(f"     cite {citation.locator}")
+        if citation.definition:
+            print(f"          in {citation.definition}()")
+        context = citation.context
+        if context is not None:
+            before = " ".join(context.text[: context.span_start].split())[-60:]
+            span = " ".join(context.span.split())[:110]
+            after = " ".join(context.text[context.span_end :].split())[:40]
+            print(f"          …{before} [[{span}]] {after}…")
 
 
 def _describe(breakdown: ScoreBreakdown) -> str:
@@ -382,6 +423,51 @@ async def run_evaluate(
     finally:
         await container.dispose()
     return 0
+
+
+async def run_verify_citations(
+    settings: Settings, *, golden_path: Path, k: int, everything: bool
+) -> int:
+    """Assert every citation points at the text it claims to.
+
+    Non-zero on any mismatch, and that is the point: this is the standing check
+    that would have caught M1.4a's offset bug on the day it landed instead of a
+    milestone and a half later.
+    """
+    container = Container.build(settings)
+    try:
+        sessions = container.database.session_factory
+        memory_ids: list[UUID] | None = None
+        scope = "every current chunk in the corpus"
+
+        if not everything:
+            if not golden_path.exists():
+                print(f"no golden set at {golden_path}; use --all to sweep the corpus")
+                return 1
+            golden = await load_golden_set(golden_path, sessions)
+            search = container.search()
+            found: set[UUID] = set()
+            for query in golden.queries:
+                result = await search(query.query_text, k=k)
+                found.update(hit.memory_id for hit in result.hits)
+            memory_ids = sorted(found, key=str)
+            scope = (
+                f"the {len(memory_ids)} memories retrieved by "
+                f"{len(golden.queries)} golden queries"
+            )
+
+        print(f"checking {scope}\n")
+        report = await verify_citations(sessions, memory_ids=memory_ids)
+        print(report.render())
+        print()
+        print(
+            "every citation points at the text it claims"
+            if report.ok
+            else "MISMATCH: at least one citation would quote the wrong text"
+        )
+    finally:
+        await container.dispose()
+    return 0 if report.ok else 1
 
 
 async def run_recompute_importance(settings: Settings) -> int:
@@ -701,6 +787,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="sequential scan instead of the index, for spot-checking what it missed",
     )
     search.add_argument(
+        "--explain",
+        action="store_true",
+        help="print citations and why each result ranked where it did",
+    )
+    search.add_argument(
         "--no-rerank",
         dest="rerank",
         action="store_false",
@@ -776,6 +867,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="recompute every vector during the rebuild rather than reusing cached ones",
     )
+
+    verify_citations_command = commands.add_parser(
+        "verify-citations",
+        help="assert every chunk's offsets point at the text the chunk claims",
+    )
+    verify_citations_command.add_argument(
+        "--all",
+        dest="everything",
+        action="store_true",
+        help=(
+            "sweep every current chunk rather than only those the golden "
+            "queries retrieve"
+        ),
+    )
+    verify_citations_command.add_argument(
+        "--golden",
+        type=Path,
+        default=Path("var/golden-set.json"),
+        help="the golden set whose results are checked",
+    )
+    verify_citations_command.add_argument("-k", "--k", dest="k", type=int, default=10)
 
     golden = commands.add_parser(
         "export-golden-set",
@@ -935,6 +1047,7 @@ def main(argv: list[str] | None = None) -> int:
                 exact=args.exact,
                 mode=SearchMode(args.mode),
                 rerank=args.rerank,
+                explain=args.explain,
             )
         )
 
@@ -942,6 +1055,13 @@ def main(argv: list[str] | None = None) -> int:
         values = [int(value) for value in args.ef_search.split(",") if value.strip()]
         return asyncio.run(
             run_eval_recall(settings, queries=args.queries, k=args.k, ef_search_values=values)
+        )
+
+    if args.command == "verify-citations":
+        return asyncio.run(
+            run_verify_citations(
+                settings, golden_path=args.golden, k=args.k, everything=args.everything
+            )
         )
 
     if args.command == "recompute-importance":
