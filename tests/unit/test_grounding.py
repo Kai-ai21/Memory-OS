@@ -1,0 +1,135 @@
+"""Context assembly and answer verification, at the points they go wrong.
+
+Pure functions and a fake counter. No model, no network — what is under test is
+the machinery around the model, which is where the guardrail actually lives.
+"""
+
+import pytest
+
+from memoryos.application.context import assemble_context
+from memoryos.domain.grounding import verify_citations
+from tests.support.fakes import FakeEmbedder
+
+
+class Hit:
+    """The parts of a MemoryHit that assembly reads."""
+
+    def __init__(self, key: str, text: str, prefix: int = 0, score: float = 1.0) -> None:
+        self.external_key = key
+        self.source_name = "self"
+        self.matched_chunks = [Chunk(text, prefix, score)]
+
+
+class Chunk:
+    def __init__(self, text: str, prefix: int, score: float) -> None:
+        self.text = text
+        self.prefix_chars = prefix
+        self.score = score
+
+
+SENTENCE = "The worker claims a task and holds a lease while the handler runs. "
+
+
+def test_assembly_respects_the_budget_and_drops_rather_than_truncates() -> None:
+    """A passage cut mid-sentence is worse than an absent one.
+
+    The model cannot tell the sentence was severed, so it completes the thought
+    from training data — a fabricated claim carrying a citation to a real
+    passage, which is the most convincing wrong answer this system can make.
+    """
+    counter = FakeEmbedder()
+    long_text = SENTENCE * 40
+    hits = [
+        Hit("a.md", SENTENCE * 2),
+        Hit("big.md", long_text),
+        Hit("c.md", SENTENCE * 2),
+    ]
+
+    budget = counter.count_tokens(SENTENCE * 2) * 2 + 5
+    context = assemble_context(hits, counter=counter, token_budget=budget)  # type: ignore[arg-type]
+
+    assert context.tokens_used <= budget
+    keys = [passage.hit.external_key for passage in context.passages]
+    assert "big.md" not in keys, "the oversized passage was dropped"
+    assert [hit.external_key for hit in context.dropped] == ["big.md"]
+
+    # Dropped whole: no prefix of it appears anywhere in the rendered prompt.
+    assert long_text[:200] not in context.render() or "a.md" in keys
+    for passage in context.passages:
+        assert passage.text in (SENTENCE * 2).strip()
+
+    # A short passage after a dropped long one still fits — the loop continues
+    # rather than stopping at the first thing too big.
+    assert "c.md" in keys
+    # Numbered from 1, densely, matching what the prompt shows the model.
+    assert [passage.number for passage in context.passages] == [1, 2]
+    assert context.valid_indices == {1, 2}
+
+
+def test_a_citation_index_outside_the_supplied_range_is_rejected() -> None:
+    """The one hallucination that can be detected with certainty."""
+    result = verify_citations(
+        "The queue uses SKIP LOCKED [1]. Leases expire after a timeout [7].",
+        valid_indices={1, 2},
+    )
+
+    assert result.hallucinated_indices == [7]
+    assert result.cited_indices == [1]
+    assert not result.grounded
+
+    # A repeated bad index is one defect, not two.
+    twice = verify_citations("A [9]. B [9].", valid_indices={1})
+    assert twice.hallucinated_indices == [9]
+
+    # And a clean answer reports nothing.
+    clean = verify_citations("The queue uses SKIP LOCKED [1][2].", valid_indices={1, 2})
+    assert clean.hallucinated_indices == []
+    assert clean.grounded
+
+
+def test_an_uncited_factual_sentence_is_flagged_and_kept() -> None:
+    """Flagged, never dropped.
+
+    Quietly deleting a sentence from the middle of an answer produces prose that
+    reads as complete while missing a step. A visible marker tells the reader
+    which part is not grounded, which is both more honest and more useful.
+    """
+    answer = (
+        "The claim query uses FOR UPDATE SKIP LOCKED [1]. "
+        "Postgres also supports advisory locks for this purpose. "
+        "The lease is renewed by a heartbeat [2]."
+    )
+    result = verify_citations(answer, valid_indices={1, 2})
+
+    assert result.factual_sentences == 3
+    assert result.supported_sentences == 2
+    assert result.citation_rate == pytest.approx(2 / 3)
+    assert not result.grounded
+
+    unsupported = [s.text for s in result.sentences if s.unsupported]
+    assert unsupported == ["Postgres also supports advisory locks for this purpose."]
+
+    # Kept in the output, marked in place.
+    marked = result.marked()
+    assert "advisory locks for this purpose. [unsupported]" in marked
+    assert "FOR UPDATE SKIP LOCKED [1]." in marked
+    assert len(marked) > len(answer)
+
+
+def test_a_refusal_is_not_penalised_for_citing_nothing() -> None:
+    """The safest possible answer must not score as the worst one.
+
+    A refusal contains no claims drawn from the corpus, so there is nothing to
+    cite. Scoring it 0% would make "I don't know" look like the most ungrounded
+    thing the system can say, and this milestone wants that answer.
+    """
+    result = verify_citations(
+        "The passages do not contain anything about AWS billing. "
+        "They describe a job queue and an embedding pipeline instead.",
+        valid_indices={1, 2, 3},
+    )
+
+    assert result.is_refusal
+    assert result.citation_rate == 1.0
+    assert result.grounded
+    assert result.factual_sentences == 0

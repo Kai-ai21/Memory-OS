@@ -533,6 +533,43 @@ class VectorStore(Protocol):
         ...
 
 
+class LanguageModel(Protocol):
+    """Generates prose. The only component here that can invent something.
+
+    Every other part of this system returns text it retrieved: it can be
+    irrelevant, badly ranked or out of date, but it cannot be *fabricated*. A
+    language model asked to answer from context will smooth over a gap with a
+    fluent, plausible claim drawn from its training data, and nothing in the
+    response distinguishes that from a claim drawn from the corpus.
+
+    So the port is deliberately thin — a system prompt, a user message, a
+    string back — and everything that makes an answer trustworthy lives outside
+    it: what goes into the context, and what is checked afterwards. Nothing here
+    can be relied on to behave, which is why `domain/grounding.py` verifies the
+    output rather than trusting the instruction.
+
+    `async` unlike `Embedder` and `Reranker`, because this is a network call
+    rather than local matrix work: the event loop should be free while it waits.
+    """
+
+    @property
+    def model_id(self) -> str:
+        """Identity of the model, recorded on every answer it produces."""
+        ...
+
+    async def complete(
+        self, system: str, user: str, *, max_tokens: int = 1024
+    ) -> str:
+        """One completion.
+
+        Raises `TransientError` for rate limits and timeouts, so the worker's
+        existing backoff applies unchanged, and `PermanentError` for a safety
+        block or an empty response — retrying either produces the same nothing,
+        and an empty string presented as an answer is worse than a failure.
+        """
+        ...
+
+
 class Reranker(Protocol):
     """A cross-encoder: reads the query and the document *together*.
 

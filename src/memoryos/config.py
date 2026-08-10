@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from memoryos.adapters.embedding.sentence_transformers import (
     DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL,
 )
+from memoryos.adapters.llm.gemini import DEFAULT_MODEL as DEFAULT_LLM_MODEL
 from memoryos.adapters.reranking.cross_encoder import (
     DEFAULT_MODEL as DEFAULT_RERANKER_MODEL,
 )
@@ -82,6 +83,16 @@ class Settings(BaseSettings):
     # the shortlist bounds how far a candidate can jump.
     rerank_candidates: int = 25
     rerank_enabled: bool = True
+    # Answering only. Absent, retrieval and search work exactly as before and
+    # `ask` reports that it needs a key rather than failing obscurely.
+    gemini_api_key: str | None = None
+    llm_model: str = DEFAULT_LLM_MODEL
+    # Tokens of *passages*. The system prompt and question add a few hundred
+    # more. Deliberately well inside the model's window: a fuller prompt is not
+    # a better one, because the instruction to refuse competes with every extra
+    # passage that looks vaguely relevant.
+    answer_token_budget: int = 6000
+    answer_max_tokens: int = 1024
     log_level: str = "INFO"
     log_json: bool = False
     # Browser origins allowed to call this API. Empty by default, which means no

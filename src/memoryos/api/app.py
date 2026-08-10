@@ -4,7 +4,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from memoryos.api.routes import health, judgements, memories, search, sources, stats
+from memoryos.api.routes import (
+    answer,
+    health,
+    judgements,
+    memories,
+    search,
+    sources,
+    stats,
+)
 from memoryos.config import Settings, get_settings
 from memoryos.container import Container
 from memoryos.logging import configure_logging
@@ -34,6 +42,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(memories.router)
     app.include_router(stats.router)
     app.include_router(judgements.router)
+    app.include_router(answer.router)
     return app
 
 

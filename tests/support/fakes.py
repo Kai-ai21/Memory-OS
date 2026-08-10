@@ -12,7 +12,7 @@ import math
 import re
 from collections.abc import Callable, Sequence
 
-from memoryos.application.ports import Embedder, Reranker
+from memoryos.application.ports import Embedder, LanguageModel, Reranker
 
 FAKE_MODEL_ID = "fake/deterministic@1"
 
@@ -148,3 +148,44 @@ class FakeReranker(Reranker):
     @property
     def pairs_scored(self) -> int:
         return sum(len(documents) for _, documents in self.calls)
+
+
+class FakeLanguageModel(LanguageModel):
+    """Canned completions, so a test never makes a network call.
+
+    Legitimate for the same reason the other fakes are: `LanguageModel` is a
+    port this project owns. What it cannot establish is whether a real model
+    stays inside its evidence — that is what the guardrails and the one slow
+    test are for. What it can establish is that the pipeline assembles the
+    right context, verifies what comes back, and reports it honestly however
+    badly the model behaves.
+
+    `responses` are returned in order and the last one repeats, so a test can
+    script a sequence without counting calls.
+    """
+
+    def __init__(
+        self,
+        *responses: str,
+        model_id: str = "fake/llm@1",
+        raises: Exception | None = None,
+    ) -> None:
+        self._responses = list(responses) or ["The passages do not cover this."]
+        self._model_id = model_id
+        self._raises = raises
+        self.calls: list[tuple[str, str]] = []
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id
+
+    async def complete(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
+        self.calls.append((system, user))
+        if self._raises is not None:
+            raise self._raises
+        index = min(len(self.calls) - 1, len(self._responses) - 1)
+        return self._responses[index]
+
+    @property
+    def last_user_prompt(self) -> str:
+        return self.calls[-1][1]
