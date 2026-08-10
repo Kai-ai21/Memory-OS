@@ -1,0 +1,2751 @@
+{
+  "generated_at": "2026-08-10T05:10:40.781506+00:00",
+  "totals": {
+    "queries": 21,
+    "judgements": 235,
+    "relevant": 111,
+    "not_relevant": 103,
+    "missing": 21,
+    "unresolved": 0
+  },
+  "queries": [
+    {
+      "query_text": "ON DELETE CASCADE",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "migrations/versions/0001_initial_schema.py",
+        "migrations/versions/0007_query_judgements.py",
+        "src/memoryos/adapters/db/models.py",
+        "tests/integration/test_judgements.py",
+        "tests/integration/test_schema.py",
+        "tests/integration/test_sync.py"
+      ],
+      "items": [
+        {
+          "external_key": "src/memoryos/application/normalize.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.73669,
+          "judged_at": "2026-08-10T05:10:36.193505+00:00",
+          "memory_id": "019fea13-998b-7c72-a492-76f99b15e343"
+        },
+        {
+          "external_key": "src/memoryos/application/replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.714681,
+          "judged_at": "2026-08-10T05:10:36.200113+00:00",
+          "memory_id": "019fea13-999b-7372-965e-9c4c80979da9"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/models.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.705641,
+          "judged_at": "2026-08-10T05:10:36.203496+00:00",
+          "memory_id": "019fea13-9934-7852-8c21-c9ab85cd009a"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.705198,
+          "judged_at": "2026-08-10T05:10:36.206943+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "src/memoryos/application/ports.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.704865,
+          "judged_at": "2026-08-10T05:10:36.209856+00:00",
+          "memory_id": "019fea13-998e-7a11-b41c-18c69d39f604"
+        },
+        {
+          "external_key": "tests/integration/test_sync.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.700284,
+          "judged_at": "2026-08-10T05:10:36.212720+00:00",
+          "memory_id": "019fea13-98a0-77b0-aee6-bcb5865980c3"
+        },
+        {
+          "external_key": "src/memoryos/application/sync.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.680859,
+          "judged_at": "2026-08-10T05:10:36.215996+00:00",
+          "memory_id": "019fea13-99a3-73a0-b02b-4f8cc21642e4"
+        },
+        {
+          "external_key": "tests/integration/test_schema.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.679793,
+          "judged_at": "2026-08-10T05:10:36.219189+00:00",
+          "memory_id": "019fea13-9890-7b82-897e-33d9b5b64b87"
+        },
+        {
+          "external_key": "tests/integration/test_judgements.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.671745,
+          "judged_at": "2026-08-10T05:10:36.222705+00:00",
+          "memory_id": "019fea13-985d-7c72-b8f1-a85e931a34a9"
+        },
+        {
+          "external_key": "migrations/versions/0007_query_judgements.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.6674,
+          "judged_at": "2026-08-10T05:10:36.225878+00:00",
+          "memory_id": "019fea13-972d-7c90-81ad-771fbd7c638e"
+        },
+        {
+          "external_key": "migrations/versions/0001_initial_schema.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.228897+00:00",
+          "memory_id": "019fea13-9704-76d2-aa64-6fe01f38c84f"
+        }
+      ]
+    },
+    {
+      "query_text": "SKIP LOCKED",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/adapters/db/job_queue.py",
+        "tests/integration/test_worker.py"
+      ],
+      "items": [
+        {
+          "external_key": "tests/integration/test_sync.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.733211,
+          "judged_at": "2026-08-10T05:10:36.231983+00:00",
+          "memory_id": "019fea13-98a0-77b0-aee6-bcb5865980c3"
+        },
+        {
+          "external_key": "tests/unit/test_filesystem_connector.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.699435,
+          "judged_at": "2026-08-10T05:10:36.235275+00:00",
+          "memory_id": "019fea13-9783-7fd1-9d61-1089e5233d1e"
+        },
+        {
+          "external_key": "src/memoryos/adapters/chunking/structural.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.694955,
+          "judged_at": "2026-08-10T05:10:36.239257+00:00",
+          "memory_id": "019fea13-9910-71a2-8727-0fdeab24cb72"
+        },
+        {
+          "external_key": "tests/integration/test_replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.675239,
+          "judged_at": "2026-08-10T05:10:36.243153+00:00",
+          "memory_id": "019fea13-987b-7750-88fe-6c12b0e2f7fa"
+        },
+        {
+          "external_key": "src/memoryos/application/worker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.671868,
+          "judged_at": "2026-08-10T05:10:36.246438+00:00",
+          "memory_id": "019fea13-99ac-7a01-9e8d-640df1d96df0"
+        },
+        {
+          "external_key": "tests/integration/test_repositories.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.651589,
+          "judged_at": "2026-08-10T05:10:36.249542+00:00",
+          "memory_id": "019fea13-9885-7c40-915c-fd6d90fc5ad5"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/models.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.650025,
+          "judged_at": "2026-08-10T05:10:36.252463+00:00",
+          "memory_id": "019fea13-9934-7852-8c21-c9ab85cd009a"
+        },
+        {
+          "external_key": "src/memoryos/application/replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.641081,
+          "judged_at": "2026-08-10T05:10:36.255951+00:00",
+          "memory_id": "019fea13-999b-7372-965e-9c4c80979da9"
+        },
+        {
+          "external_key": "tests/unit/test_worker_decisions.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.640536,
+          "judged_at": "2026-08-10T05:10:36.259985+00:00",
+          "memory_id": "019fea13-97d1-7711-b738-7a4dcf93fe65"
+        },
+        {
+          "external_key": "tests/integration/test_api_ui_endpoints.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.637036,
+          "judged_at": "2026-08-10T05:10:36.263307+00:00",
+          "memory_id": "019fea13-9827-73e2-8904-dd57ecdf8bea"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.267686+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/job_queue.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.271746+00:00",
+          "memory_id": "019fea13-992c-7bd3-b55b-61d8eae717fb"
+        },
+        {
+          "external_key": "tests/integration/test_worker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.275646+00:00",
+          "memory_id": "019fea13-98a6-7d01-bb6d-28c30f1d4b4b"
+        }
+      ]
+    },
+    {
+      "query_text": "bge-small",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/adapters/embedding/sentence_transformers.py",
+        "src/memoryos/config.py",
+        "tests/slow/test_query_prefix.py",
+        "tests/slow/test_real_model.py",
+        "tests/slow/test_real_search.py",
+        "tests/unit/test_window_alignment.py"
+      ],
+      "items": [
+        {
+          "external_key": "src/memoryos/adapters/embedding/sentence_transformers.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.674647,
+          "judged_at": "2026-08-10T05:10:36.278845+00:00",
+          "memory_id": "019fea13-9904-7a33-893b-92f0b07d2f43"
+        },
+        {
+          "external_key": "tests/slow/test_real_model.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.648492,
+          "judged_at": "2026-08-10T05:10:36.282031+00:00",
+          "memory_id": "019fea13-97f0-7ea0-a267-17682fdebb82"
+        },
+        {
+          "external_key": "tests/slow/test_real_search.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.644391,
+          "judged_at": "2026-08-10T05:10:36.285067+00:00",
+          "memory_id": "019fea13-97f9-7860-9ea5-13c0862b4b26"
+        },
+        {
+          "external_key": "tests/unit/test_embedding.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.641628,
+          "judged_at": "2026-08-10T05:10:36.288592+00:00",
+          "memory_id": "019fea13-9775-72c1-b701-1c11bed5a931"
+        },
+        {
+          "external_key": "tests/slow/test_query_prefix.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.640943,
+          "judged_at": "2026-08-10T05:10:36.292198+00:00",
+          "memory_id": "019fea13-97e7-7c12-8e0d-c1640fc30819"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.640881,
+          "judged_at": "2026-08-10T05:10:36.295481+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "migrations/versions/0001_initial_schema.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.632121,
+          "judged_at": "2026-08-10T05:10:36.298889+00:00",
+          "memory_id": "019fea13-9704-76d2-aa64-6fe01f38c84f"
+        },
+        {
+          "external_key": "tests/unit/test_search_grouping.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.629732,
+          "judged_at": "2026-08-10T05:10:36.302348+00:00",
+          "memory_id": "019fea13-97bb-73f2-9624-860358d205b0"
+        },
+        {
+          "external_key": "tests/unit/test_window_alignment.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.628061,
+          "judged_at": "2026-08-10T05:10:36.306864+00:00",
+          "memory_id": "019fea13-97ca-71c2-a2ca-99b1c2f7265c"
+        },
+        {
+          "external_key": "tests/unit/test_chunker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.614529,
+          "judged_at": "2026-08-10T05:10:36.310872+00:00",
+          "memory_id": "019fea13-976e-7503-b6b4-0f4b551f0415"
+        },
+        {
+          "external_key": "src/memoryos/config.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.313944+00:00",
+          "memory_id": "019fea13-98cc-76f2-bee6-e3aaa8a40bce"
+        }
+      ]
+    },
+    {
+      "query_text": "content addressing and deduplication",
+      "filters": {
+        "k": 6
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/adapters/db/models.py",
+        "src/memoryos/application/embed.py",
+        "src/memoryos/application/normalize.py",
+        "src/memoryos/domain/entities.py",
+        "src/memoryos/domain/normalization.py",
+        "src/memoryos/domain/values.py",
+        "tests/integration/test_embed.py"
+      ],
+      "items": [
+        {
+          "external_key": "tests/slow/test_acceptance.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.779925,
+          "judged_at": "2026-08-10T05:10:36.317200+00:00",
+          "memory_id": "019fea13-97df-7a72-8f84-466026448030"
+        },
+        {
+          "external_key": "src/memoryos/adapters/chunking/structural.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.734842,
+          "judged_at": "2026-08-10T05:10:36.320823+00:00",
+          "memory_id": "019fea13-9910-71a2-8727-0fdeab24cb72"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.714065,
+          "judged_at": "2026-08-10T05:10:36.325051+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "src/memoryos/domain/entities.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.715798,
+          "judged_at": "2026-08-10T05:10:36.328824+00:00",
+          "memory_id": "019fea13-99c3-7001-b3cf-6031ed0e6717"
+        },
+        {
+          "external_key": "tests/integration/test_embed.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.71377,
+          "judged_at": "2026-08-10T05:10:36.333697+00:00",
+          "memory_id": "019fea13-983b-7f43-8f1e-313557b869dd"
+        },
+        {
+          "external_key": "src/memoryos/application/embed.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.696561,
+          "judged_at": "2026-08-10T05:10:36.338154+00:00",
+          "memory_id": "019fea13-9973-7a93-b511-e8a9685beac4"
+        },
+        {
+          "external_key": "src/memoryos/application/normalize.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.693409,
+          "judged_at": "2026-08-10T05:10:36.342591+00:00",
+          "memory_id": "019fea13-998b-7c72-a492-76f99b15e343"
+        },
+        {
+          "external_key": "tests/unit/test_chunker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.706409,
+          "judged_at": "2026-08-10T05:10:36.346202+00:00",
+          "memory_id": "019fea13-976e-7503-b6b4-0f4b551f0415"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/models.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.6986,
+          "judged_at": "2026-08-10T05:10:36.349617+00:00",
+          "memory_id": "019fea13-9934-7852-8c21-c9ab85cd009a"
+        },
+        {
+          "external_key": "src/memoryos/adapters/embedding/sentence_transformers.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.696842,
+          "judged_at": "2026-08-10T05:10:36.352535+00:00",
+          "memory_id": "019fea13-9904-7a33-893b-92f0b07d2f43"
+        },
+        {
+          "external_key": "src/memoryos/domain/normalization.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.693156,
+          "judged_at": "2026-08-10T05:10:36.355959+00:00",
+          "memory_id": "019fea13-99cf-7af1-93f0-a22132c8d634"
+        },
+        {
+          "external_key": "src/memoryos/domain/values.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.359614+00:00",
+          "memory_id": "019fea13-99d3-7632-be77-c954618ad060"
+        }
+      ]
+    },
+    {
+      "query_text": "how are chunk sizes chosen",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/adapters/chunking/structural.py",
+        "src/memoryos/application/ports.py",
+        "tests/slow/test_real_model.py",
+        "tests/unit/test_chunker.py"
+      ],
+      "items": [
+        {
+          "external_key": "tests/unit/test_search_grouping.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.759051,
+          "judged_at": "2026-08-10T05:10:36.363310+00:00",
+          "memory_id": "019fea13-97bb-73f2-9624-860358d205b0"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.755107,
+          "judged_at": "2026-08-10T05:10:36.367009+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "tests/unit/test_entities.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.747849,
+          "judged_at": "2026-08-10T05:10:36.371254+00:00",
+          "memory_id": "019fea13-977c-7131-afde-1d45aa14b9b0"
+        },
+        {
+          "external_key": "src/memoryos/adapters/chunking/structural.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.747547,
+          "judged_at": "2026-08-10T05:10:36.374289+00:00",
+          "memory_id": "019fea13-9910-71a2-8727-0fdeab24cb72"
+        },
+        {
+          "external_key": "tests/unit/test_chunker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.746392,
+          "judged_at": "2026-08-10T05:10:36.377033+00:00",
+          "memory_id": "019fea13-976e-7503-b6b4-0f4b551f0415"
+        },
+        {
+          "external_key": "tests/unit/test_blob_store.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.740346,
+          "judged_at": "2026-08-10T05:10:36.380789+00:00",
+          "memory_id": "019fea13-9766-7712-a8a4-330c30e2fcbd"
+        },
+        {
+          "external_key": "tests/slow/test_real_model.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.736006,
+          "judged_at": "2026-08-10T05:10:36.383571+00:00",
+          "memory_id": "019fea13-97f0-7ea0-a267-17682fdebb82"
+        },
+        {
+          "external_key": "src/memoryos/application/ports.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.735895,
+          "judged_at": "2026-08-10T05:10:36.385780+00:00",
+          "memory_id": "019fea13-998e-7a11-b41c-18c69d39f604"
+        },
+        {
+          "external_key": "src/memoryos/application/search.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.734909,
+          "judged_at": "2026-08-10T05:10:36.388058+00:00",
+          "memory_id": "019fea13-999f-79f0-b934-9d313ac944e1"
+        },
+        {
+          "external_key": "src/memoryos/application/normalize.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.732315,
+          "judged_at": "2026-08-10T05:10:36.391032+00:00",
+          "memory_id": "019fea13-998b-7c72-a492-76f99b15e343"
+        }
+      ]
+    },
+    {
+      "query_text": "how do I run the worker",
+      "filters": {
+        "k": 6
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/application/worker.py"
+      ],
+      "items": [
+        {
+          "external_key": "src/memoryos/cli.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.769588,
+          "judged_at": "2026-08-10T05:10:36.393245+00:00",
+          "memory_id": "019fea13-98c7-7563-a751-5d0caf9dc161"
+        },
+        {
+          "external_key": "tests/integration/test_worker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.716989,
+          "judged_at": "2026-08-10T05:10:36.395538+00:00",
+          "memory_id": "019fea13-98a6-7d01-bb6d-28c30f1d4b4b"
+        },
+        {
+          "external_key": "tests/unit/test_worker_decisions.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.713271,
+          "judged_at": "2026-08-10T05:10:36.397619+00:00",
+          "memory_id": "019fea13-97d1-7711-b738-7a4dcf93fe65"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/job_queue.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.698139,
+          "judged_at": "2026-08-10T05:10:36.399707+00:00",
+          "memory_id": "019fea13-992c-7bd3-b55b-61d8eae717fb"
+        },
+        {
+          "external_key": "src/memoryos/application/worker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.706458,
+          "judged_at": "2026-08-10T05:10:36.401714+00:00",
+          "memory_id": "019fea13-99ac-7a01-9e8d-640df1d96df0"
+        },
+        {
+          "external_key": "tests/integration/test_job_queue.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.679509,
+          "judged_at": "2026-08-10T05:10:36.403713+00:00",
+          "memory_id": "019fea13-9855-7193-8d56-2a7819e56a7a"
+        },
+        {
+          "external_key": "src/memoryos/domain/jobs.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.678296,
+          "judged_at": "2026-08-10T05:10:36.405660+00:00",
+          "memory_id": "019fea13-99cb-77f2-a563-a894c66283ce"
+        },
+        {
+          "external_key": "tests/conftest.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.673458,
+          "judged_at": "2026-08-10T05:10:36.407681+00:00",
+          "memory_id": "019fea13-9750-7173-b16f-248c4517161b"
+        },
+        {
+          "external_key": "tests/integration/test_evaluate.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.66773,
+          "judged_at": "2026-08-10T05:10:36.409745+00:00",
+          "memory_id": "019fea13-9844-7b01-98dd-77210ece7d29"
+        },
+        {
+          "external_key": "src/memoryos/application/jobs/handlers.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.660935,
+          "judged_at": "2026-08-10T05:10:36.411929+00:00",
+          "memory_id": "019fea13-99b4-7b41-8caf-465342bb4a8f"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.413986+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        }
+      ]
+    },
+    {
+      "query_text": "how do we prove a rebuild produced the same corpus",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/application/ports.py",
+        "src/memoryos/application/replay.py",
+        "src/memoryos/application/verification.py",
+        "src/memoryos/cli.py",
+        "tests/integration/test_replay.py",
+        "tests/slow/test_replay_real.py"
+      ],
+      "items": [
+        {
+          "external_key": "tests/slow/test_replay_real.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.870572,
+          "judged_at": "2026-08-10T05:10:36.415989+00:00",
+          "memory_id": "019fea13-9802-7590-904f-bbc9a4b57e35"
+        },
+        {
+          "external_key": "src/memoryos/application/verification.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.834602,
+          "judged_at": "2026-08-10T05:10:36.418064+00:00",
+          "memory_id": "019fea13-99a7-70a0-9c12-bdd182aab2a3"
+        },
+        {
+          "external_key": "src/memoryos/application/replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.797139,
+          "judged_at": "2026-08-10T05:10:36.420059+00:00",
+          "memory_id": "019fea13-999b-7372-965e-9c4c80979da9"
+        },
+        {
+          "external_key": "tests/integration/test_search.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.762194,
+          "judged_at": "2026-08-10T05:10:36.422112+00:00",
+          "memory_id": "019fea13-9899-7d83-a847-8fb5f27dce92"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.759938,
+          "judged_at": "2026-08-10T05:10:36.424146+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "tests/integration/test_normalize.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.756108,
+          "judged_at": "2026-08-10T05:10:36.426250+00:00",
+          "memory_id": "019fea13-9870-7832-b2e4-52f6920b6c17"
+        },
+        {
+          "external_key": "src/memoryos/cli.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.754767,
+          "judged_at": "2026-08-10T05:10:36.428554+00:00",
+          "memory_id": "019fea13-98c7-7563-a751-5d0caf9dc161"
+        },
+        {
+          "external_key": "tests/integration/test_replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.745802,
+          "judged_at": "2026-08-10T05:10:36.430745+00:00",
+          "memory_id": "019fea13-987b-7750-88fe-6c12b0e2f7fa"
+        },
+        {
+          "external_key": "src/memoryos/application/ports.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.744868,
+          "judged_at": "2026-08-10T05:10:36.432895+00:00",
+          "memory_id": "019fea13-998e-7a11-b41c-18c69d39f604"
+        },
+        {
+          "external_key": "tests/unit/test_embedding.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.735206,
+          "judged_at": "2026-08-10T05:10:36.434940+00:00",
+          "memory_id": "019fea13-9775-72c1-b701-1c11bed5a931"
+        }
+      ]
+    },
+    {
+      "query_text": "how does a long running job keep its claim alive",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "migrations/versions/0003_jobs.py",
+        "src/memoryos/adapters/db/job_queue.py",
+        "src/memoryos/adapters/db/models.py",
+        "src/memoryos/application/ports.py",
+        "src/memoryos/application/worker.py",
+        "tests/integration/test_job_queue.py",
+        "tests/integration/test_worker.py"
+      ],
+      "items": [
+        {
+          "external_key": "tests/integration/test_job_queue.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.766576,
+          "judged_at": "2026-08-10T05:10:36.437017+00:00",
+          "memory_id": "019fea13-9855-7193-8d56-2a7819e56a7a"
+        },
+        {
+          "external_key": "src/memoryos/application/worker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.734235,
+          "judged_at": "2026-08-10T05:10:36.439176+00:00",
+          "memory_id": "019fea13-99ac-7a01-9e8d-640df1d96df0"
+        },
+        {
+          "external_key": "src/memoryos/domain/jobs.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.726055,
+          "judged_at": "2026-08-10T05:10:36.441392+00:00",
+          "memory_id": "019fea13-99cb-77f2-a563-a894c66283ce"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/job_queue.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.724906,
+          "judged_at": "2026-08-10T05:10:36.443530+00:00",
+          "memory_id": "019fea13-992c-7bd3-b55b-61d8eae717fb"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/models.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.706148,
+          "judged_at": "2026-08-10T05:10:36.445890+00:00",
+          "memory_id": "019fea13-9934-7852-8c21-c9ab85cd009a"
+        },
+        {
+          "external_key": "tests/integration/test_worker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.705005,
+          "judged_at": "2026-08-10T05:10:36.448060+00:00",
+          "memory_id": "019fea13-98a6-7d01-bb6d-28c30f1d4b4b"
+        },
+        {
+          "external_key": "migrations/versions/0003_jobs.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.688458,
+          "judged_at": "2026-08-10T05:10:36.450195+00:00",
+          "memory_id": "019fea13-9712-7a41-9b13-24ea8a19da1c"
+        },
+        {
+          "external_key": "src/memoryos/application/ports.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.687728,
+          "judged_at": "2026-08-10T05:10:36.452282+00:00",
+          "memory_id": "019fea13-998e-7a11-b41c-18c69d39f604"
+        },
+        {
+          "external_key": "tests/unit/test_worker_decisions.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.681453,
+          "judged_at": "2026-08-10T05:10:36.454355+00:00",
+          "memory_id": "019fea13-97d1-7711-b738-7a4dcf93fe65"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.67234,
+          "judged_at": "2026-08-10T05:10:36.456578+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        }
+      ]
+    },
+    {
+      "query_text": "how does the job queue claim work",
+      "filters": {
+        "k": 6
+      },
+      "relevant_keys": [
+        "README.md",
+        "migrations/versions/0003_jobs.py",
+        "src/memoryos/adapters/db/job_queue.py",
+        "src/memoryos/adapters/db/models.py",
+        "src/memoryos/application/worker.py",
+        "tests/integration/test_job_queue.py",
+        "tests/integration/test_worker.py"
+      ],
+      "items": [
+        {
+          "external_key": "tests/integration/test_job_queue.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.8147,
+          "judged_at": "2026-08-10T05:10:36.458584+00:00",
+          "memory_id": "019fea13-9855-7193-8d56-2a7819e56a7a"
+        },
+        {
+          "external_key": "src/memoryos/application/worker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.791033,
+          "judged_at": "2026-08-10T05:10:36.460553+00:00",
+          "memory_id": "019fea13-99ac-7a01-9e8d-640df1d96df0"
+        },
+        {
+          "external_key": "tests/integration/test_api_ui_endpoints.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.786864,
+          "judged_at": "2026-08-10T05:10:36.462740+00:00",
+          "memory_id": "019fea13-9827-73e2-8904-dd57ecdf8bea"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/models.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.774826,
+          "judged_at": "2026-08-10T05:10:36.464757+00:00",
+          "memory_id": "019fea13-9934-7852-8c21-c9ab85cd009a"
+        },
+        {
+          "external_key": "tests/integration/test_worker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.774668,
+          "judged_at": "2026-08-10T05:10:36.466798+00:00",
+          "memory_id": "019fea13-98a6-7d01-bb6d-28c30f1d4b4b"
+        },
+        {
+          "external_key": "migrations/versions/0003_jobs.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.774367,
+          "judged_at": "2026-08-10T05:10:36.468787+00:00",
+          "memory_id": "019fea13-9712-7a41-9b13-24ea8a19da1c"
+        },
+        {
+          "external_key": "tests/unit/test_worker_decisions.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.766179,
+          "judged_at": "2026-08-10T05:10:36.470748+00:00",
+          "memory_id": "019fea13-97d1-7711-b738-7a4dcf93fe65"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.746515,
+          "judged_at": "2026-08-10T05:10:36.472712+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "src/memoryos/domain/jobs.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.741881,
+          "judged_at": "2026-08-10T05:10:36.474667+00:00",
+          "memory_id": "019fea13-99cb-77f2-a563-a894c66283ce"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/job_queue.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.476618+00:00",
+          "memory_id": "019fea13-992c-7bd3-b55b-61d8eae717fb"
+        }
+      ]
+    },
+    {
+      "query_text": "how does the system know a file changed since last time",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/adapters/connectors/filesystem.py",
+        "src/memoryos/application/ports.py",
+        "src/memoryos/application/sync.py",
+        "tests/integration/test_sync.py",
+        "tests/unit/test_filesystem_connector.py"
+      ],
+      "items": [
+        {
+          "external_key": "src/memoryos/application/sync.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.752296,
+          "judged_at": "2026-08-10T05:10:36.478793+00:00",
+          "memory_id": "019fea13-99a3-73a0-b02b-4f8cc21642e4"
+        },
+        {
+          "external_key": "tests/integration/test_normalize.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.740332,
+          "judged_at": "2026-08-10T05:10:36.480891+00:00",
+          "memory_id": "019fea13-9870-7832-b2e4-52f6920b6c17"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.730846,
+          "judged_at": "2026-08-10T05:10:36.483002+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "tests/integration/test_sync.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.726535,
+          "judged_at": "2026-08-10T05:10:36.485158+00:00",
+          "memory_id": "019fea13-98a0-77b0-aee6-bcb5865980c3"
+        },
+        {
+          "external_key": "tests/unit/test_filesystem_connector.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.722548,
+          "judged_at": "2026-08-10T05:10:36.487289+00:00",
+          "memory_id": "019fea13-9783-7fd1-9d61-1089e5233d1e"
+        },
+        {
+          "external_key": "src/memoryos/application/ports.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.719229,
+          "judged_at": "2026-08-10T05:10:36.489428+00:00",
+          "memory_id": "019fea13-998e-7a11-b41c-18c69d39f604"
+        },
+        {
+          "external_key": "tests/integration/test_replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.709609,
+          "judged_at": "2026-08-10T05:10:36.491569+00:00",
+          "memory_id": "019fea13-987b-7750-88fe-6c12b0e2f7fa"
+        },
+        {
+          "external_key": "src/memoryos/adapters/connectors/filesystem.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.708429,
+          "judged_at": "2026-08-10T05:10:36.493703+00:00",
+          "memory_id": "019fea13-98e3-7111-9aff-54d338100af2"
+        },
+        {
+          "external_key": "src/memoryos/adapters/connectors/filesystem.py",
+          "source_name": "self",
+          "chunk_ordinal": 6,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.708429,
+          "judged_at": "2026-08-10T05:10:36.496110+00:00",
+          "memory_id": "019fea13-98e3-7111-9aff-54d338100af2"
+        },
+        {
+          "external_key": "tests/unit/test_replay_rules.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.706462,
+          "judged_at": "2026-08-10T05:10:36.498261+00:00",
+          "memory_id": "019fea13-97b3-78a3-8267-120f94d21eb4"
+        },
+        {
+          "external_key": "tests/unit/test_chunker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.691573,
+          "judged_at": "2026-08-10T05:10:36.500388+00:00",
+          "memory_id": "019fea13-976e-7503-b6b4-0f4b551f0415"
+        }
+      ]
+    },
+    {
+      "query_text": "how is idempotency guaranteed end to end",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/adapters/db/job_queue.py",
+        "src/memoryos/application/sync.py",
+        "src/memoryos/domain/values.py",
+        "tests/integration/test_replay.py",
+        "tests/integration/test_schema.py",
+        "tests/unit/test_blob_store.py"
+      ],
+      "items": [
+        {
+          "external_key": "src/memoryos/adapters/db/models.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.701347,
+          "judged_at": "2026-08-10T05:10:36.502535+00:00",
+          "memory_id": "019fea13-9934-7852-8c21-c9ab85cd009a"
+        },
+        {
+          "external_key": "tests/conftest.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.700177,
+          "judged_at": "2026-08-10T05:10:36.504598+00:00",
+          "memory_id": "019fea13-9750-7173-b16f-248c4517161b"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.690513,
+          "judged_at": "2026-08-10T05:10:36.506717+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "tests/integration/test_search.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.683813,
+          "judged_at": "2026-08-10T05:10:36.508821+00:00",
+          "memory_id": "019fea13-9899-7d83-a847-8fb5f27dce92"
+        },
+        {
+          "external_key": "src/memoryos/application/worker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.682888,
+          "judged_at": "2026-08-10T05:10:36.510960+00:00",
+          "memory_id": "019fea13-99ac-7a01-9e8d-640df1d96df0"
+        },
+        {
+          "external_key": "tests/integration/test_schema.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.6785,
+          "judged_at": "2026-08-10T05:10:36.513320+00:00",
+          "memory_id": "019fea13-9890-7b82-897e-33d9b5b64b87"
+        },
+        {
+          "external_key": "tests/integration/test_replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.677634,
+          "judged_at": "2026-08-10T05:10:36.515625+00:00",
+          "memory_id": "019fea13-987b-7750-88fe-6c12b0e2f7fa"
+        },
+        {
+          "external_key": "tests/unit/test_blob_store.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.676002,
+          "judged_at": "2026-08-10T05:10:36.517785+00:00",
+          "memory_id": "019fea13-9766-7712-a8a4-330c30e2fcbd"
+        },
+        {
+          "external_key": "tests/integration/test_worker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.67197,
+          "judged_at": "2026-08-10T05:10:36.519829+00:00",
+          "memory_id": "019fea13-98a6-7d01-bb6d-28c30f1d4b4b"
+        },
+        {
+          "external_key": "tests/integration/test_judgements.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.670665,
+          "judged_at": "2026-08-10T05:10:36.521842+00:00",
+          "memory_id": "019fea13-985d-7c72-b8f1-a85e931a34a9"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/job_queue.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.523816+00:00",
+          "memory_id": "019fea13-992c-7bd3-b55b-61d8eae717fb"
+        },
+        {
+          "external_key": "src/memoryos/application/sync.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.525843+00:00",
+          "memory_id": "019fea13-99a3-73a0-b02b-4f8cc21642e4"
+        },
+        {
+          "external_key": "src/memoryos/domain/values.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.527970+00:00",
+          "memory_id": "019fea13-99d3-7632-be77-c954618ad060"
+        }
+      ]
+    },
+    {
+      "query_text": "prefix_chars",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "migrations/versions/0008_chunk_prefix_chars.py",
+        "src/memoryos/adapters/db/models.py",
+        "src/memoryos/application/ports.py",
+        "src/memoryos/domain/entities.py",
+        "tests/integration/test_normalize.py",
+        "tests/unit/test_chunker.py"
+      ],
+      "items": [
+        {
+          "external_key": "migrations/versions/0008_chunk_prefix_chars.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.749529,
+          "judged_at": "2026-08-10T05:10:36.529998+00:00",
+          "memory_id": "019fea13-9734-7373-b292-06b9697f137c"
+        },
+        {
+          "external_key": "tests/integration/test_normalize.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.732999,
+          "judged_at": "2026-08-10T05:10:36.531982+00:00",
+          "memory_id": "019fea13-9870-7832-b2e4-52f6920b6c17"
+        },
+        {
+          "external_key": "tests/unit/test_chunker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.728111,
+          "judged_at": "2026-08-10T05:10:36.533915+00:00",
+          "memory_id": "019fea13-976e-7503-b6b4-0f4b551f0415"
+        },
+        {
+          "external_key": "src/memoryos/domain/entities.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.711623,
+          "judged_at": "2026-08-10T05:10:36.535951+00:00",
+          "memory_id": "019fea13-99c3-7001-b3cf-6031ed0e6717"
+        },
+        {
+          "external_key": "src/memoryos/domain/entities.py",
+          "source_name": "self",
+          "chunk_ordinal": 7,
+          "verdict": "relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.711623,
+          "judged_at": "2026-08-10T05:10:36.537874+00:00",
+          "memory_id": "019fea13-99c3-7001-b3cf-6031ed0e6717"
+        },
+        {
+          "external_key": "src/memoryos/adapters/embedding/sentence_transformers.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.708887,
+          "judged_at": "2026-08-10T05:10:36.539871+00:00",
+          "memory_id": "019fea13-9904-7a33-893b-92f0b07d2f43"
+        },
+        {
+          "external_key": "tests/unit/test_entities.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.706868,
+          "judged_at": "2026-08-10T05:10:36.541833+00:00",
+          "memory_id": "019fea13-977c-7131-afde-1d45aa14b9b0"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.696342,
+          "judged_at": "2026-08-10T05:10:36.543812+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "src/memoryos/application/ports.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.683181,
+          "judged_at": "2026-08-10T05:10:36.545959+00:00",
+          "memory_id": "019fea13-998e-7a11-b41c-18c69d39f604"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/models.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.679968,
+          "judged_at": "2026-08-10T05:10:36.547994+00:00",
+          "memory_id": "019fea13-9934-7852-8c21-c9ab85cd009a"
+        },
+        {
+          "external_key": "tests/unit/test_parsers.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.666751,
+          "judged_at": "2026-08-10T05:10:36.549984+00:00",
+          "memory_id": "019fea13-97a5-78d0-8dbe-16cd2c5845c7"
+        }
+      ]
+    },
+    {
+      "query_text": "what does verify-replay compare",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/application/replay.py",
+        "src/memoryos/application/verification.py",
+        "src/memoryos/cli.py",
+        "tests/integration/test_replay.py",
+        "tests/slow/test_replay_real.py"
+      ],
+      "items": [
+        {
+          "external_key": "src/memoryos/application/replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.843453,
+          "judged_at": "2026-08-10T05:10:36.552020+00:00",
+          "memory_id": "019fea13-999b-7372-965e-9c4c80979da9"
+        },
+        {
+          "external_key": "src/memoryos/cli.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.817703,
+          "judged_at": "2026-08-10T05:10:36.553976+00:00",
+          "memory_id": "019fea13-98c7-7563-a751-5d0caf9dc161"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.793598,
+          "judged_at": "2026-08-10T05:10:36.555944+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "tests/integration/test_replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.780441,
+          "judged_at": "2026-08-10T05:10:36.557920+00:00",
+          "memory_id": "019fea13-987b-7750-88fe-6c12b0e2f7fa"
+        },
+        {
+          "external_key": "src/memoryos/application/verification.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.780323,
+          "judged_at": "2026-08-10T05:10:36.559983+00:00",
+          "memory_id": "019fea13-99a7-70a0-9c12-bdd182aab2a3"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/models.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.76484,
+          "judged_at": "2026-08-10T05:10:36.562078+00:00",
+          "memory_id": "019fea13-9934-7852-8c21-c9ab85cd009a"
+        },
+        {
+          "external_key": "tests/integration/test_repositories.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.762053,
+          "judged_at": "2026-08-10T05:10:36.564214+00:00",
+          "memory_id": "019fea13-9885-7c40-915c-fd6d90fc5ad5"
+        },
+        {
+          "external_key": "tests/unit/test_replay_rules.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.759593,
+          "judged_at": "2026-08-10T05:10:36.566252+00:00",
+          "memory_id": "019fea13-97b3-78a3-8267-120f94d21eb4"
+        },
+        {
+          "external_key": "tests/slow/test_replay_real.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.756329,
+          "judged_at": "2026-08-10T05:10:36.568251+00:00",
+          "memory_id": "019fea13-9802-7590-904f-bbc9a4b57e35"
+        },
+        {
+          "external_key": "src/memoryos/application/ports.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.746773,
+          "judged_at": "2026-08-10T05:10:36.570244+00:00",
+          "memory_id": "019fea13-998e-7a11-b41c-18c69d39f604"
+        }
+      ]
+    },
+    {
+      "query_text": "what happens if the model is swapped for a different one",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "migrations/versions/0004_embedding_cache.py",
+        "src/memoryos/adapters/db/embedding_cache.py",
+        "src/memoryos/application/backfill.py",
+        "src/memoryos/container.py",
+        "tests/integration/test_embed.py",
+        "tests/slow/test_real_model.py",
+        "tests/unit/test_embedding.py",
+        "tests/unit/test_window_alignment.py"
+      ],
+      "items": [
+        {
+          "external_key": "tests/unit/test_embedding.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.738721,
+          "judged_at": "2026-08-10T05:10:36.572217+00:00",
+          "memory_id": "019fea13-9775-72c1-b701-1c11bed5a931"
+        },
+        {
+          "external_key": "tests/integration/test_replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.68235,
+          "judged_at": "2026-08-10T05:10:36.574189+00:00",
+          "memory_id": "019fea13-987b-7750-88fe-6c12b0e2f7fa"
+        },
+        {
+          "external_key": "tests/integration/test_embed.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.678456,
+          "judged_at": "2026-08-10T05:10:36.576223+00:00",
+          "memory_id": "019fea13-983b-7f43-8f1e-313557b869dd"
+        },
+        {
+          "external_key": "migrations/versions/0004_embedding_cache.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.668472,
+          "judged_at": "2026-08-10T05:10:36.578516+00:00",
+          "memory_id": "019fea13-9719-7a51-b437-0d5361272d95"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/shadow.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.667157,
+          "judged_at": "2026-08-10T05:10:36.580574+00:00",
+          "memory_id": "019fea13-993c-7750-b3a1-431fe9ecebd7"
+        },
+        {
+          "external_key": "tests/unit/test_replay_rules.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.661558,
+          "judged_at": "2026-08-10T05:10:36.582619+00:00",
+          "memory_id": "019fea13-97b3-78a3-8267-120f94d21eb4"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.660247,
+          "judged_at": "2026-08-10T05:10:36.584613+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "src/memoryos/application/backfill.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.659847,
+          "judged_at": "2026-08-10T05:10:36.586587+00:00",
+          "memory_id": "019fea13-996b-76c0-9523-b9f9519cc1c3"
+        },
+        {
+          "external_key": "tests/slow/test_real_model.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.658181,
+          "judged_at": "2026-08-10T05:10:36.588548+00:00",
+          "memory_id": "019fea13-97f0-7ea0-a267-17682fdebb82"
+        },
+        {
+          "external_key": "tests/unit/test_window_alignment.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.653339,
+          "judged_at": "2026-08-10T05:10:36.590588+00:00",
+          "memory_id": "019fea13-97ca-71c2-a2ca-99b1c2f7265c"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/embedding_cache.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.592594+00:00",
+          "memory_id": "019fea13-9924-7ae2-81ea-c990b4a10c69"
+        },
+        {
+          "external_key": "src/memoryos/container.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.594780+00:00",
+          "memory_id": "019fea13-98d1-7c31-a83e-4250025d8c79"
+        }
+      ]
+    },
+    {
+      "query_text": "what happens when a file is deleted",
+      "filters": {
+        "k": 6
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/application/normalize.py",
+        "src/memoryos/application/replay.py",
+        "src/memoryos/application/sync.py",
+        "tests/integration/test_replay.py",
+        "tests/integration/test_sync.py"
+      ],
+      "items": [
+        {
+          "external_key": "tests/integration/test_sync.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.754763,
+          "judged_at": "2026-08-10T05:10:36.596828+00:00",
+          "memory_id": "019fea13-98a0-77b0-aee6-bcb5865980c3"
+        },
+        {
+          "external_key": "tests/unit/test_blob_store.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.749971,
+          "judged_at": "2026-08-10T05:10:36.598852+00:00",
+          "memory_id": "019fea13-9766-7712-a8a4-330c30e2fcbd"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.722545,
+          "judged_at": "2026-08-10T05:10:36.600864+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "src/memoryos/application/normalize.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.706748,
+          "judged_at": "2026-08-10T05:10:36.602854+00:00",
+          "memory_id": "019fea13-998b-7c72-a492-76f99b15e343"
+        },
+        {
+          "external_key": "tests/integration/test_replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.703627,
+          "judged_at": "2026-08-10T05:10:36.604737+00:00",
+          "memory_id": "019fea13-987b-7750-88fe-6c12b0e2f7fa"
+        },
+        {
+          "external_key": "src/memoryos/adapters/blobs/filesystem.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.700747,
+          "judged_at": "2026-08-10T05:10:36.606565+00:00",
+          "memory_id": "019fea13-991c-7170-8630-0b123f51c213"
+        },
+        {
+          "external_key": "src/memoryos/application/replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.698439,
+          "judged_at": "2026-08-10T05:10:36.608424+00:00",
+          "memory_id": "019fea13-999b-7372-965e-9c4c80979da9"
+        },
+        {
+          "external_key": "src/memoryos/application/ports.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.697513,
+          "judged_at": "2026-08-10T05:10:36.610276+00:00",
+          "memory_id": "019fea13-998e-7a11-b41c-18c69d39f604"
+        },
+        {
+          "external_key": "tests/unit/test_search_grouping.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.68222,
+          "judged_at": "2026-08-10T05:10:36.612293+00:00",
+          "memory_id": "019fea13-97bb-73f2-9624-860358d205b0"
+        },
+        {
+          "external_key": "src/memoryos/application/sync.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.614316+00:00",
+          "memory_id": "019fea13-99a3-73a0-b02b-4f8cc21642e4"
+        }
+      ]
+    },
+    {
+      "query_text": "what stops the same document being stored twice",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "src/memoryos/application/sync.py",
+        "src/memoryos/domain/values.py",
+        "tests/integration/test_schema.py",
+        "tests/unit/test_blob_store.py"
+      ],
+      "items": [
+        {
+          "external_key": "tests/integration/test_normalize.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.708409,
+          "judged_at": "2026-08-10T05:10:36.616221+00:00",
+          "memory_id": "019fea13-9870-7832-b2e4-52f6920b6c17"
+        },
+        {
+          "external_key": "tests/integration/test_embed.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.702136,
+          "judged_at": "2026-08-10T05:10:36.618107+00:00",
+          "memory_id": "019fea13-983b-7f43-8f1e-313557b869dd"
+        },
+        {
+          "external_key": "src/memoryos/domain/normalization.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.69423,
+          "judged_at": "2026-08-10T05:10:36.619961+00:00",
+          "memory_id": "019fea13-99cf-7af1-93f0-a22132c8d634"
+        },
+        {
+          "external_key": "tests/integration/test_replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.693911,
+          "judged_at": "2026-08-10T05:10:36.621769+00:00",
+          "memory_id": "019fea13-987b-7750-88fe-6c12b0e2f7fa"
+        },
+        {
+          "external_key": "tests/unit/test_chunker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.692566,
+          "judged_at": "2026-08-10T05:10:36.623667+00:00",
+          "memory_id": "019fea13-976e-7503-b6b4-0f4b551f0415"
+        },
+        {
+          "external_key": "tests/integration/test_job_queue.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.688768,
+          "judged_at": "2026-08-10T05:10:36.625595+00:00",
+          "memory_id": "019fea13-9855-7193-8d56-2a7819e56a7a"
+        },
+        {
+          "external_key": "tests/integration/test_judgements.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.687632,
+          "judged_at": "2026-08-10T05:10:36.627487+00:00",
+          "memory_id": "019fea13-985d-7c72-b8f1-a85e931a34a9"
+        },
+        {
+          "external_key": "tests/slow/test_acceptance.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.684293,
+          "judged_at": "2026-08-10T05:10:36.629577+00:00",
+          "memory_id": "019fea13-97df-7a72-8f84-466026448030"
+        },
+        {
+          "external_key": "tests/unit/test_blob_store.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.684287,
+          "judged_at": "2026-08-10T05:10:36.631377+00:00",
+          "memory_id": "019fea13-9766-7712-a8a4-330c30e2fcbd"
+        },
+        {
+          "external_key": "tests/integration/test_sync.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.681599,
+          "judged_at": "2026-08-10T05:10:36.633185+00:00",
+          "memory_id": "019fea13-98a0-77b0-aee6-bcb5865980c3"
+        },
+        {
+          "external_key": "src/memoryos/application/sync.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.634996+00:00",
+          "memory_id": "019fea13-99a3-73a0-b02b-4f8cc21642e4"
+        },
+        {
+          "external_key": "src/memoryos/domain/values.py",
+          "source_name": "self",
+          "chunk_ordinal": 1,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.636781+00:00",
+          "memory_id": "019fea13-99d3-7632-be77-c954618ad060"
+        },
+        {
+          "external_key": "tests/integration/test_schema.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.638571+00:00",
+          "memory_id": "019fea13-9890-7b82-897e-33d9b5b64b87"
+        }
+      ]
+    },
+    {
+      "query_text": "what stops two workers processing the same job",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/adapters/db/job_queue.py",
+        "src/memoryos/adapters/db/models.py",
+        "src/memoryos/application/worker.py",
+        "tests/integration/test_job_queue.py",
+        "tests/integration/test_worker.py",
+        "tests/unit/test_worker_decisions.py"
+      ],
+      "items": [
+        {
+          "external_key": "tests/integration/test_job_queue.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.717231,
+          "judged_at": "2026-08-10T05:10:36.640341+00:00",
+          "memory_id": "019fea13-9855-7193-8d56-2a7819e56a7a"
+        },
+        {
+          "external_key": "src/memoryos/application/worker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.707392,
+          "judged_at": "2026-08-10T05:10:36.642158+00:00",
+          "memory_id": "019fea13-99ac-7a01-9e8d-640df1d96df0"
+        },
+        {
+          "external_key": "tests/integration/test_worker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.697722,
+          "judged_at": "2026-08-10T05:10:36.643950+00:00",
+          "memory_id": "019fea13-98a6-7d01-bb6d-28c30f1d4b4b"
+        },
+        {
+          "external_key": "src/memoryos/domain/jobs.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.695383,
+          "judged_at": "2026-08-10T05:10:36.645941+00:00",
+          "memory_id": "019fea13-99cb-77f2-a563-a894c66283ce"
+        },
+        {
+          "external_key": "tests/unit/test_worker_decisions.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.682389,
+          "judged_at": "2026-08-10T05:10:36.647739+00:00",
+          "memory_id": "019fea13-97d1-7711-b738-7a4dcf93fe65"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/job_queue.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.681133,
+          "judged_at": "2026-08-10T05:10:36.649441+00:00",
+          "memory_id": "019fea13-992c-7bd3-b55b-61d8eae717fb"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.668338,
+          "judged_at": "2026-08-10T05:10:36.651112+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "tests/slow/test_acceptance.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.664538,
+          "judged_at": "2026-08-10T05:10:36.652784+00:00",
+          "memory_id": "019fea13-97df-7a72-8f84-466026448030"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/models.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.660986,
+          "judged_at": "2026-08-10T05:10:36.654463+00:00",
+          "memory_id": "019fea13-9934-7852-8c21-c9ab85cd009a"
+        },
+        {
+          "external_key": "tests/integration/test_sync.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.653913,
+          "judged_at": "2026-08-10T05:10:36.656161+00:00",
+          "memory_id": "019fea13-98a0-77b0-aee6-bcb5865980c3"
+        }
+      ]
+    },
+    {
+      "query_text": "where does the text of a document actually live on disk",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/adapters/blobs/filesystem.py",
+        "src/memoryos/application/normalize.py",
+        "src/memoryos/application/ports.py",
+        "src/memoryos/config.py",
+        "tests/unit/test_blob_store.py"
+      ],
+      "items": [
+        {
+          "external_key": "tests/unit/test_parsers.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.738768,
+          "judged_at": "2026-08-10T05:10:36.657850+00:00",
+          "memory_id": "019fea13-97a5-78d0-8dbe-16cd2c5845c7"
+        },
+        {
+          "external_key": "tests/unit/test_chunker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.729524,
+          "judged_at": "2026-08-10T05:10:36.659542+00:00",
+          "memory_id": "019fea13-976e-7503-b6b4-0f4b551f0415"
+        },
+        {
+          "external_key": "tests/integration/test_normalize.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.723641,
+          "judged_at": "2026-08-10T05:10:36.661349+00:00",
+          "memory_id": "019fea13-9870-7832-b2e4-52f6920b6c17"
+        },
+        {
+          "external_key": "src/memoryos/application/normalize.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.720016,
+          "judged_at": "2026-08-10T05:10:36.663070+00:00",
+          "memory_id": "019fea13-998b-7c72-a492-76f99b15e343"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.719681,
+          "judged_at": "2026-08-10T05:10:36.664757+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "tests/unit/test_normalization.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.703771,
+          "judged_at": "2026-08-10T05:10:36.666399+00:00",
+          "memory_id": "019fea13-979e-7b10-a5e5-2633788c7f18"
+        },
+        {
+          "external_key": "src/memoryos/domain/entities.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.701861,
+          "judged_at": "2026-08-10T05:10:36.668090+00:00",
+          "memory_id": "019fea13-99c3-7001-b3cf-6031ed0e6717"
+        },
+        {
+          "external_key": "src/memoryos/application/ports.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.691188,
+          "judged_at": "2026-08-10T05:10:36.669762+00:00",
+          "memory_id": "019fea13-998e-7a11-b41c-18c69d39f604"
+        },
+        {
+          "external_key": "tests/unit/test_blob_store.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.687733,
+          "judged_at": "2026-08-10T05:10:36.671448+00:00",
+          "memory_id": "019fea13-9766-7712-a8a4-330c30e2fcbd"
+        },
+        {
+          "external_key": "src/memoryos/adapters/blobs/filesystem.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.677683,
+          "judged_at": "2026-08-10T05:10:36.673092+00:00",
+          "memory_id": "019fea13-991c-7170-8630-0b123f51c213"
+        },
+        {
+          "external_key": "src/memoryos/config.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.674737+00:00",
+          "memory_id": "019fea13-98cc-76f2-bee6-e3aaa8a40bce"
+        }
+      ]
+    },
+    {
+      "query_text": "which layer is allowed to import which",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/application/ports.py",
+        "src/memoryos/container.py",
+        "src/memoryos/domain/values.py"
+      ],
+      "items": [
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.715125,
+          "judged_at": "2026-08-10T05:10:36.676392+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "src/memoryos/application/ports.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.705811,
+          "judged_at": "2026-08-10T05:10:36.678147+00:00",
+          "memory_id": "019fea13-998e-7a11-b41c-18c69d39f604"
+        },
+        {
+          "external_key": "tests/integration/test_api_ui_endpoints.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.703778,
+          "judged_at": "2026-08-10T05:10:36.679858+00:00",
+          "memory_id": "019fea13-9827-73e2-8904-dd57ecdf8bea"
+        },
+        {
+          "external_key": "tests/integration/test_replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.700525,
+          "judged_at": "2026-08-10T05:10:36.681527+00:00",
+          "memory_id": "019fea13-987b-7750-88fe-6c12b0e2f7fa"
+        },
+        {
+          "external_key": "src/memoryos/container.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.700327,
+          "judged_at": "2026-08-10T05:10:36.683220+00:00",
+          "memory_id": "019fea13-98d1-7c31-a83e-4250025d8c79"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/mappers.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.694787,
+          "judged_at": "2026-08-10T05:10:36.684852+00:00",
+          "memory_id": "019fea13-9930-7f51-9fe5-22b4fad163e6"
+        },
+        {
+          "external_key": "src/memoryos/config.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.689226,
+          "judged_at": "2026-08-10T05:10:36.686501+00:00",
+          "memory_id": "019fea13-98cc-76f2-bee6-e3aaa8a40bce"
+        },
+        {
+          "external_key": "src/memoryos/application/verification.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.689124,
+          "judged_at": "2026-08-10T05:10:36.688100+00:00",
+          "memory_id": "019fea13-99a7-70a0-9c12-bdd182aab2a3"
+        },
+        {
+          "external_key": "src/memoryos/adapters/parsers/markdown.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.688778,
+          "judged_at": "2026-08-10T05:10:36.689696+00:00",
+          "memory_id": "019fea13-98f0-78a3-b17a-03b8455685ce"
+        },
+        {
+          "external_key": "src/memoryos/api/routes/memories.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.680353,
+          "judged_at": "2026-08-10T05:10:36.691278+00:00",
+          "memory_id": "019fea13-9957-7731-946d-ff155b3f658b"
+        },
+        {
+          "external_key": "src/memoryos/domain/values.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.692835+00:00",
+          "memory_id": "019fea13-99d3-7632-be77-c954618ad060"
+        }
+      ]
+    },
+    {
+      "query_text": "why do we store two timestamps",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/adapters/db/models.py",
+        "src/memoryos/application/projection.py",
+        "src/memoryos/domain/entities.py",
+        "tests/unit/test_entities.py"
+      ],
+      "items": [
+        {
+          "external_key": "src/memoryos/domain/entities.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.736054,
+          "judged_at": "2026-08-10T05:10:36.694479+00:00",
+          "memory_id": "019fea13-99c3-7001-b3cf-6031ed0e6717"
+        },
+        {
+          "external_key": "src/memoryos/domain/entities.py",
+          "source_name": "self",
+          "chunk_ordinal": 4,
+          "verdict": "relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.736054,
+          "judged_at": "2026-08-10T05:10:36.696048+00:00",
+          "memory_id": "019fea13-99c3-7001-b3cf-6031ed0e6717"
+        },
+        {
+          "external_key": "tests/slow/test_acceptance.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.724159,
+          "judged_at": "2026-08-10T05:10:36.697606+00:00",
+          "memory_id": "019fea13-97df-7a72-8f84-466026448030"
+        },
+        {
+          "external_key": "tests/unit/test_entities.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.717064,
+          "judged_at": "2026-08-10T05:10:36.699178+00:00",
+          "memory_id": "019fea13-977c-7131-afde-1d45aa14b9b0"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/models.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.713535,
+          "judged_at": "2026-08-10T05:10:36.700757+00:00",
+          "memory_id": "019fea13-9934-7852-8c21-c9ab85cd009a"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.704895,
+          "judged_at": "2026-08-10T05:10:36.702318+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "src/memoryos/application/replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.71019,
+          "judged_at": "2026-08-10T05:10:36.703900+00:00",
+          "memory_id": "019fea13-999b-7372-965e-9c4c80979da9"
+        },
+        {
+          "external_key": "src/memoryos/application/sync.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.701692,
+          "judged_at": "2026-08-10T05:10:36.705466+00:00",
+          "memory_id": "019fea13-99a3-73a0-b02b-4f8cc21642e4"
+        },
+        {
+          "external_key": "tests/integration/test_evaluate.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.701804,
+          "judged_at": "2026-08-10T05:10:36.707003+00:00",
+          "memory_id": "019fea13-9844-7b01-98dd-77210ece7d29"
+        },
+        {
+          "external_key": "src/memoryos/application/projection.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.700397,
+          "judged_at": "2026-08-10T05:10:36.708535+00:00",
+          "memory_id": "019fea13-9993-70b1-9928-74c4ef60fb45"
+        },
+        {
+          "external_key": "src/memoryos/application/normalize.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.698725,
+          "judged_at": "2026-08-10T05:10:36.710092+00:00",
+          "memory_id": "019fea13-998b-7c72-a492-76f99b15e343"
+        },
+        {
+          "external_key": "tests/integration/test_embed.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.698125,
+          "judged_at": "2026-08-10T05:10:36.711707+00:00",
+          "memory_id": "019fea13-983b-7f43-8f1e-313557b869dd"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": 5,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.713380+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/models.py",
+          "source_name": "self",
+          "chunk_ordinal": 8,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-10T05:10:36.714979+00:00",
+          "memory_id": "019fea13-9934-7852-8c21-c9ab85cd009a"
+        }
+      ]
+    },
+    {
+      "query_text": "why is the embedding cache keyed by model",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "README.md",
+        "src/memoryos/adapters/db/embedding_cache.py",
+        "src/memoryos/adapters/db/models.py",
+        "src/memoryos/application/backfill.py",
+        "src/memoryos/application/ports.py",
+        "tests/integration/test_embed.py",
+        "tests/unit/test_embedding.py"
+      ],
+      "items": [
+        {
+          "external_key": "migrations/versions/0004_embedding_cache.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 1,
+          "score_at_judgement": 0.85703,
+          "judged_at": "2026-08-10T05:10:36.716518+00:00",
+          "memory_id": "019fea13-9719-7a51-b437-0d5361272d95"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/embedding_cache.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 2,
+          "score_at_judgement": 0.80474,
+          "judged_at": "2026-08-10T05:10:36.718042+00:00",
+          "memory_id": "019fea13-9924-7ae2-81ea-c990b4a10c69"
+        },
+        {
+          "external_key": "src/memoryos/adapters/embedding/sentence_transformers.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 3,
+          "score_at_judgement": 0.799512,
+          "judged_at": "2026-08-10T05:10:36.719525+00:00",
+          "memory_id": "019fea13-9904-7a33-893b-92f0b07d2f43"
+        },
+        {
+          "external_key": "src/memoryos/application/embed.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 4,
+          "score_at_judgement": 0.798919,
+          "judged_at": "2026-08-10T05:10:36.721025+00:00",
+          "memory_id": "019fea13-9973-7a93-b511-e8a9685beac4"
+        },
+        {
+          "external_key": "tests/unit/test_embedding.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 5,
+          "score_at_judgement": 0.797868,
+          "judged_at": "2026-08-10T05:10:36.722511+00:00",
+          "memory_id": "019fea13-9775-72c1-b701-1c11bed5a931"
+        },
+        {
+          "external_key": "README.md",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.796985,
+          "judged_at": "2026-08-10T05:10:36.724015+00:00",
+          "memory_id": "019fea13-96f1-72a3-83c7-8d721be4b9e9"
+        },
+        {
+          "external_key": "tests/integration/test_embed.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 6,
+          "score_at_judgement": 0.796373,
+          "judged_at": "2026-08-10T05:10:36.725507+00:00",
+          "memory_id": "019fea13-983b-7f43-8f1e-313557b869dd"
+        },
+        {
+          "external_key": "src/memoryos/application/replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "not_relevant",
+          "rank_at_judgement": 7,
+          "score_at_judgement": 0.795082,
+          "judged_at": "2026-08-10T05:10:36.726999+00:00",
+          "memory_id": "019fea13-999b-7372-965e-9c4c80979da9"
+        },
+        {
+          "external_key": "src/memoryos/application/ports.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 8,
+          "score_at_judgement": 0.794973,
+          "judged_at": "2026-08-10T05:10:36.728640+00:00",
+          "memory_id": "019fea13-998e-7a11-b41c-18c69d39f604"
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/models.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 9,
+          "score_at_judgement": 0.79017,
+          "judged_at": "2026-08-10T05:10:36.730198+00:00",
+          "memory_id": "019fea13-9934-7852-8c21-c9ab85cd009a"
+        },
+        {
+          "external_key": "src/memoryos/application/backfill.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "relevant",
+          "rank_at_judgement": 10,
+          "score_at_judgement": 0.788983,
+          "judged_at": "2026-08-10T05:10:36.731742+00:00",
+          "memory_id": "019fea13-996b-76c0-9523-b9f9519cc1c3"
+        }
+      ]
+    }
+  ]
+}

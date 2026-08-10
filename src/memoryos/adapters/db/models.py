@@ -492,6 +492,12 @@ class QueryJudgement(Base):
     `score_at_judgement` which are snapshots for the same reason. The export
     re-resolves the natural key to whatever is current, so the golden set stays
     correct across any number of rebuilds.
+
+    **`chunk_ordinal` extends that identity downwards.** NULL means the verdict
+    is about the memory; a number means it is about that chunk of it, and only
+    that chunk counts as a hit. It is part of the key rather than a snapshot
+    because, unlike `chunk_id`, an ordinal is stable across a rebuild — chunking
+    is deterministic, so chunk 4 of a file is chunk 4 again after a replay.
     """
 
     __tablename__ = "query_judgements"
@@ -506,6 +512,12 @@ class QueryJudgement(Base):
     # the judgement is still valid, the pointer simply is not.
     memory_id: Mapped[UUID | None] = mapped_column(_UUID)
     chunk_id: Mapped[UUID | None] = mapped_column(_UUID)
+    # Which chunk the verdict is about, or NULL for "this memory, whichever chunk
+    # matched". Part of the identity rather than a snapshot like `chunk_id`,
+    # because the ordinal survives a rebuild and the id does not — and because a
+    # memory-level verdict cannot express the failure that motivated this column:
+    # the right file returned on the wrong chunk.
+    chunk_ordinal: Mapped[int | None] = mapped_column(Integer)
     verdict: Mapped[str] = mapped_column(Text, nullable=False)
     rank_at_judgement: Mapped[int | None] = mapped_column(Integer)
     score_at_judgement: Mapped[float | None] = mapped_column(REAL)
@@ -525,16 +537,27 @@ class QueryJudgement(Base):
         # about the same pair and quietly average them. Keyed on the natural
         # identity rather than `memory_id`, which would let the same judgement be
         # recorded again under a new id after every rebuild.
+        #
+        # `nulls_not_distinct` is what keeps that true now that the ordinal is in
+        # the key. Under Postgres' default, NULLs are distinct in a unique index,
+        # so every memory-level row — the overwhelming majority — would stop
+        # colliding with itself and the upsert would append instead of replace.
         UniqueConstraint(
             "query_text",
             "source_name",
             "external_key",
+            "chunk_ordinal",
             name="uq_query_judgements_query_item",
+            postgresql_nulls_not_distinct=True,
         ),
         _enum_check("verdict", Verdict, "ck_query_judgements_verdict"),
         CheckConstraint(
             "rank_at_judgement IS NULL OR rank_at_judgement >= 1",
             name="ck_query_judgements_rank_positive",
+        ),
+        CheckConstraint(
+            "chunk_ordinal IS NULL OR chunk_ordinal >= 0",
+            name="ck_query_judgements_chunk_ordinal_non_negative",
         ),
         CheckConstraint("length(btrim(query_text)) > 0", name="ck_query_judgements_query_text"),
         # A `missing` verdict has no rank, because the point of it is that the

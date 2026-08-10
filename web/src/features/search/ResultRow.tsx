@@ -31,7 +31,14 @@ interface Props {
   sourceName: string;
   filters: Record<string, unknown>;
   verdict?: Verdict | null;
-  onJudged?: (externalKey: string, verdict: Verdict) => void;
+  /** Keyed `externalKey#ordinal`, so a chunk verdict is separate from the file's. */
+  chunkVerdicts?: Record<string, Verdict>;
+  onJudged?: (key: string, verdict: Verdict) => void;
+}
+
+/** The key a chunk-level verdict is remembered under for this session. */
+function chunkVerdictKey(externalKey: string, ordinal: number): string {
+  return `${externalKey}#${ordinal}`;
 }
 
 export function ResultRow({
@@ -41,6 +48,7 @@ export function ResultRow({
   sourceName,
   filters,
   verdict,
+  chunkVerdicts,
   onJudged,
 }: Props) {
   const [expanded, setExpanded] = useState<number | null>(null);
@@ -111,6 +119,15 @@ export function ResultRow({
             key={chunk.chunk_id}
             chunk={chunk}
             code={code}
+            // The chunk-level target differs from the memory-level one only in
+            // the ordinal and the chunk id. Rank and score stay the memory's,
+            // because the ranking being judged is the memory ranking — the
+            // ordinal narrows *what was right*, not *where it appeared*.
+            target={{ ...target, chunkOrdinal: chunk.ordinal, chunkId: chunk.chunk_id }}
+            verdict={chunkVerdicts?.[chunkVerdictKey(hit.external_key, chunk.ordinal)] ?? null}
+            onJudged={(given) =>
+              onJudged?.(chunkVerdictKey(hit.external_key, chunk.ordinal), given)
+            }
             expanded={expanded === chunk.ordinal}
             onToggle={() =>
               setExpanded((current) => (current === chunk.ordinal ? null : chunk.ordinal))
@@ -144,6 +161,9 @@ export function ResultRow({
 interface ChunkProps {
   chunk: MatchedChunk;
   code: boolean;
+  target: JudgementTarget;
+  verdict: Verdict | null;
+  onJudged: (verdict: Verdict) => void;
   expanded: boolean;
   onToggle: () => void;
   neighbours: { ordinal: number; content: string; token_count: number }[];
@@ -153,6 +173,9 @@ interface ChunkProps {
 function ChunkBlock({
   chunk,
   code,
+  target,
+  verdict,
+  onJudged,
   expanded,
   onToggle,
   neighbours,
@@ -181,6 +204,13 @@ function ChunkBlock({
             {definition}()
           </span>
         ) : null}
+        {/* The verdict on *this chunk*, distinct from the one on the file. It is
+            the only way to say "right file, wrong chunk" — the failure a
+            memory-level golden set scores as a success. Compact and last in the
+            row, because judging the file is still the common case. */}
+        <span className="ml-auto" data-testid="chunk-judgement">
+          <JudgementButtons target={target} current={verdict} onRecorded={onJudged} compact />
+        </span>
       </div>
 
       <div className="mt-1">

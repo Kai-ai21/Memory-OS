@@ -234,6 +234,18 @@
             ],
             "title": "Chunk Id"
           },
+          "chunk_ordinal": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Ordinal"
+          },
           "external_key": {
             "minLength": 1,
             "title": "External Key",

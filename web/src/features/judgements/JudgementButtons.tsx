@@ -19,6 +19,12 @@ export interface JudgementTarget {
   sourceName: string;
   externalKey: string;
   memoryId: string;
+  /**
+   * Which chunk the verdict is about. Left undefined the verdict is about the
+   * memory — "the right file came back". Set, it is about that chunk alone,
+   * which is the only way to record "right file, wrong chunk".
+   */
+  chunkOrdinal?: number | null;
   chunkId?: string | null;
   rank?: number | null;
   score?: number | null;
@@ -31,12 +37,20 @@ const LABELS: Record<Verdict, string> = {
   missing: "missing",
 };
 
+const COMPACT_LABELS: Record<Verdict, string> = {
+  relevant: "✓",
+  not_relevant: "✗",
+  missing: "missing",
+};
+
 interface Props {
   target: JudgementTarget;
   current?: Verdict | null;
   onRecorded?: (verdict: Verdict) => void;
   /** `missing` only makes sense for something the search did not return. */
   verdicts?: Verdict[];
+  /** Shorter labels, for the per-chunk row where the file header already said it. */
+  compact?: boolean;
 }
 
 export function JudgementButtons({
@@ -44,6 +58,7 @@ export function JudgementButtons({
   current,
   onRecorded,
   verdicts = ["relevant", "not_relevant"],
+  compact = false,
 }: Props) {
   const client = useQueryClient();
 
@@ -54,6 +69,7 @@ export function JudgementButtons({
         source_name: target.sourceName,
         external_key: target.externalKey,
         verdict,
+        chunk_ordinal: target.chunkOrdinal ?? null,
         memory_id: target.memoryId,
         chunk_id: target.chunkId ?? null,
         // A `missing` verdict carries no rank — the point of it is that the item
@@ -91,7 +107,7 @@ export function JudgementButtons({
             aria-pressed={active}
             onClick={() => mutation.mutate(verdict)}
           >
-            {LABELS[verdict]}
+            {compact ? COMPACT_LABELS[verdict] : LABELS[verdict]}
           </button>
         );
       })}

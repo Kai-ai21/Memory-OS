@@ -312,6 +312,8 @@ export interface components {
         JudgementIn: {
             /** Chunk Id */
             chunk_id?: string | null;
+            /** Chunk Ordinal */
+            chunk_ordinal?: number | null;
             /** External Key */
             external_key: string;
             /** Filters */

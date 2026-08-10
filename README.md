@@ -6,7 +6,7 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 
 ## Status
 
-**Phase 1 complete**, plus M2.0a — the search interface.
+**Phase 1 complete**, plus M2.0a (the search interface) and M2.0 (the evaluation harness).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -14,7 +14,8 @@ text into chunks sized for the embedding model, embeds them, and answers questio
 meaning. Then it can throw all of that away and rebuild it from the log, and prove the result is
 identical.
 
-Semantic search only — BM25, fusion, reranking, and synthesis are Phase 2.
+Semantic search only — BM25, fusion, reranking, and synthesis are Phase 2. What it retrieves
+is now measured rather than assumed: see [Evaluation](#evaluation).
 
 ### What Phase 1 built
 
@@ -348,22 +349,91 @@ needs no extra request to do it.
 
 Three verdicts per result — relevant, not relevant, missing — one click each. `missing`
 is separate because by definition its subject is not on screen, and it carries no rank.
+The same three buttons appear on each matched chunk, which is the only way to record
+"right file, wrong chunk": M2.0 found `why do we store two timestamps` returning both
+`README.md` and `models.py` inside the top six on paragraphs that do not distinguish
+`occurred_at` from `ingested_at`, a failure a memory-level verdict scores as a success.
 
 They land in `query_judgements`, the first table here that no machine can regenerate,
 classified `USER_AUTHORED`: never truncated, never written by a replay. Identity is
-`(source_name, external_key)` rather than a memory id, and that is forced rather than
+`(source_name, external_key, chunk_ordinal)` rather than a memory id — with a null
+ordinal meaning "this memory, whichever chunk matched" — and that is forced rather than
 stylistic — a replay recreates every memory with a new UUID, and `TRUNCATE ... CASCADE`
 empties any table referencing `memories`, so a foreign key there would mean every
 rebuild destroyed the golden set. `memory_id`, `rank_at_judgement` and
 `score_at_judgement` are snapshots of what the system said when a human disagreed with
-it; the export re-resolves the natural key against the current corpus.
+it; the export re-resolves the natural key against the current corpus. The ordinal is
+identity rather than a snapshot because, unlike `chunk_id`, it survives a rebuild —
+chunking is deterministic, so chunk 4 of a file is chunk 4 again after a replay.
+
+`NULLS NOT DISTINCT` on the unique key is load-bearing. Postgres treats nulls as
+distinct by default, so once the ordinal joined the key, every memory-level row would
+have stopped colliding with itself and the upsert that makes re-judging *replace* would
+have quietly started appending instead.
 
 ```bash
 memoryos export-golden-set --output var/golden-set.json
+# and back again, because `docker compose down -v` destroys the only copy
+uv run python scripts/restore_judgements.py var/golden-set.json
 ```
 
 Demonstrated end to end: 56 judgements survived the corpus being destroyed and rebuilt
 from the log with entirely new ids, and re-resolved with zero unresolved.
+
+## Evaluation
+
+Retrieval quality as a number, so later milestones can be argued about with evidence
+rather than impressions.
+
+```bash
+memoryos evaluate --k 10 --json var/baseline.json
+memoryos evaluate --k 10 --compare var/baseline.json   # what a change did
+memoryos evaluate --query "SKIP LOCKED" --verbose      # why one query is bad
+```
+
+Four metrics, because each is blind to something the next one sees. **recall@k** —
+of what should have been found, how much was; says nothing about order. **precision@k**
+— of what came back, how much was relevant; penalises the noise recall rewards.
+**MRR** — how high the *first* right answer ranked, which is the number that matters
+when somebody reads one result and stops. **nDCG@k** — the whole ordering, discounted
+by position. `application/metrics.py` is pure functions with no I/O and no knowledge of
+this corpus; `application/golden.py` turns an export into scoreable queries.
+
+`missing` counts as relevant — it is the only verdict naming something the ranking
+failed to return, and without it recall would mean "of the things we found, how many
+did we find". A query with no relevant judgements is **excluded with a warning** rather
+than scored zero, and every triple is resolved against the current corpus at load time
+with the failures *named*: a golden set that quietly shrinks as files move reports a
+rising score for a corpus that is losing its answer key.
+
+The baseline is 21 queries over 235 judgements at k=10, and it lives in
+`var/baseline.json` — the four means are deliberately **not** copied into this file.
+
+That is not laziness, it is the corpus. This repository is what gets indexed, so a
+paragraph quoting the score is part of what produces the score, and keeping the two in
+agreement is a fixpoint problem rather than an edit. It is not a rounding-scale effect
+either: one draft of the section below happened to put a rare token next to the file
+that contains it, inside one chunk, which put this README into that query's top ten and
+moved the mean of every metric by about 0.015 — while the retrieval defect it was
+describing was completely unchanged. Numbers that move when you write about them do not
+belong in prose. `evaluate --compare` against the committed JSON is the interface, and
+it is only meaningful over a corpus that did not change underneath the run.
+
+**The worst-queries section is the useful output.** The mean says whether something
+improved; the worst list says what to fix. The bottom of it is stable across runs:
+`SKIP LOCKED`, `what stops the same document being stored twice`, and `how do I run the
+worker`. The first two are one defect approached from opposite sides — a query whose
+answer is a rare literal token the model reads as ordinary English, and a query whose
+answer is phrased entirely in words the code never uses. Between them they are the case
+for M2.1's lexical half.
+
+The second failure the chunk ordinal exposes: `why do we store two timestamps` takes a
+perfect MRR and loses two fifths of its recall, because `README.md` and `models.py` are
+both inside the top six on paragraphs that never mention `ingested_at`. Judged per
+memory that query looks solved.
+
+`var/baseline.json` is committed. It is the record of where Phase 2 started, and every
+later milestone in this phase reports its `--compare` diff against it.
 
 ## Replay
 
