@@ -38,7 +38,7 @@ from memoryos.config import Settings
 from memoryos.domain.entities import Source
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobType
-from memoryos.domain.values import SourceKind
+from memoryos.domain.values import SearchMode, SourceKind
 
 pytestmark = [pytest.mark.slow, pytest.mark.integration]
 
@@ -86,7 +86,7 @@ class Corpus:
         """The best-ranked memory for each assessment query."""
         results: dict[str, str] = {}
         for query in ASSESSMENT_QUERIES:
-            found = await self.search(query, k=5)
+            found = await self.search(query, k=5, mode=SearchMode.VECTOR)
             assert found.hits, f"{query!r} returned nothing at all"
             results[query] = found.hits[0].external_key
         return results

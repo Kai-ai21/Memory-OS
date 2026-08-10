@@ -30,7 +30,7 @@ from memoryos.application.sync import SyncSource
 from memoryos.domain.entities import Source
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobType
-from memoryos.domain.values import SourceKind
+from memoryos.domain.values import SearchMode, SourceKind
 
 pytestmark = [pytest.mark.slow, pytest.mark.integration]
 
@@ -130,7 +130,9 @@ async def test_a_topical_query_returns_that_topic_above_the_others(
     are not carrying meaning — and every structural test in this milestone
     would still be green.
     """
-    result = await searcher("how does a worker take a task and hold onto it", k=6)
+    result = await searcher(
+        "how does a worker take a task and hold onto it", k=6, mode=SearchMode.VECTOR
+    )
 
     assert len(result.hits) == 6
     top_three = {hit.external_key for hit in result.hits[:3]}
@@ -158,7 +160,9 @@ async def test_a_topical_query_returns_that_topic_above_the_others(
 async def test_the_other_topic_separates_the_same_way(
     searcher: SearchMemories,
 ) -> None:
-    result = await searcher("how do I get a crisp crust on a loaf of bread", k=6)
+    result = await searcher(
+        "how do I get a crisp crust on a loaf of bread", k=6, mode=SearchMode.VECTOR
+    )
 
     top_three = {hit.external_key for hit in result.hits[:3]}
     assert top_three == set(BAKING_DOCS), [
@@ -169,7 +173,9 @@ async def test_the_other_topic_separates_the_same_way(
 async def test_search_returns_the_chunks_that_matched(
     searcher: SearchMemories,
 ) -> None:
-    result = await searcher("leases expire when a worker dies", k=3)
+    result = await searcher(
+        "leases expire when a worker dies", k=3, mode=SearchMode.VECTOR
+    )
 
     top = result.hits[0]
     assert top.matched_chunks

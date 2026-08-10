@@ -27,7 +27,7 @@ from memoryos.application.golden import GoldenQuery, GoldenSet
 from memoryos.application.metrics import EvalResult, score
 from memoryos.application.ports import SearchFilters
 from memoryos.application.search import MemoryHit, SearchMemories
-from memoryos.domain.values import MemoryKind, SearchMode
+from memoryos.domain.values import DEFAULT_SEARCH_MODE, MemoryKind, SearchMode
 
 logger = structlog.get_logger(__name__)
 
@@ -75,10 +75,10 @@ class EvaluationRun:
     ran_at: str
     runs: list[QueryRun]
     golden: GoldenSet
-    # Which retriever produced these numbers. Recorded because the whole of M2.1
-    # is two runs over one golden set, and a comparison that silently crossed
+    # Which retriever produced these numbers. Recorded because M2.1 and M2.2 are
+    # several runs over one golden set, and a comparison that silently crossed
     # modes would read as a catastrophic regression.
-    mode: SearchMode = SearchMode.VECTOR
+    mode: SearchMode = DEFAULT_SEARCH_MODE
     # Present when the corpus could not be reached in the shape the golden set
     # expects; carried rather than raised so a partial run still reports.
     warnings: list[str] = field(default_factory=list)
@@ -147,7 +147,7 @@ async def evaluate(
     *,
     k: int,
     now: datetime,
-    mode: SearchMode = SearchMode.VECTOR,
+    mode: SearchMode = DEFAULT_SEARCH_MODE,
 ) -> EvaluationRun:
     """Score every golden query. One search per query, through the real path."""
     runs: list[QueryRun] = []

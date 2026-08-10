@@ -94,18 +94,25 @@ class Verdict(StrEnum):
 class SearchMode(StrEnum):
     """Which retriever answers a query.
 
-    Two, deliberately not combined. They fail in opposite directions — the
-    vector half is blind to opaque exact tokens, the keyword half is blind to
-    paraphrase — and M2.0's harness exists to measure whether that complement is
-    real before M2.2 fuses them. Fusing first and measuring afterwards would
-    make it impossible to tell which half was carrying the result.
+    They fail in opposite directions — the vector half is blind to opaque exact
+    tokens, the keyword half is blind to paraphrase — and M2.1 measured that
+    complement before M2.2 fused it, so that it was possible to tell which half
+    carries which query. `SKIP LOCKED` goes from recall 0.000 to 1.000 between
+    them; the paraphrase queries go the other way, to exactly 0.000.
 
-    `VECTOR` is the default everywhere, so nothing that predates this enum
-    changes behaviour.
+    `HYBRID` is the product. The other two remain because the only way to know
+    what fusion is doing is to be able to run each half alone.
     """
 
     VECTOR = auto()
     KEYWORD = auto()
+    HYBRID = auto()
+
+
+# One definition of "the default", used by the use case, the CLI, the API and
+# the evaluation harness. Two places that must agree about a default is how a
+# CLI and a test end up measuring different systems.
+DEFAULT_SEARCH_MODE = SearchMode.HYBRID
 
 
 class EmbeddingRole(StrEnum):
