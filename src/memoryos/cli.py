@@ -844,13 +844,13 @@ async def run_resolve_entities(
         )
 
         candidates = await resolve.propose()
-        auto = [c for c in candidates if c.confidence >= threshold]
-        review = [c for c in candidates if c.confidence < threshold]
+        auto = [c for c in candidates if resolve.would_auto_merge(c)]
+        review = [c for c in candidates if not resolve.would_auto_merge(c)]
 
         print(f"threshold {threshold}   candidates {len(candidates)}")
         print(f"would auto-merge {len(auto)}   would queue {len(review)}\n")
         for candidate in candidates[:limit]:
-            mark = "MERGE " if candidate.confidence >= threshold else "review"
+            mark = "MERGE " if resolve.would_auto_merge(candidate) else "review"
             print(
                 f"  [{mark}] {candidate.confidence:.3f} "
                 f"{candidate.strategy.value:9} {candidate.evidence}"

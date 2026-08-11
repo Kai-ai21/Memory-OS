@@ -360,3 +360,26 @@ async def test_extraction_after_a_merge_does_not_resurrect_the_loser(
                 .where(models.EntityMention.entity_id == loser)
             )
         ).scalar_one() == 0
+
+
+async def test_embedding_candidates_are_never_auto_merged(pipeline: Pipeline) -> None:
+    """The milestone's design, changed by measurement.
+
+    M3.2 proposes auto-merging above a high similarity threshold. On this corpus
+    no such threshold exists: two different constraint names scored 0.952 while
+    a real match — `ingestion_events` and `IngestionEvent` — scored 0.939. A
+    bi-encoder embeds identifier-like names by their shared prefix, and a shared
+    prefix is not a shared referent.
+
+    Since a false merge invents a path the corpus does not contain, embedding
+    proposes and never decides. This pins that: no confidence, however high,
+    promotes an embedding candidate past review.
+    """
+    resolve = resolver(pipeline, threshold=0.5)
+    left, right = new_id(), new_id()
+
+    embedding = MergeCandidate(left, right, MergeStrategy.EMBEDDING, 0.999, "cosine")
+    exact = MergeCandidate(left, right, MergeStrategy.EXACT, 0.999, "canonical")
+
+    assert resolve.would_auto_merge(embedding) is False
+    assert resolve.would_auto_merge(exact) is True

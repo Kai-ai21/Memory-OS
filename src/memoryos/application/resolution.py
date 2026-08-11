@@ -11,10 +11,11 @@ Three strategies, cheapest first, and the ordering is not just efficiency:
    names that reduce to the same canonical form under a type-specific rule are
    the same string wearing different punctuation.
 2. **Embedding similarity.** Reuses the `Embedder` the corpus is already built
-   with. This is what reaches "Postgres"/"PostgreSQL", which no character rule
-   can without mangling one of them — and it is also the only strategy that
-   produces genuinely wrong answers, which is why its threshold is high and its
-   middle band goes to a human.
+   with, and reaches pairs no character rule can — "Postgres"/"PostgreSQL"
+   cannot be joined by any suffix rule that does not also mangle one of them.
+   It **proposes and never decides**: measured on this corpus, no similarity
+   threshold separates its true matches from its false ones. See
+   `AUTO_MERGE_STRATEGIES`.
 3. **Aliases.** A hand-written table for the pairs the first two cannot see.
    Small on purpose: an alias list that grows without bound is a resolver
    somebody is maintaining by hand instead of fixing.
@@ -64,14 +65,9 @@ from memoryos.domain.values import (
 
 logger = structlog.get_logger(__name__)
 
-# Auto-merge at or above this cosine similarity; propose between the floor and
-# here; ignore below the floor.
-#
-# 0.93 rather than 0.90, and the difference is measured rather than chosen: at
-# 0.90 this corpus merges "memory_id" with "memories" and "char_start" with
-# "char_end", which are neighbours in the embedding space precisely because they
-# appear in the same sentences. Names that co-occur are not names that co-refer,
-# and that is the failure mode a bi-encoder has no way to see.
+# The confidence a candidate needs to be applied without review. Binding for
+# `exact` and `alias`; embedding candidates are excluded by strategy regardless
+# of what they score, so raising or lowering this does not admit them.
 DEFAULT_THRESHOLD = 0.93
 
 # Below this, a pair is not worth a person's attention. Everything between here
@@ -87,12 +83,36 @@ REVIEW_FLOOR = 0.86
 ALIASES: dict[EntityType, tuple[tuple[str, str], ...]] = {
     EntityType.TECHNOLOGY: (
         ("postgres", "postgresql"),
-        ("postgres", "pgvector"),
         ("py", "python"),
+        # `sa` is the conventional import alias for SQLAlchemy and names the
+        # same library. `op` is *not* the equivalent for Alembic — it is
+        # Alembic's operations module, a part of the thing rather than the
+        # thing — and it was in this list until the dry run showed it merging
+        # them. Likewise `pgvector`, which is an extension Postgres loads, not
+        # Postgres.
         ("sqlalchemy", "sa"),
-        ("alembic", "op"),
     ),
 }
+
+# Strategies trusted to merge without a person looking.
+#
+# **Embedding similarity is deliberately absent, and that is a measured
+# decision rather than caution.** The milestone proposes auto-merging above a
+# high similarity threshold. On this corpus no such threshold exists: the dry
+# run put `ck_memory_chunks_char_start_non_negative` and
+# `ck_memory_chunks_prefix_chars_non_negative` — two different constraints — at
+# 0.952, above `ingestion_events`/`IngestionEvent` at 0.939, which is a real
+# match. A bi-encoder embeds identifier-like names by their shared prefix, and
+# names that share a prefix are not names that share a referent.
+#
+# Any threshold therefore either admits false merges or excludes true ones, and
+# given that a false merge invents a path the corpus does not contain, the
+# resolution is to let embedding *propose* and never decide. It remains the
+# strategy that reaches "Postgres"/"PostgreSQL" — it just reaches them into the
+# review queue.
+AUTO_MERGE_STRATEGIES: frozenset[MergeStrategy] = frozenset(
+    {MergeStrategy.EXACT, MergeStrategy.ALIAS, MergeStrategy.MANUAL}
+)
 
 # Names too short or too generic to resolve on similarity alone. A two-character
 # name has almost no signal in an embedding, and these collide with everything.
@@ -193,9 +213,7 @@ class ResolveEntities:
             )
 
         if dry_run:
-            report.auto_merged = sum(
-                1 for c in candidates if c.confidence >= self._threshold
-            )
+            report.auto_merged = sum(1 for c in candidates if self.would_auto_merge(c))
             report.pending = len(candidates) - report.auto_merged
             report.duration_ms = int((time.monotonic() - started) * 1000)
             return report
@@ -204,7 +222,7 @@ class ResolveEntities:
         # merging A into B changes what C should merge into. Highest confidence
         # first means the surest decisions set the winners.
         for candidate in candidates:
-            if candidate.confidence >= self._threshold:
+            if self.would_auto_merge(candidate):
                 moved = await self.apply(candidate)
                 if moved is None:
                     continue
@@ -218,6 +236,18 @@ class ResolveEntities:
         report.duration_ms = int((time.monotonic() - started) * 1000)
         logger.info("resolve.finished", **report.as_dict())
         return report
+
+    def would_auto_merge(self, candidate: MergeCandidate) -> bool:
+        """Whether this candidate may be applied without review.
+
+        Two conditions, and the strategy one does the real work: confidence
+        alone cannot separate a true embedding match from a false one on this
+        corpus. See `AUTO_MERGE_STRATEGIES`.
+        """
+        return (
+            candidate.strategy in AUTO_MERGE_STRATEGIES
+            and candidate.confidence >= self._threshold
+        )
 
     # ------------------------------------------------------------------
     # Applying and undoing
