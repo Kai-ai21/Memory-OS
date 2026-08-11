@@ -1,0 +1,368 @@
+"""Extract entities for a memory, store them, and project them to the graph.
+
+The transaction boundary is the design. Postgres commits first and the Neo4j
+projection follows, so a crash between the two leaves a corpus that is correct
+and a graph that is behind — which the next extraction repairs, because both
+writes are idempotent. The other order leaves a graph asserting entities that no
+query can join to, and nothing that would ever notice.
+
+Idempotency follows M1.4 and M1.5 exactly: a memory whose mentions already carry
+the current `extractor_version` is skipped without a model call. That is what
+makes re-running the command free, makes a prompt change a targeted redo rather
+than a corpus rebuild, and makes the job safe to retry after a failure partway
+through.
+"""
+
+import time
+from dataclasses import dataclass
+from enum import StrEnum, auto
+from uuid import UUID
+
+import structlog
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from memoryos.adapters.db import models
+from memoryos.application.ports import (
+    EntityExtractor,
+    EntityNode,
+    ExtractedEntity,
+    GraphEdge,
+    GraphNode,
+    GraphStore,
+    MemoryNode,
+)
+from memoryos.domain.ids import new_id
+from memoryos.domain.jobs import PermanentError
+from memoryos.domain.normalization import canonical_entity_name
+from memoryos.domain.values import EdgeType, GraphLabel, MemoryKind
+
+logger = structlog.get_logger(__name__)
+
+
+class ExtractOutcome(StrEnum):
+    SKIPPED = auto()
+    EXTRACTED = auto()
+    DELETED = auto()
+    EMPTY = auto()
+
+
+@dataclass(slots=True)
+class ExtractReport:
+    outcome: ExtractOutcome
+    chunks: int = 0
+    entities: int = 0
+    mentions: int = 0
+    # Candidates refused at the storage boundary because their offsets did not
+    # hold. Should always be zero with the real extractor, which verifies before
+    # returning; a non-zero count means an extractor broke the port's contract,
+    # which is worth seeing rather than silently correcting.
+    unverified: int = 0
+    projected: bool = False
+    duration_ms: int = 0
+
+    def as_dict(self) -> dict[str, str | int | bool]:
+        return {
+            "outcome": self.outcome.value,
+            "chunks": self.chunks,
+            "entities": self.entities,
+            "mentions": self.mentions,
+            "unverified": self.unverified,
+            "projected": self.projected,
+            "duration_ms": self.duration_ms,
+        }
+
+
+class ExtractEntities:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        extractor: EntityExtractor,
+        graph: GraphStore | None = None,
+    ) -> None:
+        self._sessions = session_factory
+        self._extractor = extractor
+        # Optional, because the graph is a projection and Phase 1 and 2 work
+        # without it. A missing graph means the rows are written and nothing is
+        # projected, which `doctor` reports as a node count behind the table.
+        self._graph = graph
+
+    async def __call__(self, memory_id: UUID) -> ExtractReport:
+        started = time.monotonic()
+        version = self._extractor.version
+        log = logger.bind(memory_id=str(memory_id), extractor=version)
+
+        memory = await self._load(memory_id)
+        if memory is None:
+            raise PermanentError(f"no such memory: {memory_id}")
+        if memory.deleted_at is not None:
+            log.info("extract.skipped_deleted")
+            return _finish(ExtractReport(ExtractOutcome.DELETED), started)
+
+        if await self._already_current(memory_id, version):
+            # The M1.4/M1.5 skip. No model call, no cost, no rewrite.
+            log.info("extract.skipped_current")
+            return _finish(ExtractReport(ExtractOutcome.SKIPPED), started)
+
+        chunks = await self._chunks(memory_id)
+        if not chunks:
+            log.info("extract.no_chunks")
+            return _finish(ExtractReport(ExtractOutcome.EMPTY), started)
+
+        kind = MemoryKind(memory.kind)
+        found = await self._extract(chunks, kind)
+
+        report = await self._store(memory_id, chunks, found, version)
+        # After the commit, never inside it. See the module docstring.
+        report.projected = await self._project(memory, chunks, found)
+        # Logged after projection rather than before, so `projected` in the log
+        # is the outcome rather than the field's default. Logging first reported
+        # `projected=False` on every successful run.
+        log.info("extract.stored", **report.as_dict())
+        return _finish(report, started)
+
+    async def _extract(
+        self, chunks: list[tuple[UUID, str]], kind: MemoryKind
+    ) -> list[list[ExtractedEntity]]:
+        """One pass over the chunks, batched if the extractor supports it.
+
+        `extract_batch` is not part of the port — the port's surface is
+        `extract`, one text at a time. It is used when present because a request
+        per chunk exhausts the free tier's daily cap on a corpus of any size,
+        and falling back to the port keeps a simpler extractor (the test fake,
+        or a future local model with no rate limit) perfectly usable.
+        """
+        texts = [text for _, text in chunks]
+        batch = getattr(self._extractor, "extract_batch", None)
+        if callable(batch):
+            results: list[list[ExtractedEntity]] = await batch(texts, kind=kind)
+            return results
+        return [await self._extractor.extract(text, kind=kind) for text in texts]
+
+    async def _load(self, memory_id: UUID) -> models.Memory | None:
+        async with self._sessions() as session:
+            return await session.get(models.Memory, memory_id)
+
+    async def _already_current(self, memory_id: UUID, version: str) -> bool:
+        stmt = (
+            select(models.EntityMention.id)
+            .where(
+                models.EntityMention.memory_id == memory_id,
+                models.EntityMention.extractor_version == version,
+            )
+            .limit(1)
+        )
+        async with self._sessions() as session:
+            return (await session.execute(stmt)).first() is not None
+
+    async def _chunks(self, memory_id: UUID) -> list[tuple[UUID, str]]:
+        stmt = (
+            select(models.MemoryChunk.id, models.MemoryChunk.content)
+            .where(models.MemoryChunk.memory_id == memory_id)
+            .order_by(models.MemoryChunk.ordinal)
+        )
+        async with self._sessions() as session:
+            return [(row[0], row[1]) for row in await session.execute(stmt)]
+
+    async def _store(
+        self,
+        memory_id: UUID,
+        chunks: list[tuple[UUID, str]],
+        found: list[list[ExtractedEntity]],
+        version: str,
+    ) -> ExtractReport:
+        """Upsert the entities, replace this memory's mentions, in one transaction.
+
+        Mentions from *other* extractor versions are deleted here, and that is
+        the point of doing it in the same transaction as the insert: a memory
+        must never carry two versions' opinions at once, or every count over the
+        table double-counts and no query can tell which mention is current.
+        """
+        entities = 0
+        mentions = 0
+        unverified = 0
+
+        async with self._sessions.begin() as session:
+            await session.execute(
+                delete(models.EntityMention).where(
+                    models.EntityMention.memory_id == memory_id
+                )
+            )
+
+            for (chunk_id, chunk_text), candidates in zip(chunks, found, strict=True):
+                for candidate in candidates:
+                    if not _offsets_hold(chunk_text, candidate):
+                        # The port says an extractor has already verified this,
+                        # and it is checked again anyway — the same reasoning as
+                        # `EmbedMemory._check_widths`, which refuses a
+                        # wrong-width vector the embedder should never have
+                        # produced. The invariant this table exists to carry is
+                        # `content[char_start:char_end] == name`, and a
+                        # guarantee that depends on every present and future
+                        # extractor keeping its word is not a guarantee. One
+                        # string slice makes it unconditional.
+                        unverified += 1
+                        logger.warning(
+                            "extract.offsets_rejected",
+                            name=candidate.name,
+                            chunk_id=str(chunk_id),
+                        )
+                        continue
+                    entity_id, created = await self._upsert_entity(session, candidate)
+                    entities += int(created)
+                    await session.execute(
+                        insert(models.EntityMention)
+                        .values(
+                            id=new_id(),
+                            entity_id=entity_id,
+                            memory_id=memory_id,
+                            chunk_id=chunk_id,
+                            char_start=candidate.char_start,
+                            char_end=candidate.char_end,
+                            confidence=candidate.confidence,
+                            extractor_version=version,
+                        )
+                        # The same entity at the same offset in the same chunk is
+                        # one mention. Reachable when a batch returns a duplicate
+                        # the in-adapter dedup did not catch across retries.
+                        .on_conflict_do_nothing(
+                            constraint="uq_entity_mentions_span"
+                        )
+                    )
+                    mentions += 1
+
+        return ExtractReport(
+            outcome=ExtractOutcome.EXTRACTED,
+            chunks=len(chunks),
+            entities=entities,
+            mentions=mentions,
+            unverified=unverified,
+        )
+
+    async def _upsert_entity(
+        self, session: AsyncSession, candidate: ExtractedEntity
+    ) -> tuple[UUID, bool]:
+        """The entity id for this name and type, creating the row if new.
+
+        `ON CONFLICT DO NOTHING` then `SELECT`, rather than `DO UPDATE`, because
+        an entity's stored `name` is the surface form as *first* seen and later
+        sightings must not overwrite it — that first form is the evidence M3.2
+        will resolve against. The insert returns nothing on conflict, so the
+        select is what resolves an existing row.
+        """
+        canonical = canonical_entity_name(candidate.name)
+        entity_type = candidate.type.value
+
+        inserted = await session.execute(
+            insert(models.Entity)
+            .values(
+                id=new_id(),
+                name=candidate.name,
+                canonical_name=canonical,
+                type=entity_type,
+                confidence=candidate.confidence,
+            )
+            .on_conflict_do_nothing(constraint="uq_entities_canonical_type")
+            .returning(models.Entity.id)
+        )
+        entity_id = inserted.scalar_one_or_none()
+        if entity_id is not None:
+            return entity_id, True
+
+        existing = await session.execute(
+            select(models.Entity.id).where(
+                models.Entity.canonical_name == canonical,
+                models.Entity.type == entity_type,
+            )
+        )
+        return existing.scalar_one(), False
+
+    async def _project(
+        self,
+        memory: models.Memory,
+        chunks: list[tuple[UUID, str]],
+        found: list[list[ExtractedEntity]],
+    ) -> bool:
+        """Mirror what was just committed into Neo4j.
+
+        Read back from Postgres rather than reusing the in-memory candidates,
+        because the entity ids are assigned there and the graph must key on the
+        same ones — a projection with its own ids would be a second identity
+        space that nothing could join across.
+
+        Failures are caught and reported, not raised. The rows are already
+        committed and correct; taking the job down because a projection is
+        unavailable would turn a degraded graph into a failed extraction, and
+        the next run repairs the graph anyway because every write is a `MERGE`.
+        """
+        if self._graph is None or not any(found):
+            return False
+
+        try:
+            await self._graph.upsert_memory(
+                MemoryNode(
+                    memory_id=memory.id,
+                    external_key=memory.external_key,
+                    kind=MemoryKind(memory.kind),
+                    occurred_at=memory.occurred_at,
+                )
+            )
+            for entity, chunk_id in await self._committed(memory.id):
+                await self._graph.upsert_entity(entity)
+                await self._graph.link(
+                    GraphEdge(
+                        type=EdgeType.MENTIONS,
+                        start=GraphNode(GraphLabel.MEMORY, str(memory.id)),
+                        end=GraphNode(GraphLabel.ENTITY, str(entity.entity_id)),
+                        properties={"chunk_id": str(chunk_id)},
+                    )
+                )
+        except Exception as exc:
+            logger.warning(
+                "extract.projection_failed", memory_id=str(memory.id), error=str(exc)
+            )
+            return False
+        return True
+
+    async def _committed(self, memory_id: UUID) -> list[tuple[EntityNode, UUID]]:
+        """The entities this memory now mentions, as the database has them."""
+        stmt = (
+            select(
+                models.Entity.id,
+                models.Entity.name,
+                models.Entity.canonical_name,
+                models.Entity.type,
+                models.Entity.confidence,
+                models.EntityMention.chunk_id,
+            )
+            .join(models.EntityMention, models.EntityMention.entity_id == models.Entity.id)
+            .where(models.EntityMention.memory_id == memory_id)
+        )
+        async with self._sessions() as session:
+            rows = await session.execute(stmt)
+            return [
+                (
+                    EntityNode(
+                        entity_id=row[0],
+                        name=row[1],
+                        canonical_name=row[2],
+                        type=row[3],
+                        confidence=row[4] if row[4] is not None else 0.0,
+                    ),
+                    row[5],
+                )
+                for row in rows
+            ]
+
+
+def _offsets_hold(chunk_text: str, candidate: ExtractedEntity) -> bool:
+    """Whether the span really says what the entity claims it says."""
+    if candidate.char_start < 0 or candidate.char_end > len(chunk_text):
+        return False
+    return chunk_text[candidate.char_start : candidate.char_end] == candidate.name
+
+
+def _finish(report: ExtractReport, started: float) -> ExtractReport:
+    report.duration_ms = int((time.monotonic() - started) * 1000)
+    return report

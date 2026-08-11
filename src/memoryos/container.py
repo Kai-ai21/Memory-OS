@@ -6,6 +6,8 @@ run against the same wiring rather than three slightly different versions of it.
 
 from dataclasses import dataclass
 
+import structlog
+
 from memoryos.adapters.blobs.filesystem import FilesystemBlobStore
 from memoryos.adapters.chunking.structural import StructuralChunker
 from memoryos.adapters.connectors.filesystem import FilesystemConnector
@@ -19,7 +21,9 @@ from memoryos.adapters.embedding.sentence_transformers import (
     SentenceTransformerEmbedder,
     build_embedder,
 )
+from memoryos.adapters.extraction.llm import LlmEntityExtractor
 from memoryos.adapters.graph.neo4j_store import Neo4jGraphStore
+from memoryos.adapters.llm.errors import MissingApiKey
 from memoryos.adapters.llm.gemini import GeminiLanguageModel
 from memoryos.adapters.llm.groq import GroqLanguageModel
 from memoryos.adapters.parsers.registry import ParserRegistry
@@ -27,6 +31,7 @@ from memoryos.adapters.parsers.registry import build_default_registry as build_p
 from memoryos.adapters.reranking.cross_encoder import CrossEncoderReranker
 from memoryos.application.answering import AnswerQuestion
 from memoryos.application.embed import EmbedMemory
+from memoryos.application.extraction import ExtractEntities
 from memoryos.application.jobs.handlers import build_default_registry
 from memoryos.application.jobs.registry import HandlerRegistry
 from memoryos.application.normalize import NormalizeMemory
@@ -35,6 +40,8 @@ from memoryos.application.replay import ReplayCorpus
 from memoryos.application.search import FusionWeights, SearchMemories
 from memoryos.application.sync import SyncSource
 from memoryos.config import Settings
+
+logger = structlog.get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -108,6 +115,42 @@ class Container:
             cache=self.cache,
             chunker=self.chunker,
             batch_size=self.settings.embedding_batch_size,
+            extractor=self.optional_extractor(),
+            graph=self.graph,
+        )
+
+    def optional_extractor(self) -> LlmEntityExtractor | None:
+        """The extractor, or None when no API key is configured.
+
+        The worker builds the whole registry at startup, so a raising
+        constructor here would stop a keyless deployment from running *any*
+        job — sync, normalize and embed included, none of which need a model.
+        Registering nothing instead leaves extraction jobs failing permanently
+        with "no handler", which is both true and diagnosable, while everything
+        upstream of extraction keeps working.
+        """
+        try:
+            return self.extractor()
+        except MissingApiKey as exc:
+            logger.warning("container.extraction_unavailable", error=str(exc))
+            return None
+
+    def extractor(self) -> LlmEntityExtractor:
+        """Entity extraction over whichever provider is configured.
+
+        Built here rather than at `build` for the reason `answer` is: it
+        constructs a language model, which raises without an API key, and a
+        deployment with no key must still have working ingestion and search.
+        """
+        return LlmEntityExtractor(
+            self.language_model(),
+            batch_size=self.settings.extraction_batch_size,
+            max_tokens=self.settings.extraction_max_tokens,
+        )
+
+    def extract(self) -> ExtractEntities:
+        return ExtractEntities(
+            self.database.session_factory, self.extractor(), self.graph
         )
 
     def sync(self) -> SyncSource:
@@ -193,6 +236,12 @@ class Container:
             make_embed=lambda sessions: EmbedMemory(
                 sessions, self.embedder, PostgresEmbeddingCache(sessions),
                 self.settings.embedding_batch_size,
+                # A rebuild must not queue paid work. Extraction is the first
+                # stage in this pipeline that costs money per run, and a replay
+                # — which exists partly so it can be run routinely to verify the
+                # corpus — would otherwise enqueue one model call per memory
+                # every time it ran.
+                enqueue_followup=False,
             ),
             make_shadow=lambda: PostgresShadowSchema(
                 self.settings.database_url, echo=self.settings.db_echo

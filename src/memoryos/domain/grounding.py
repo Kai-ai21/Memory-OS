@@ -67,24 +67,30 @@ _NON_FACTUAL_PREFIXES = (
     "unfortunately",
 )
 
-# Phrases that mark an answer as a refusal overall. Matched against the whole
-# answer, lowercased.
-_REFUSAL_MARKERS = (
-    "do not contain",
-    "don't contain",
-    "does not contain",
-    "doesn't contain",
-    "no information",
-    "not covered",
-    "cannot answer",
-    "can't answer",
-    "cannot be answered",
-    "unable to answer",
-    "not mentioned",
-    "nothing in the passages",
-    "none of the passages",
-    "no passage",
-    "not found in the",
+# A refusal is negation plus a verb of having-or-saying: "do not contain",
+# "doesn't cover", "cannot answer", "did not mention". One pattern rather than a
+# list of literal phrases, and that is a fix rather than a tidy-up.
+#
+# The list this replaces held "not covered" and not "do not cover", so the model
+# saying "The passages do not cover this" — a textbook refusal, and the exact
+# wording the system prompt asks for — was recorded as `refused=False`. Nothing
+# failed. `refusal_rate` simply under-reported, which is the worst possible place
+# for a silent defect: that metric is the evidence that the grounding guardrail
+# works at all, and it was quietly counting successful refusals as answers.
+#
+# Enumerating literal phrases cannot work, because the model paraphrases freely
+# and every miss looks like a model that failed to refuse. Matching the shape
+# generalises over tense, contraction, and the words in between.
+_REFUSAL_PATTERN = re.compile(
+    r"\b(?:do(?:es)?\s+not|did\s+not|do(?:es)?n't|didn't|cannot|can\s?not|can't"
+    r"|could\s+not|couldn't|unable\s+to|no|none\s+of|nothing\s+in|not)\b"
+    # Up to three words of slack, so "do not appear to contain" and "does not
+    # explicitly mention" match without the pattern having to know them.
+    r"(?:\W+\w+){0,3}\W+"
+    r"(?:contain|cover|mention|describe|discuss|address|specify|specified"
+    r"|answer|include|provide|state|say|reference|detail|found|available"
+    r"|information|passage)",
+    re.IGNORECASE,
 )
 
 
@@ -167,7 +173,9 @@ def verify_citations(answer: str, valid_indices: set[int]) -> VerificationResult
     if not stripped:
         return VerificationResult()
 
-    refusal = _is_refusal(stripped)
+    # Over the whole answer and before the per-sentence walk, because the
+    # refusal decision now depends on whether anything was cited at all.
+    refusal = _is_refusal(stripped, cites_nothing=not _indices(stripped))
     sentences: list[SentenceCheck] = []
     hallucinated: list[int] = []
     cited: list[int] = []
@@ -216,13 +224,23 @@ def _is_factual(sentence: str) -> bool:
     return not lowered.startswith(_NON_FACTUAL_PREFIXES)
 
 
-def _is_refusal(answer: str) -> bool:
+def _is_refusal(answer: str, *, cites_nothing: bool) -> bool:
     """Whether the answer declines rather than asserts.
+
+    Two conditions, and the second is what stops this over-firing. The answer
+    must *read* as a decline, and it must cite nothing — because an answer that
+    cites [2] and then notes the passages do not cover some adjacent detail is a
+    partial answer, not a refusal, and counting it as one would inflate the
+    refusal rate with answers that did in fact answer.
+
+    Zero citations alone would be far worse than the bug this fixes: an
+    ungrounded fabrication also cites nothing, so the rate would count
+    hallucinations as refusals and read best exactly when the system was
+    behaving worst.
 
     Checked on the whole answer rather than per sentence, because a refusal is a
     property of the response: "the passages do not describe X" followed by an
     offer to help with something else is still a refusal, and marking the second
     sentence unsupported would punish exactly the behaviour being asked for.
     """
-    lowered = answer.lower()
-    return any(marker in lowered for marker in _REFUSAL_MARKERS)
+    return cites_nothing and _REFUSAL_PATTERN.search(answer) is not None

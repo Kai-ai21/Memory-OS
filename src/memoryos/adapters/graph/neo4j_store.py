@@ -115,6 +115,12 @@ class Neo4jGraphStore:
             connection_timeout=CONNECTION_TIMEOUT_SECONDS,
             connection_acquisition_timeout=ACQUISITION_TIMEOUT_SECONDS,
             max_transaction_retry_time=MAX_RETRY_SECONDS,
+            # The schema is re-applied on first use in every process, and every
+            # `IF NOT EXISTS` that finds its constraint already there emits an
+            # INFORMATION notification. That is four multi-line notices per run
+            # reporting that idempotency worked, which drowns the output of any
+            # command that touches the graph. Warnings and above still surface.
+            notifications_min_severity="WARNING",
         )
         self._database = database
         self._uri = uri

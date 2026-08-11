@@ -115,6 +115,30 @@ class SearchMode(StrEnum):
 DEFAULT_SEARCH_MODE = SearchMode.HYBRID
 
 
+class EntityType(StrEnum):
+    """What kind of thing an entity is.
+
+    Lowercase values from `auto()`, matching `MemoryKind` and every other enum
+    here; the CHECK constraint on `entities.type` is generated from this, so the
+    database and Python cannot drift without the migration diff showing it.
+
+    Seven types, and the set is deliberately closed. An open vocabulary is what
+    an LLM produces if you let it — `person`, `people`, `human`, `individual`
+    — and a type that means the same as another type is a filter that silently
+    returns half its rows. The extractor is given this list and anything outside
+    it is dropped rather than coerced, because a model that invented a type has
+    also probably invented the entity.
+    """
+
+    PERSON = auto()
+    TECHNOLOGY = auto()
+    PROJECT = auto()
+    ORGANIZATION = auto()
+    CONCEPT = auto()
+    FILE = auto()
+    DECISION = auto()
+
+
 class GraphLabel(StrEnum):
     """The node kinds the graph projection knows about.
 

@@ -217,6 +217,19 @@ class Harness:
                     delete(models.Job).where(models.Job.job_type == job_type.value)
                 )
 
+        # M3.1: embedding now queues an extraction job per memory. The harness
+        # has no extractor — these tests are about replay, not entities — so the
+        # jobs are dropped rather than run. Dropped here rather than suppressed
+        # at the source, so the harness still exercises the real
+        # `EmbedMemory`, followup enqueue included, and leaves the queue empty
+        # the way a drained worker would.
+        async with self.sessions.begin() as session:
+            await session.execute(
+                delete(models.Job).where(
+                    models.Job.job_type == JobType.EXTRACT_ENTITIES.value
+                )
+            )
+
     def normalize(self) -> NormalizeMemory:
         return NormalizeMemory(
             self.sessions, self.blobs, build_parsers(), StructuralChunker(self.embedder)
@@ -262,7 +275,13 @@ def build_harness(
             factory, blobs, build_parsers(), chunker, enqueue_followup=False
         ),
         make_embed=lambda factory: EmbedMemory(
-            factory, embedder, PostgresEmbeddingCache(factory)
+            factory,
+            embedder,
+            PostgresEmbeddingCache(factory),
+            # Mirrors the container: a replay must not queue paid extraction
+            # work. Without this the harness diverges from the wiring it exists
+            # to stand in for, and a rebuild enqueues a model call per memory.
+            enqueue_followup=False,
         ),
         make_shadow=lambda: PostgresShadowSchema(settings.database_url),
         blobs=blobs,

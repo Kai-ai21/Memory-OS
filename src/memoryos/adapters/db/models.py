@@ -38,6 +38,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from memoryos.domain.jobs import DEFAULT_MAX_ATTEMPTS, JobStatus
 from memoryos.domain.values import (
     HEX64_PATTERN,
+    EntityType,
     EventType,
     MemoryKind,
     SourceKind,
@@ -611,3 +612,136 @@ Index(
     MemoryChunk.search_vector,
     postgresql_using="gin",
 )
+
+
+class Entity(Base):
+    """A thing the corpus talks about, as Postgres knows it.
+
+    **Postgres is the system of record; the Neo4j `Entity` node is a
+    projection.** The row is written first and committed, and the graph is
+    updated afterwards — so a crash between the two leaves a corpus that is
+    correct and a graph that is behind, which the next extraction repairs. The
+    other order would leave a graph asserting entities no query can join to.
+
+    `canonical_name` is a *minimal* normalisation — casefold and collapsed
+    whitespace, nothing more — and identity here is `(canonical_name, type)`.
+    That is exact-match deduplication, not resolution: it knows "Neo4j" and
+    "neo4j" are one entity and has no opinion whatsoever about "Dr. Chen" versus
+    "Chen", or "Postgres" versus "PostgreSQL". Doing more would be M3.2's job
+    done early and badly, and it would shrink the duplicate count M3.2 is
+    scoped against — improving the number by moving the ruler.
+
+    Without the unique constraint the table has no identity at all: every
+    re-extraction of the same chunk would insert another row for the same name,
+    and "the twenty most-mentioned entities" would be a list of twenty
+    coincidences.
+
+    `confidence` is the extractor's confidence that the entity *exists*, kept on
+    the entity rather than only on the mention because it describes the thing,
+    not the sighting. Per-sighting confidence lives on `entity_mentions`.
+    """
+
+    __tablename__ = "entities"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    # The surface form as first seen. Kept alongside the canonical form because
+    # losing what the text actually said loses the evidence for any later
+    # resolution decision.
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    canonical_name: Mapped[str] = mapped_column(Text, nullable=False)
+    type: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(REAL)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("canonical_name", "type", name="uq_entities_canonical_type"),
+        _enum_check("type", EntityType, "ck_entities_type"),
+        CheckConstraint(
+            "confidence IS NULL OR confidence BETWEEN 0.0 AND 1.0",
+            name="ck_entities_confidence_range",
+        ),
+        CheckConstraint("length(btrim(name)) > 0", name="ck_entities_name_non_empty"),
+        CheckConstraint(
+            "length(btrim(canonical_name)) > 0", name="ck_entities_canonical_non_empty"
+        ),
+    )
+
+
+class EntityMention(Base):
+    """One place in one chunk where an entity was named.
+
+    **The offsets are the point of this table.** `char_start` and `char_end`
+    index into `memory_chunks.content`, exactly, so an entity leads back to the
+    span of text that produced it — the same provenance chain M2.5 built for
+    citations, and worth exactly as much as its weakest link. They are written
+    only after the extractor has confirmed that the name really appears there;
+    an offset a language model reported is a guess, and a mention stored at a
+    guessed offset points at whatever text happens to occupy it.
+
+    `UNIQUE (entity_id, chunk_id, char_start)` is what makes re-extraction
+    idempotent at the row level, and the columns are exactly the natural key: the
+    same entity named twice in one chunk is two mentions, at two offsets, and
+    both are real.
+
+    `extractor_version` follows the M1.4 chunker-version pattern. It encodes the
+    model and the prompt, so improving extraction is a query — find the mentions
+    carrying the old version, redo those — rather than a corpus-wide rebuild.
+
+    Both foreign keys cascade. A deleted memory takes its chunks, and its chunks
+    take their mentions: a mention whose chunk is gone has no text to point at,
+    and keeping it would leave the provenance chain ending in nothing.
+    """
+
+    __tablename__ = "entity_mentions"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    entity_id: Mapped[UUID] = mapped_column(
+        _UUID, ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+    )
+    memory_id: Mapped[UUID] = mapped_column(
+        _UUID, ForeignKey("memories.id", ondelete="CASCADE"), nullable=False
+    )
+    chunk_id: Mapped[UUID] = mapped_column(
+        _UUID, ForeignKey("memory_chunks.id", ondelete="CASCADE"), nullable=False
+    )
+    char_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(REAL)
+    extractor_version: Mapped[str] = mapped_column(Text, nullable=False)
+    extracted_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "entity_id", "chunk_id", "char_start", name="uq_entity_mentions_span"
+        ),
+        CheckConstraint(
+            "char_start >= 0", name="ck_entity_mentions_char_start_non_negative"
+        ),
+        CheckConstraint("char_end > char_start", name="ck_entity_mentions_char_range"),
+        CheckConstraint(
+            "confidence IS NULL OR confidence BETWEEN 0.0 AND 1.0",
+            name="ck_entity_mentions_confidence_range",
+        ),
+    )
+
+
+# The skip check runs per memory on every extraction job: "are there already
+# mentions for this memory at the current extractor version?". Without this it
+# is a sequential scan of the mentions table on every job.
+Index(
+    "ix_entity_mentions_memory_version",
+    EntityMention.memory_id,
+    EntityMention.extractor_version,
+)
+
+# "The twenty most-mentioned entities", and every later traversal that starts
+# from an entity and asks where it was seen.
+Index("ix_entity_mentions_entity", EntityMention.entity_id)
+
+# Resolution's read pattern in M3.2: find the candidates a name might collapse
+# into. Also what makes the duplicate measurement cheap.
+Index("ix_entities_canonical_name", Entity.canonical_name)

@@ -51,3 +51,32 @@ def normalized_hash(text: str) -> ContentHash:
     which is the question that decides whether any downstream work is needed.
     """
     return ContentHash.of(text.encode("utf-8"))
+
+
+# --------------------------------------------------------------------------
+# Entity names (M3.1)
+# --------------------------------------------------------------------------
+
+# Whitespace runs, including the newlines a chunk boundary leaves in a name.
+_WHITESPACE = re.compile(r"\s+")
+
+
+def canonical_entity_name(name: str) -> str:
+    """The form two mentions of the same surface string agree on.
+
+    Deliberately minimal: casefold and collapse whitespace, nothing else. This
+    is *not* resolution — it does not know that "Dr. Chen" and "Chen" are one
+    person, or that "Postgres" and "PostgreSQL" are one technology. That is
+    M3.2's problem, and M3.1's job is to state the size of it rather than to
+    pre-empt it.
+
+    Doing more here would hide the measurement. Stripping punctuation and
+    suffixes at write time would collapse "neo4j" and "Neo4j." into one row and
+    make the duplicate count M3.2 is scoped against look smaller than it is —
+    the number would improve because the ruler shrank.
+
+    Casefold rather than lower: it folds ß to ss and handles non-ASCII case
+    pairs that `lower()` leaves alone, and an entity name is arbitrary text from
+    an arbitrary corpus.
+    """
+    return _WHITESPACE.sub(" ", name).strip().casefold()

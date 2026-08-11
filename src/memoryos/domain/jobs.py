@@ -30,6 +30,11 @@ class JobType(StrEnum):
     # now proves the normalize-to-embed wiring without pulling embeddings
     # forward into this milestone.
     EMBED_MEMORY = auto()
+    # Enqueued when a memory finishes embedding. Last in the chain because it is
+    # the only stage that costs money per run — putting it behind the free
+    # stages means a memory that fails to parse or chunk never reaches the
+    # model at all.
+    EXTRACT_ENTITIES = auto()
 
     # Test types. The worker's success, retry, and dead-letter paths are
     # exercised through these rather than through real work.

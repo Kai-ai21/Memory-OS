@@ -133,3 +133,64 @@ def test_a_refusal_is_not_penalised_for_citing_nothing() -> None:
     assert result.citation_rate == 1.0
     assert result.grounded
     assert result.factual_sentences == 0
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # The wording that was silently mis-recorded. The old marker list held
+        # "not covered" but not "do not cover", so this exact sentence — which
+        # is what the system prompt asks the model to say — logged refused=False.
+        "The passages do not cover this.",
+        "The passages do not cover this topic.",
+        "The provided passages don't cover AWS billing.",
+        "The passages do not contain information about this.",
+        "The retrieved passages do not mention AWS billing at all.",
+        "I cannot answer this from the passages provided.",
+        "None of the passages describe an AWS billing setup.",
+        "The passages do not appear to contain anything about this.",
+        "The passages do not explicitly mention AWS billing.",
+        "There is no information about AWS billing in these passages.",
+    ],
+)
+def test_a_decline_with_no_citations_is_a_refusal(answer: str) -> None:
+    """The metric this protects is the only evidence the guardrail works.
+
+    `refusal_rate` is how M2.6 demonstrates that an out-of-corpus question gets
+    declined rather than answered. A refusal recorded as an answer does not fail
+    anything — it just makes that number smaller than the truth, which is the
+    worst place for a silent defect to sit.
+    """
+    assert verify_citations(answer, valid_indices={1, 2, 3}).is_refusal
+
+
+def test_an_answer_that_cites_is_not_a_refusal_however_it_hedges() -> None:
+    """The guard against the fix over-firing.
+
+    An answer that cites [1] and notes the passages do not cover some adjacent
+    detail has answered the question. Counting it as a refusal would inflate the
+    rate with answers that did the work.
+    """
+    result = verify_citations(
+        "The worker claims jobs with FOR UPDATE SKIP LOCKED [1]. "
+        "The passages do not cover how the lease duration is chosen.",
+        valid_indices={1, 2},
+    )
+
+    assert result.is_refusal is False
+
+
+def test_an_uncited_assertion_is_not_a_refusal() -> None:
+    """Why zero citations alone cannot be the rule.
+
+    A fabrication cites nothing too. If citing nothing were sufficient, the
+    refusal rate would count hallucinations as refusals and would read best
+    exactly when the system was behaving worst.
+    """
+    result = verify_citations(
+        "The billing account is consolidated under a single payer organisation.",
+        valid_indices={1, 2},
+    )
+
+    assert result.is_refusal is False
+    assert result.grounded is False

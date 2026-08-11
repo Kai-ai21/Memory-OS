@@ -16,12 +16,14 @@ from uuid import UUID
 from memoryos.application.ports import (
     Embedder,
     EntityNode,
+    ExtractedEntity,
     GraphEdge,
     GraphPath,
     LanguageModel,
     MemoryNode,
     Reranker,
 )
+from memoryos.domain.values import EntityType, MemoryKind
 
 FAKE_MODEL_ID = "fake/deterministic@1"
 
@@ -241,3 +243,71 @@ class UnreachableGraphStore(RecordingGraphStore):
 
     async def clear(self) -> None:
         raise ConnectionError("no route to the graph")
+
+
+class FakeEntityExtractor:
+    """Deterministic entities from a regex, so tests never call a model.
+
+    Legitimate for the same reason the other fakes are: `EntityExtractor` is a
+    port this project owns. What it cannot establish is whether a real model
+    extracts anything *useful* — that is what M3.1's corpus measurement is for.
+    What it can establish is that the pipeline stores what it is given, skips
+    what it has already done, and drops what it cannot find in the text.
+
+    Capitalised words by default, which is a terrible entity extractor and a
+    perfectly good test double: it is reproducible, and every name it returns is
+    by construction present in the text at a known offset.
+
+    `phantom_names` is the interesting knob. It makes the fake return names that
+    are *not* in the text, which is what a real model does when it paraphrases
+    or invents — the exact case the offset verification exists to catch.
+    """
+
+    def __init__(
+        self,
+        *,
+        version: str = "fake-extractor@1",
+        pattern: str = r"\b[A-Z][a-zA-Z0-9]{2,}\b",
+        entity_type: EntityType = EntityType.CONCEPT,
+        confidence: float = 0.9,
+        phantom_names: Sequence[str] = (),
+    ) -> None:
+        self._version = version
+        self._pattern = re.compile(pattern)
+        self._type = entity_type
+        self._confidence = confidence
+        self._phantoms = list(phantom_names)
+        self.calls: list[str] = []
+
+    @property
+    def version(self) -> str:
+        return self._version
+
+    async def extract(self, text: str, *, kind: MemoryKind) -> list[ExtractedEntity]:
+        self.calls.append(text)
+
+        found = [
+            ExtractedEntity(
+                name=match.group(0),
+                type=self._type,
+                confidence=self._confidence,
+                char_start=match.start(),
+                char_end=match.end(),
+            )
+            for match in self._pattern.finditer(text)
+        ]
+
+        # Names that are not in the text, at offsets that are therefore lies.
+        # A real extractor verifies and drops these; this fake deliberately does
+        # not, so the layer above can be tested on what it does with them.
+        found.extend(
+            ExtractedEntity(
+                name=name,
+                type=self._type,
+                confidence=self._confidence,
+                char_start=0,
+                char_end=len(name),
+            )
+            for name in self._phantoms
+        )
+        return found
