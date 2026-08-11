@@ -114,10 +114,12 @@ class ExtractEntities:
         found = await self._extract(chunks, kind)
 
         report = await self._store(memory_id, chunks, found, version)
-        log.info("extract.stored", **report.as_dict())
-
         # After the commit, never inside it. See the module docstring.
         report.projected = await self._project(memory, chunks, found)
+        # Logged after projection rather than before, so `projected` in the log
+        # is the outcome rather than the field's default. Logging first reported
+        # `projected=False` on every successful run.
+        log.info("extract.stored", **report.as_dict())
         return _finish(report, started)
 
     async def _extract(

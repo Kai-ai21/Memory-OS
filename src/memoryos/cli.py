@@ -43,7 +43,7 @@ from memoryos.application.evaluate import (
     format_verbose,
 )
 from memoryos.application.evaluation import format_table, measure_recall
-from memoryos.application.extraction import ExtractEntities
+from memoryos.application.extraction import ExtractEntities, ExtractReport
 from memoryos.application.golden import load_golden_set
 from memoryos.application.importance import recompute_importance
 from memoryos.application.judgements import export_golden_set
@@ -64,6 +64,7 @@ from memoryos.application.verify_citations import verify_citations
 from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
 from memoryos.container import Container
+from memoryos.domain.backoff import compute_backoff
 from memoryos.domain.entities import Source
 from memoryos.domain.fusion import DEFAULT_RRF_K
 from memoryos.domain.ids import new_id
@@ -752,7 +753,7 @@ async def run_extract_entities(
         entities = mentions = failed = 0
         for index, target in enumerate(targets, start=1):
             try:
-                report = await extract(target.memory_id)
+                report = await _extract_with_backoff(extract, target.memory_id)
             except (TransientError, PermanentError) as exc:
                 # Reported and stepped over rather than aborting the run. One
                 # memory the model refuses to process must not cost the corpus
@@ -786,6 +787,38 @@ async def run_extract_entities(
 
 def _extractor_version(container: Container) -> str:
     return container.extractor().version
+
+
+# How many times the command waits out a rate limit before giving up on a
+# memory. Five with exponential backoff is roughly ten minutes of patience,
+# which is longer than any free-tier window this has met.
+EXTRACT_MAX_ATTEMPTS = 5
+
+
+async def _extract_with_backoff(
+    extract: ExtractEntities, memory_id: UUID
+) -> ExtractReport:
+    """Run one extraction, waiting out rate limits.
+
+    The worker has backoff and this command does not go through the worker, so
+    without this a single 429 marks a memory failed and moves on — and on a free
+    tier a 429 is the expected steady state, not an exception. A corpus run
+    would end with a scatter of missing memories and an exit code of 1, all of
+    which a ten-second wait would have avoided.
+
+    `PermanentError` is deliberately not retried here: the adapter has already
+    made that judgement, including its own one retry for malformed JSON.
+    """
+    for attempt in range(EXTRACT_MAX_ATTEMPTS):
+        try:
+            return await extract(memory_id)
+        except TransientError as exc:
+            if attempt == EXTRACT_MAX_ATTEMPTS - 1:
+                raise
+            delay = compute_backoff(attempt)
+            print(f"    rate limited ({exc}); waiting {delay:.0f}s")
+            await asyncio.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 async def run_entity_stats(settings: Settings, *, top: int) -> int:

@@ -937,6 +937,64 @@ database, so a test run and a developer's graph share it. Tests therefore isolat
 every id comes from `GraphFixture.new_id`, which records it, and teardown deletes those nodes and
 nothing else.
 
+## Entity extraction
+
+M3.1 extracts entities from every chunk with the configured LLM, stores them in
+Postgres, and projects them into the graph. No resolution and no relationships —
+those are M3.2 and M3.3.
+
+```bash
+memoryos extract-entities --limit 20 --dry-run   # what would be extracted
+memoryos extract-entities --source notes         # do it
+memoryos entity-stats                            # counts, top entities, duplicates
+```
+
+**Offsets are verified, never trusted.** The model returns a name; it is not
+asked where the name appears, because a language model cannot count characters
+and the answer would have to be discarded anyway. The name is located in the
+text instead, and one that cannot be found is dropped and counted. That counter
+is the only direct measurement of fabrication this system produces.
+
+The check runs twice — once in the adapter, once at the storage boundary — on
+the same reasoning as `EmbedMemory._check_widths`. `entity_mentions` exists to
+carry `content[char_start:char_end] == name`, and an invariant that holds only
+while every present and future extractor keeps its word is not an invariant. One
+string slice makes it unconditional.
+
+**Provider-agnostic.** Extraction goes through the `LanguageModel` port, so it
+runs on whatever `MEMOS_LLM_PROVIDER` selects. A provider-specific extractor
+would have rebuilt the coupling M2.6 removed.
+
+**Batched, because the free tier's binding constraint is requests per day.**
+1,308 chunks one at a time exceeds the cap before it exceeds anything else.
+Chunks are numbered in one prompt and demultiplexed by index; a chunk
+misattributed by the model produces a name that is not in that chunk's text and
+is dropped by the same rule that catches invented ones. `MEMOS_EXTRACTION_BATCH_SIZE`
+tunes it.
+
+**Malformed JSON gets one retry with a blunter instruction, then
+`PermanentError`.** A model that cannot produce JSON twice will not produce it
+on the fifth attempt, and retrying to exhaustion multiplies a broken prompt by
+the attempt budget against a per-day quota.
+
+**Idempotent on `extractor_version`**, which encodes the prompt version and the
+model id. A memory whose mentions already carry the current version is skipped
+without a model call, so re-running the command is free and a prompt improvement
+is a targeted redo rather than a corpus rebuild.
+
+`entities` carries `UNIQUE (canonical_name, type)`, which the milestone's schema
+did not specify and cannot do without: every re-extraction would otherwise insert
+another row for the same name, and "most-mentioned entities" would be a list of
+coincidences. `canonical_name` is casefold plus collapsed whitespace and nothing
+more — normalising harder would shrink the duplicate count M3.2 is scoped
+against, which is improving a number by moving the ruler.
+
+Both tables are classified `DERIVED`, and they stretch the word hardest of
+anything in that set. A replay empties them and does not rebuild them: doing so
+would mean an LLM call per chunk on every verification run, and every chunk id is
+new after a rebuild, so every mention would dangle regardless. Re-run
+`extract-entities` after a full replay.
+
 ## Migrations
 
 ```bash
