@@ -188,12 +188,10 @@ async def find_extraction_targets(
         .where(
             models.Memory.is_current.is_(True),
             models.Memory.deleted_at.is_(None),
-            ~select(models.EntityMention.id)
-            .where(
-                models.EntityMention.memory_id == models.Memory.id,
-                models.EntityMention.extractor_version == extractor_version,
-            )
-            .exists(),
+            # The marker, not a probe for mentions. A memory that legitimately
+            # contains no entities writes no mention rows, so a probe never
+            # marks it done and every run pays to extract it again.
+            models.Memory.entity_extractor_version.is_distinct_from(extractor_version),
         )
         .group_by(models.Memory.id, models.Memory.external_key)
         .order_by(models.Memory.external_key)

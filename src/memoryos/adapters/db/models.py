@@ -230,6 +230,18 @@ class Memory(Base):
         "metadata", JSONB, nullable=False, server_default=_EMPTY_JSONB
     )
     deleted_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    # Which extractor last ran over this memory, whatever it found.
+    #
+    # M3.1 keyed the skip on "does this memory have mentions at the current
+    # version", which is a different question and answers it wrongly for the
+    # memories that legitimately contain no entities. Those write no rows, so
+    # they never satisfy the check, so every run re-extracts them — for real
+    # money, forever, and the pending count never reaches zero. Measured: 56
+    # memories processed, 34 with mentions, and the queue barely moved.
+    #
+    # Recording the attempt rather than inferring it from its output is the
+    # only thing that distinguishes "not yet done" from "done, found nothing".
+    entity_extractor_version: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         UniqueConstraint(
@@ -792,6 +804,9 @@ Index("ix_entities_canonical_name", Entity.canonical_name)
 # Every read of *active* entities filters on this column, which after a
 # resolution run is most reads in the system.
 Index("ix_entities_merged_into", Entity.merged_into_id)
+
+# The extraction queue's predicate: memories not yet extracted at this version.
+Index("ix_memories_entity_extractor_version", Memory.entity_extractor_version)
 
 
 class EntityMerge(Base):
