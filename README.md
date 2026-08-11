@@ -1055,6 +1055,57 @@ re-running the resolver; *manual* merges and the pending queue are not, and a
 full replay loses them. The fix is M1.7's — key merges on `(canonical_name,
 type)`, which survives a rebuild, rather than on entity ids, which do not.
 
+## Relationships
+
+M3.3 adds typed, directed edges between resolved entities, each carrying the
+chunk that asserted it.
+
+```bash
+memoryos extract-relationships --limit 20 --dry-run
+memoryos extract-relationships
+```
+
+**Typed and directed, because neither is decoration.** An untyped edge says two
+things are related, which is close to useless for traversal: at depth three
+every entity relates to every other, so following "related" returns the corpus.
+`USES` and `AUTHORED_BY` let a question be asked. And direction cannot be
+flattened — "A supersedes B" and "B supersedes A" are contradictory claims about
+the same pair.
+
+Predicates: `USES`, `DEPENDS_ON`, `PART_OF`, `AUTHORED_BY`, `MENTIONS`,
+`SUPERSEDES`, `RELATES_TO`. Closed, for the reason `EntityType` is: an open
+vocabulary gives you `USES` beside `USED_BY` beside `UTILIZES`, which is three
+names for one traversal that each return a third of it.
+
+**Every row carries its chunk.** Without provenance a relationship is an
+unfalsifiable claim, and a Phase 3 answer is only as citable as its
+least-supported edge — the property M2.5 established for Phase 2 answers.
+
+**The same claim in five chunks is five rows.** That is evidence, not
+duplication: M3.5 weights edges by assertion count, so a claim and a
+five-times-repeated claim have to stay distinguishable. The unique constraint is
+scoped per chunk to keep them so, and the graph collapses them into one edge
+carrying `assertion_count` — connectivity and evidence being different questions.
+
+**The model links between numbers, never names.** It is given the chunk's
+already-resolved entities as a numbered list and returns indices, so there is no
+name to hallucinate; an out-of-range index is dropped and counted. An edge to a
+fabricated entity looks exactly like a real one until somebody follows it.
+
+Entities are the *resolved* ones from M3.2, and the ordering matters: extracting
+before resolution would attach edges to entities about to be merged away, each
+needing re-pointing by hand.
+
+In Neo4j every predicate becomes a `RELATES_TO` edge carrying `predicate`,
+`confidence` and `assertion_count` as properties, rather than seven new
+relationship types. M3.0's traversals are written against three types, and
+promoting seven more would force every existing pattern to enumerate them for no
+gain — `[:RELATES_TO {predicate: 'uses'}]` filters just as precisely.
+
+Only chunks naming two or more entities are sent to the model. A chunk with one
+entity has nothing to relate, and on a rate-limited tier a request spent being
+told so is the difference between finishing a corpus and stopping partway.
+
 ## Migrations
 
 ```bash
