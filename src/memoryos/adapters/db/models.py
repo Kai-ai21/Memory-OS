@@ -41,6 +41,8 @@ from memoryos.domain.values import (
     EntityType,
     EventType,
     MemoryKind,
+    MergeStatus,
+    MergeStrategy,
     SourceKind,
     TimeProvenance,
     Verdict,
@@ -654,9 +656,27 @@ class Entity(Base):
     first_seen_at: Mapped[datetime] = mapped_column(
         _TIMESTAMPTZ, nullable=False, server_default=func.now()
     )
+    # M3.2. Non-null means this entity was merged away: its mentions now belong
+    # to the winner, and it survives only so the merge can be undone. Every read
+    # that counts or traverses entities must exclude these, and `_upsert_entity`
+    # must follow the pointer — otherwise the next extraction re-attaches
+    # mentions to a merged-away row and silently undoes the resolution.
+    #
+    # `ON DELETE SET NULL` rather than CASCADE: deleting a winner must not
+    # delete the entities that were merged into it. They become active again,
+    # which is wrong-but-recoverable, where cascading would be data loss.
+    merged_into_id: Mapped[UUID | None] = mapped_column(
+        _UUID, ForeignKey("entities.id", ondelete="SET NULL")
+    )
 
     __table_args__ = (
         UniqueConstraint("canonical_name", "type", name="uq_entities_canonical_type"),
+        # An entity merged into itself is unreachable through any read that
+        # follows the pointer, and would loop one that followed it repeatedly.
+        CheckConstraint(
+            "merged_into_id IS NULL OR merged_into_id <> id",
+            name="ck_entities_not_merged_into_self",
+        ),
         _enum_check("type", EntityType, "ck_entities_type"),
         CheckConstraint(
             "confidence IS NULL OR confidence BETWEEN 0.0 AND 1.0",
@@ -745,3 +765,107 @@ Index("ix_entity_mentions_entity", EntityMention.entity_id)
 # Resolution's read pattern in M3.2: find the candidates a name might collapse
 # into. Also what makes the duplicate measurement cheap.
 Index("ix_entities_canonical_name", Entity.canonical_name)
+
+# Every read of *active* entities filters on this column, which after a
+# resolution run is most reads in the system.
+Index("ix_entities_merged_into", Entity.merged_into_id)
+
+
+class EntityMerge(Base):
+    """One resolution decision: two entities are the same thing, or might be.
+
+    **Both a ledger and a review queue.** `status` distinguishes the two: a
+    `pending` row is a proposal nobody has acted on, `applied` is a merge in
+    force, `reverted` is one that was undone. One table rather than two because
+    a pending candidate and an applied merge carry identical information and
+    differ only in whether somebody said yes — and splitting them would mean
+    moving rows between tables to answer that question.
+
+    **Nothing is deleted, ever.** The losing entity keeps its row and gains a
+    `merged_into_id`; its mentions are repointed at the winner. Resolution is
+    never perfect — this milestone's own report names the merges it got wrong —
+    so a merge that cannot be undone is a corpus that degrades every time the
+    resolver is run and improves never.
+
+    `moved_mention_ids` is what makes `unmerge` exact rather than approximate.
+    Repointing is destructive: once `entity_mentions.entity_id` says "winner",
+    nothing records which of the winner's mentions used to be the loser's, and
+    an unmerge would have to guess. Recording the ids at merge time is the
+    difference between restoring the previous state and restoring something that
+    resembles it.
+
+    `evidence` is not decoration either. A reviewer looking at the pending queue
+    is being asked to make a judgement, and "0.87" is not something a person can
+    judge — "cosine 0.87 between 'postgres' and 'postgresql'" is.
+    """
+
+    __tablename__ = "entity_merges"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    winner_id: Mapped[UUID] = mapped_column(
+        _UUID, ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+    )
+    loser_id: Mapped[UUID] = mapped_column(
+        _UUID, ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+    )
+    strategy: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text(f"'{MergeStatus.PENDING.value}'")
+    )
+    confidence: Mapped[float] = mapped_column(REAL, nullable=False)
+    evidence: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    # The mentions this merge moved, so an unmerge puts back exactly those.
+    moved_mention_ids: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    proposed_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    merged_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    reverted_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+
+    __table_args__ = (
+        _enum_check("strategy", MergeStrategy, "ck_entity_merges_strategy"),
+        _enum_check("status", MergeStatus, "ck_entity_merges_status"),
+        CheckConstraint(
+            "confidence BETWEEN 0.0 AND 1.0", name="ck_entity_merges_confidence_range"
+        ),
+        # An entity cannot be merged into itself. Reachable through the manual
+        # command with the same id twice, and it would repoint every mention to
+        # where it already is and then mark the entity merged into itself —
+        # unrecoverable without a manual UPDATE.
+        CheckConstraint("winner_id <> loser_id", name="ck_entity_merges_distinct"),
+        # An applied merge has a timestamp; a pending one does not. Keeps the
+        # two representations of "is this in force" from disagreeing.
+        CheckConstraint(
+            "(status = 'applied' AND merged_at IS NOT NULL) "
+            "OR (status = 'pending' AND merged_at IS NULL) "
+            "OR (status = 'reverted' AND merged_at IS NOT NULL "
+            "    AND reverted_at IS NOT NULL)",
+            name="ck_entity_merges_status_timestamps",
+        ),
+    )
+
+
+# One entity can be merged away exactly once at a time. Partial, because a
+# reverted merge legitimately leaves the pair free to be merged again — and
+# without the predicate, undoing a merge would permanently forbid redoing it.
+Index(
+    "uq_entity_merges_active_loser",
+    EntityMerge.loser_id,
+    unique=True,
+    postgresql_where=text("status = 'applied'"),
+)
+
+# The same pair is not proposed twice while a proposal is outstanding. A
+# re-run of the resolver must not grow the review queue by a copy of itself.
+Index(
+    "uq_entity_merges_pending_pair",
+    EntityMerge.winner_id,
+    EntityMerge.loser_id,
+    unique=True,
+    postgresql_where=text("status = 'pending'"),
+)
+
+# The review queue's own read pattern.
+Index("ix_entity_merges_status", EntityMerge.status, EntityMerge.confidence)

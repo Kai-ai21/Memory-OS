@@ -47,9 +47,16 @@ from memoryos.application.extraction import ExtractEntities, ExtractReport
 from memoryos.application.golden import load_golden_set
 from memoryos.application.importance import recompute_importance
 from memoryos.application.judgements import export_golden_set
+from memoryos.application.merge_admin import find_entity, list_merges
 from memoryos.application.ports import ScoreBreakdown, SearchFilters
 from memoryos.application.rechunk import enqueue_rechunk, find_stale
 from memoryos.application.replay import PartialShadowReplay, ReplayScope, ReplayStage
+from memoryos.application.resolution import (
+    DEFAULT_THRESHOLD,
+    MergeCandidate,
+    ResolveEntities,
+    rebuild_graph_projection,
+)
 from memoryos.application.tuning import (
     COARSE,
     FINE,
@@ -69,7 +76,13 @@ from memoryos.domain.entities import Source
 from memoryos.domain.fusion import DEFAULT_RRF_K
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import PermanentError, TransientError
-from memoryos.domain.values import DEFAULT_SEARCH_MODE, SearchMode, SourceKind
+from memoryos.domain.values import (
+    DEFAULT_SEARCH_MODE,
+    MergeStatus,
+    MergeStrategy,
+    SearchMode,
+    SourceKind,
+)
 from memoryos.logging import configure_logging
 
 
@@ -821,6 +834,135 @@ async def _extract_with_backoff(
     raise AssertionError("unreachable")
 
 
+async def run_resolve_entities(
+    settings: Settings, *, dry_run: bool, threshold: float, limit: int
+) -> int:
+    container = Container.build(settings)
+    try:
+        resolve = ResolveEntities(
+            container.database.session_factory, container.embedder, threshold=threshold
+        )
+
+        candidates = await resolve.propose()
+        auto = [c for c in candidates if c.confidence >= threshold]
+        review = [c for c in candidates if c.confidence < threshold]
+
+        print(f"threshold {threshold}   candidates {len(candidates)}")
+        print(f"would auto-merge {len(auto)}   would queue {len(review)}\n")
+        for candidate in candidates[:limit]:
+            mark = "MERGE " if candidate.confidence >= threshold else "review"
+            print(
+                f"  [{mark}] {candidate.confidence:.3f} "
+                f"{candidate.strategy.value:9} {candidate.evidence}"
+            )
+        if len(candidates) > limit:
+            print(f"  ... and {len(candidates) - limit} more")
+
+        if dry_run:
+            print("\ndry run; nothing merged, nothing queued")
+            return 0
+
+        report = await resolve()
+        print(
+            f"\nauto-merged {report.auto_merged}   queued {report.pending}   "
+            f"already queued {report.already_pending}\n"
+            f"mentions moved {report.mentions_moved}   "
+            f"took {report.duration_ms}ms"
+        )
+        for strategy, count in sorted(report.by_strategy.items()):
+            print(f"  {strategy:10} {count} candidates")
+
+        # The graph is a projection of the tables that just changed, so it is
+        # rebuilt rather than patched: a merge removes nodes and moves edges,
+        # and an incremental update would have to know which. Clearing and
+        # re-projecting is what "rebuildable projection" is for.
+        projected = await rebuild_graph_projection(
+            container.database.session_factory, container.graph
+        )
+        print(f"  graph rebuilt: {projected} entities projected")
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_list_merges(
+    settings: Settings, *, pending: bool, strategy: str | None, limit: int
+) -> int:
+    container = Container.build(settings)
+    try:
+        rows = await list_merges(
+            container.database.session_factory,
+            status=MergeStatus.PENDING if pending else None,
+            strategy=strategy,
+            limit=limit,
+        )
+        if not rows:
+            print("no merges" + (" pending review" if pending else ""))
+            return 0
+        for row in rows:
+            print(
+                f"{row.id}  {row.status:8} {row.strategy:9} {row.confidence:.3f}  "
+                f"{row.loser_name!r} -> {row.winner_name!r} ({row.entity_type})"
+            )
+            print(f"    {row.evidence}")
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_manual_merge(settings: Settings, *, winner: str, loser: str) -> int:
+    """Merge two entities by hand. The reviewer's verdict on a pending pair.
+
+    Recorded as `manual` with confidence 1.0, because a person looked at it.
+    That outranks every automatic strategy and is the point of having a queue.
+    """
+    container = Container.build(settings)
+    try:
+        try:
+            winner_id = await find_entity(container.database.session_factory, winner)
+            loser_id = await find_entity(container.database.session_factory, loser)
+        except LookupError as exc:
+            print(str(exc))
+            return 1
+
+        resolve = ResolveEntities(
+            container.database.session_factory, container.embedder
+        )
+        moved = await resolve.apply(
+            MergeCandidate(
+                left_id=winner_id,
+                right_id=loser_id,
+                strategy=MergeStrategy.MANUAL,
+                confidence=1.0,
+                evidence=f"merged by hand: {loser!r} into {winner!r}",
+            )
+        )
+        if moved is None:
+            print("nothing to do: they are already the same entity")
+            return 0
+        print(f"merged; {moved} mentions moved")
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_unmerge(settings: Settings, *, merge_id: str) -> int:
+    container = Container.build(settings)
+    try:
+        resolve = ResolveEntities(
+            container.database.session_factory, container.embedder
+        )
+        try:
+            restored = await resolve.revert(UUID(merge_id))
+        except (LookupError, ValueError) as exc:
+            print(str(exc))
+            return 1
+        print(f"reverted; {restored} mentions restored")
+    finally:
+        await container.dispose()
+    return 0
+
+
 async def run_entity_stats(settings: Settings, *, top: int) -> int:
     container = Container.build(settings)
     try:
@@ -1085,6 +1227,41 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="report what would be extracted without calling the model",
     )
+
+    resolve_parser = commands.add_parser(
+        "resolve-entities", help="merge entities that refer to the same thing"
+    )
+    resolve_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print proposed merges with evidence, changing nothing",
+    )
+    resolve_parser.add_argument(
+        "--threshold",
+        type=float,
+        default=DEFAULT_THRESHOLD,
+        help=f"auto-merge at or above this confidence (default {DEFAULT_THRESHOLD})",
+    )
+    resolve_parser.add_argument(
+        "--limit", type=int, default=40, help="how many proposals to print"
+    )
+
+    entity_parser = commands.add_parser("entity", help="inspect and edit entity merges")
+    entity_commands = entity_parser.add_subparsers(dest="entity_command", required=True)
+
+    merges_parser = entity_commands.add_parser("merges", help="list the merge ledger")
+    merges_parser.add_argument(
+        "--pending", action="store_true", help="only the review queue"
+    )
+    merges_parser.add_argument("--strategy", help="filter by strategy")
+    merges_parser.add_argument("--limit", type=int, default=50)
+
+    merge_parser = entity_commands.add_parser("merge", help="merge two entities by hand")
+    merge_parser.add_argument("winner", help="id or name of the entity to keep")
+    merge_parser.add_argument("loser", help="id or name of the entity to merge away")
+
+    unmerge_parser = entity_commands.add_parser("unmerge", help="undo a merge")
+    unmerge_parser.add_argument("merge_id", help="id from `entity merges`")
 
     entity_stats_parser = commands.add_parser(
         "entity-stats", help="report entities, mentions, and the duplicate problem"
@@ -1388,6 +1565,33 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=args.dry_run,
             )
         )
+
+    if args.command == "resolve-entities":
+        return asyncio.run(
+            run_resolve_entities(
+                settings,
+                dry_run=args.dry_run,
+                threshold=args.threshold,
+                limit=args.limit,
+            )
+        )
+
+    if args.command == "entity":
+        if args.entity_command == "merges":
+            return asyncio.run(
+                run_list_merges(
+                    settings,
+                    pending=args.pending,
+                    strategy=args.strategy,
+                    limit=args.limit,
+                )
+            )
+        if args.entity_command == "merge":
+            return asyncio.run(
+                run_manual_merge(settings, winner=args.winner, loser=args.loser)
+            )
+        if args.entity_command == "unmerge":
+            return asyncio.run(run_unmerge(settings, merge_id=args.merge_id))
 
     if args.command == "entity-stats":
         return asyncio.run(run_entity_stats(settings, top=args.top))

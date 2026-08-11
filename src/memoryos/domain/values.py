@@ -139,6 +139,37 @@ class EntityType(StrEnum):
     DECISION = auto()
 
 
+class MergeStrategy(StrEnum):
+    """How a merge candidate was found.
+
+    Recorded per merge because the strategies have very different precision, and
+    a wrong merge is only diagnosable if you can tell which rule produced it.
+    `EXACT` is near-certain; `EMBEDDING` is the one that needs a threshold and
+    produces the errors worth reading; `MANUAL` is a person and outranks all of
+    them.
+    """
+
+    EXACT = auto()
+    EMBEDDING = auto()
+    ALIAS = auto()
+    LLM = auto()
+    MANUAL = auto()
+
+
+class MergeStatus(StrEnum):
+    """Whether a merge is a proposal, in force, or undone.
+
+    `PENDING` is the review queue: a candidate the resolver found and refused to
+    apply on its own. It is a first-class state rather than an absence, because
+    "we looked at this pair and were not sure" is information, and a system that
+    discarded it would re-propose the same pair on every run forever.
+    """
+
+    PENDING = auto()
+    APPLIED = auto()
+    REVERTED = auto()
+
+
 class GraphLabel(StrEnum):
     """The node kinds the graph projection knows about.
 
