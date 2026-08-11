@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -8,6 +9,7 @@ from memoryos.adapters.embedding.sentence_transformers import (
     DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL,
 )
 from memoryos.adapters.llm.gemini import DEFAULT_MODEL as DEFAULT_LLM_MODEL
+from memoryos.adapters.llm.groq import DEFAULT_MODEL as DEFAULT_GROQ_MODEL
 from memoryos.adapters.reranking.cross_encoder import (
     DEFAULT_MODEL as DEFAULT_RERANKER_MODEL,
 )
@@ -83,10 +85,22 @@ class Settings(BaseSettings):
     # the shortlist bounds how far a candidate can jump.
     rerank_candidates: int = 25
     rerank_enabled: bool = True
+    # Which provider answers. Both implement the same `LanguageModel` port, so
+    # this is the only thing that changes between them — which is what M2.6
+    # claimed a port would buy and what M2.6a spent to check.
+    #
+    # Groq by default because Gemini's free tier began returning `limit: 0` on
+    # this account, which blocks answering entirely. Gemini stays selectable
+    # rather than being removed: the quota is an account condition, not a defect
+    # in the adapter.
+    llm_provider: Literal["groq", "gemini"] = "groq"
     # Answering only. Absent, retrieval and search work exactly as before and
-    # `ask` reports that it needs a key rather than failing obscurely.
+    # `ask` reports that it needs a key rather than failing obscurely. Only the
+    # *selected* provider's key is required; the other may be empty.
     gemini_api_key: str | None = None
     llm_model: str = DEFAULT_LLM_MODEL
+    groq_api_key: str = ""
+    groq_model: str = DEFAULT_GROQ_MODEL
     # Tokens of *passages*. The system prompt and question add a few hundred
     # more. Deliberately well inside the model's window: a fuller prompt is not
     # a better one, because the instruction to refuse competes with every extra

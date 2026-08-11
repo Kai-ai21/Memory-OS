@@ -21,6 +21,7 @@ from memoryos.adapters.embedding.sentence_transformers import (
 )
 from memoryos.adapters.graph.neo4j_store import Neo4jGraphStore
 from memoryos.adapters.llm.gemini import GeminiLanguageModel
+from memoryos.adapters.llm.groq import GroqLanguageModel
 from memoryos.adapters.parsers.registry import ParserRegistry
 from memoryos.adapters.parsers.registry import build_default_registry as build_parser_registry
 from memoryos.adapters.reranking.cross_encoder import CrossEncoderReranker
@@ -29,7 +30,7 @@ from memoryos.application.embed import EmbedMemory
 from memoryos.application.jobs.handlers import build_default_registry
 from memoryos.application.jobs.registry import HandlerRegistry
 from memoryos.application.normalize import NormalizeMemory
-from memoryos.application.ports import Chunker, Embedder
+from memoryos.application.ports import Chunker, Embedder, LanguageModel
 from memoryos.application.replay import ReplayCorpus
 from memoryos.application.search import FusionWeights, SearchMemories
 from memoryos.application.sync import SyncSource
@@ -143,13 +144,14 @@ class Container:
         return AnswerQuestion(
             self.database.session_factory,
             self.search(),
-            GeminiLanguageModel(
-                self.settings.gemini_api_key, model_name=self.settings.llm_model
-            ),
+            self.language_model(),
             self.embedder,
             weights=self.weights(),
             token_budget=self.settings.answer_token_budget,
         )
+
+    def language_model(self) -> LanguageModel:
+        return build_language_model(self.settings)
 
     def weights(self) -> FusionWeights:
         """Fusion weights from settings, so `MEMOS_WEIGHT_*` reaches every caller."""
@@ -205,6 +207,33 @@ class Container:
     async def dispose(self) -> None:
         await self.database.dispose()
         await self.graph.close()
+
+
+def build_language_model(settings: Settings) -> LanguageModel:
+    """The provider named by `MEMOS_LLM_PROVIDER`.
+
+    The whole of M2.6a is this function. Everything above it — `AnswerQuestion`,
+    the grounding checks, the citation verifier, the CLI — takes a
+    `LanguageModel` and cannot tell which one it got, which is what M2.6 put the
+    thing behind a Protocol for.
+
+    A module-level function rather than only a method, because selecting a
+    provider is a pure function of settings and needs none of the rest of the
+    object graph. That is also what makes it testable: `Container.build`
+    constructs the embedder, which reaches HuggingFace and takes seconds, so a
+    test that went through it would be neither fast nor offline.
+
+    The key is checked by the adapter's own constructor rather than here, so the
+    error names the variable the *selected* provider needs. Checking both keys in
+    one place would either demand a Gemini key from a Groq deployment or produce
+    a message listing two variables and leave the reader to work out which one
+    applies to them.
+    """
+    if settings.llm_provider == "gemini":
+        return GeminiLanguageModel(
+            settings.gemini_api_key, model_name=settings.llm_model
+        )
+    return GroqLanguageModel(settings.groq_api_key, model_name=settings.groq_model)
 
 
 class WindowMisalignment(RuntimeError):

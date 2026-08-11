@@ -28,8 +28,11 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from memoryos.adapters.llm.errors import MissingApiKey
 from memoryos.application.ports import LanguageModel
 from memoryos.domain.jobs import PermanentError, TransientError
+
+__all__ = ["DEFAULT_MODEL", "GeminiLanguageModel", "MissingApiKey"]
 
 if TYPE_CHECKING:  # pragma: no cover
     from google import genai
@@ -57,10 +60,6 @@ _TRANSIENT_MARKERS = (
     "deadline",
     "timeout",
 )
-
-
-class MissingApiKey(RuntimeError):
-    """No credential for the language model, so answering is impossible."""
 
 
 class GeminiLanguageModel(LanguageModel):

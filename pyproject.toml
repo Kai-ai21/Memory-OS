@@ -22,6 +22,7 @@ dependencies = [
   "pydantic-settings>=2.6",
   "structlog>=24.4",
   "google-genai>=1.0",
+  "groq>=0.13",
   "neo4j>=5.26",
 ]
 

@@ -21,7 +21,7 @@ from memoryos.adapters.connectors.filesystem import (
 from memoryos.adapters.db import models
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.graph.schema import SCHEMA_VERSION
-from memoryos.adapters.llm.gemini import MissingApiKey
+from memoryos.adapters.llm.errors import MissingApiKey
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
 from memoryos.application.backfill import (
     enqueue_embedding,
