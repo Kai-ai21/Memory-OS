@@ -25,6 +25,7 @@ from memoryos.domain.values import (
     EntityType,
     GraphLabel,
     MemoryKind,
+    Predicate,
     SourceKind,
     TimeProvenance,
 )
@@ -649,6 +650,43 @@ class ExtractedEntity:
     char_end: int
 
 
+@dataclass(frozen=True, slots=True)
+class EntityRef:
+    """An already-resolved entity, offered to the extractor as a candidate.
+
+    Carries the id because the relationship must point at *this* entity rather
+    than at a name that might be resolved differently later, and the name
+    because the model can only reason about names.
+    """
+
+    entity_id: UUID
+    name: str
+    type: EntityType
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractedRelationship:
+    """One typed, directed claim, with the span that asserts it.
+
+    `subject_id` and `object_id` are ids from the candidate list rather than
+    names the model produced, which is what makes an invented endpoint
+    impossible to store rather than merely unlikely — see `extract_relationships`.
+
+    The span is optional where a mention's is not. A mention *is* its span, so
+    one that cannot be located is worthless; a relationship's quote is
+    supporting evidence, and an edge whose sentence could not be found verbatim
+    is still a usable edge with weaker provenance.
+    """
+
+    subject_id: UUID
+    object_id: UUID
+    predicate: Predicate
+    confidence: float
+    evidence: str
+    char_start: int | None = None
+    char_end: int | None = None
+
+
 class EntityExtractor(Protocol):
     """Finds the things a piece of text talks about.
 
@@ -678,6 +716,28 @@ class EntityExtractor(Protocol):
         identifiers and library names, prose wants people and organisations, and
         a single prompt that tries to serve both returns English words from
         source files.
+        """
+        ...
+
+    async def extract_relationships(
+        self, text: str, entities: Sequence[EntityRef]
+    ) -> list[ExtractedRelationship]:
+        """Typed, directed claims between entities the caller already has.
+
+        **The candidate list is the guardrail.** The model links between
+        supplied entities rather than naming its own, so a relationship cannot
+        point at something that does not exist — which is the failure that would
+        otherwise be invisible, because an edge to a fabricated entity looks
+        exactly like an edge to a real one until somebody follows it.
+
+        The entities passed in are the *resolved* ones from M3.2. Passing
+        pre-resolution entities would attach relationships to nodes that are
+        about to be merged away, and every edge on a loser would have to be
+        re-pointed by hand afterwards.
+
+        Anything naming a subject or object outside the supplied set is dropped
+        by the implementation, not by the caller. The model does occasionally
+        invent one.
         """
         ...
 

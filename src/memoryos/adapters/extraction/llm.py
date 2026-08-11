@@ -30,15 +30,23 @@ hallucinated names.
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 import structlog
 from pydantic import BaseModel, Field, ValidationError
 
-from memoryos.application.ports import EntityExtractor, ExtractedEntity, LanguageModel
+from memoryos.application.ports import (
+    EntityExtractor,
+    EntityRef,
+    ExtractedEntity,
+    ExtractedRelationship,
+    LanguageModel,
+)
 from memoryos.domain.jobs import PermanentError
-from memoryos.domain.values import EntityType, MemoryKind
+from memoryos.domain.values import EntityType, MemoryKind, Predicate
 
 logger = structlog.get_logger(__name__)
 
@@ -140,6 +148,8 @@ class ExtractionStats:
     dropped_not_found: int = 0
     dropped_low_confidence: int = 0
     dropped_bad_type: int = 0
+    dropped_unknown_entity: int = 0
+    dropped_self: int = 0
 
     def merged(self, other: "ExtractionStats") -> "ExtractionStats":
         return ExtractionStats(
@@ -153,6 +163,10 @@ class ExtractionStats:
                 self.dropped_low_confidence + other.dropped_low_confidence
             ),
             dropped_bad_type=self.dropped_bad_type + other.dropped_bad_type,
+            dropped_unknown_entity=(
+                self.dropped_unknown_entity + other.dropped_unknown_entity
+            ),
+            dropped_self=self.dropped_self + other.dropped_self,
         )
 
 
@@ -208,6 +222,132 @@ class LlmEntityExtractor(EntityExtractor):
             batch = texts[start : start + self._batch_size]
             results.extend(await self._extract_one_batch(batch, kind))
         return results
+
+    @property
+    def relationship_version(self) -> str:
+        """Identifies the relationship extractor, separately from the entity one.
+
+        Separate because the two are separately re-runnable: improving the
+        relationship prompt must not invalidate every entity mention and force a
+        corpus-wide re-extraction of both.
+        """
+        return f"rel-{RELATIONSHIP_PROMPT_VERSION}:{self._model.model_id}"
+
+    async def extract_relationships(
+        self, text: str, entities: Sequence[EntityRef]
+    ) -> list[ExtractedRelationship]:
+        """Typed, directed claims between the supplied entities only.
+
+        **Entities are offered by number, and only numbers come back.** That is
+        what makes an invented endpoint structurally impossible rather than
+        merely discouraged: the model never writes an entity name, so there is
+        no name to hallucinate. An out-of-range index is the residual failure,
+        and it is dropped and counted below.
+
+        Fewer than two entities means there is nothing to relate, and asking is
+        a request spent to be told so.
+        """
+        if len(entities) < 2:
+            return []
+
+        user = (
+            "Entities known to appear in the text:\n"
+            f"{_render_entities(entities)}\n\n"
+            f"Text:\n{text}"
+        )
+        raw = await self._model.complete(
+            _RELATIONSHIP_SYSTEM, user, max_tokens=self._max_tokens
+        )
+        self._record(
+            calls=1,
+            prompt_chars=len(_RELATIONSHIP_SYSTEM) + len(user),
+            response_chars=len(raw),
+        )
+
+        parsed = _parse_relationships(raw)
+        if parsed is None:
+            logger.warning("extract.relationships_unparseable_retrying", chars=len(raw))
+            raw = await self._model.complete(
+                _RELATIONSHIP_SYSTEM + _RETRY_REMINDER,
+                user,
+                max_tokens=self._max_tokens,
+            )
+            self._record(calls=1, retries=1, response_chars=len(raw))
+            parsed = _parse_relationships(raw)
+
+        if parsed is None:
+            raise PermanentError(
+                f"{self._model.model_id} returned unparseable JSON twice for a "
+                f"relationship extraction; retrying will not fix it. "
+                f"First 200 characters: {raw[:200]!r}"
+            )
+
+        return self._verify_relationships(parsed, entities, text)
+
+    def _verify_relationships(
+        self,
+        parsed: "_RelationshipResponse",
+        entities: Sequence[EntityRef],
+        text: str,
+    ) -> list[ExtractedRelationship]:
+        """Keep only claims whose endpoints and predicate are real."""
+        verified: list[ExtractedRelationship] = []
+        seen: set[tuple[UUID, str, UUID]] = set()
+
+        for claim in parsed.relationships:
+            self._record(returned=1)
+
+            if claim.confidence < self._min_confidence:
+                self._record(dropped_low_confidence=1)
+                continue
+
+            predicate = _predicate_of(claim.predicate)
+            if predicate is None:
+                self._record(dropped_bad_type=1)
+                logger.debug("extract.unknown_predicate", predicate=claim.predicate)
+                continue
+
+            subject = _entity_at(entities, claim.subject)
+            obj = _entity_at(entities, claim.object)
+            if subject is None or obj is None:
+                # The model referenced an entity that was not offered. This is
+                # the counter the milestone asks for: an edge to an entity that
+                # does not exist looks exactly like a real edge until somebody
+                # follows it.
+                self._record(dropped_unknown_entity=1)
+                logger.debug(
+                    "extract.relationship_unknown_entity",
+                    subject=claim.subject,
+                    object=claim.object,
+                    supplied=len(entities),
+                )
+                continue
+
+            if subject.entity_id == obj.entity_id:
+                # A self-relationship asserts nothing and the CHECK would refuse
+                # it anyway.
+                self._record(dropped_self=1)
+                continue
+
+            key = (subject.entity_id, predicate.value, obj.entity_id)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            span = _locate(text, claim.evidence.strip()) if claim.evidence else None
+            verified.append(
+                ExtractedRelationship(
+                    subject_id=subject.entity_id,
+                    object_id=obj.entity_id,
+                    predicate=predicate,
+                    confidence=min(1.0, max(0.0, claim.confidence)),
+                    evidence=claim.evidence.strip(),
+                    char_start=span[0] if span else None,
+                    char_end=span[0] + len(span[1]) if span else None,
+                )
+            )
+
+        return verified
 
     async def _extract_one_batch(
         self, batch: list[str], kind: MemoryKind
@@ -399,3 +539,88 @@ def _locate(text: str, name: str) -> tuple[int, str] | None:
     if index == -1:
         return None
     return index, text[index : index + len(name)]
+
+
+# Bumped independently of PROMPT_VERSION, because relationships and entities are
+# separately re-runnable: improving one prompt must not invalidate the other's
+# output and force a corpus-wide re-extraction of both.
+RELATIONSHIP_PROMPT_VERSION = "v1"
+
+_RELATIONSHIP_SYSTEM = """\
+You extract relationships between entities from text. You return JSON and \
+nothing else.
+
+You are given a numbered list of entities that are known to appear in the text. \
+Rules, in order of importance:
+
+1. Use ONLY the supplied entity numbers. Never introduce an entity that is not \
+in the list, and never invent a number.
+2. Extract ONLY relationships explicitly stated in the text. If the text does \
+not assert it, it does not exist. Do not infer from what you know about these \
+technologies.
+3. Quote the exact sentence or clause from the text that asserts the \
+relationship, character for character, in "evidence".
+4. Direction matters. "subject" does the thing to "object": for "A supersedes \
+B", A is the subject.
+5. Use only these predicates: uses, depends_on, part_of, authored_by, \
+mentions, supersedes, relates_to. Prefer a specific predicate over relates_to; \
+use relates_to only when the text asserts a connection you cannot type.
+6. Assign a confidence between 0 and 1. Omit anything below 0.5.
+
+Return this JSON shape and nothing else — no prose, no markdown fences:
+
+{"relationships": [{"subject": <number>, "predicate": "...", \
+"object": <number>, "confidence": 0.0, "evidence": "..."}]}
+
+Return an empty list if the text asserts no relationships between the supplied \
+entities. That is a common and correct answer."""
+
+
+class _Relationship(BaseModel):
+    subject: int
+    predicate: str
+    object: int
+    confidence: float = Field(default=1.0)
+    evidence: str = Field(default="")
+
+
+class _RelationshipResponse(BaseModel):
+    relationships: list[_Relationship] = Field(default_factory=list)
+
+
+def _render_entities(entities: Sequence[EntityRef]) -> str:
+    return "\n".join(
+        f"{index}. {entity.name} ({entity.type.value})"
+        for index, entity in enumerate(entities)
+    )
+
+
+def _parse_relationships(raw: str) -> "_RelationshipResponse | None":
+    text = _FENCE.sub("", raw).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        payload: Any = json.loads(text[start : end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return None
+    try:
+        return _RelationshipResponse.model_validate(payload)
+    except ValidationError:
+        return None
+
+
+def _predicate_of(raw: str) -> Predicate | None:
+    try:
+        return Predicate(raw.strip().lower())
+    except ValueError:
+        return None
+
+
+def _entity_at(entities: Sequence[EntityRef], index: int) -> EntityRef | None:
+    """The supplied entity at this number, or None if the model invented one."""
+    if not isinstance(index, int) or isinstance(index, bool):
+        return None
+    if 0 <= index < len(entities):
+        return entities[index]
+    return None

@@ -21,12 +21,14 @@ from memoryos.adapters.connectors.filesystem import (
 )
 from memoryos.adapters.db import models
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
+from memoryos.adapters.extraction.llm import ExtractionStats
 from memoryos.adapters.graph.schema import SCHEMA_VERSION
 from memoryos.adapters.llm.errors import MissingApiKey
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
 from memoryos.application.backfill import (
     enqueue_embedding,
     find_extraction_targets,
+    find_relationship_targets,
     find_unembedded,
     gather_stats,
 )
@@ -50,6 +52,7 @@ from memoryos.application.judgements import export_golden_set
 from memoryos.application.merge_admin import find_entity, list_merges
 from memoryos.application.ports import ScoreBreakdown, SearchFilters
 from memoryos.application.rechunk import enqueue_rechunk, find_stale
+from memoryos.application.relationships import ExtractRelationships, RelationshipReport
 from memoryos.application.replay import PartialShadowReplay, ReplayScope, ReplayStage
 from memoryos.application.resolution import (
     DEFAULT_THRESHOLD,
@@ -834,6 +837,96 @@ async def _extract_with_backoff(
     raise AssertionError("unreachable")
 
 
+async def run_extract_relationships(
+    settings: Settings, *, source: str | None, limit: int | None, dry_run: bool
+) -> int:
+    """Extract relationships across the corpus, memory by memory.
+
+    Sequential for the reason entity extraction is: the free tier limits
+    requests per minute, so parallelism buys 429s that the backoff then
+    serialises anyway — at the cost of the retries.
+    """
+    container = Container.build(settings)
+    try:
+        extract = container.relationships()
+        targets = await find_relationship_targets(
+            container.database.session_factory,
+            extractor_version=extract.version,
+            source=source,
+            limit=limit,
+        )
+
+        print(f"extractor: {extract.version}")
+        print(f"provider:  {settings.llm_provider}")
+        print(f"memories pending: {len(targets)}")
+        for target in targets[:20]:
+            print(f"  {target.external_key} ({target.chunks} chunks with entities)")
+        if len(targets) > 20:
+            print(f"  ... and {len(targets) - 20} more")
+
+        if dry_run:
+            print("\ndry run; no model calls made, nothing written")
+            return 0
+        if not targets:
+            print("\nnothing to do")
+            return 0
+
+        started = time.monotonic()
+        stored = projected = failed = 0
+        for index, target in enumerate(targets, start=1):
+            try:
+                report = await _relationships_with_backoff(extract, target.memory_id)
+            except (TransientError, PermanentError) as exc:
+                failed += 1
+                print(f"[{index}/{len(targets)}] FAILED {target.external_key}: {exc}")
+                continue
+            stored += report.relationships
+            projected += report.projected
+            print(
+                f"[{index}/{len(targets)}] {target.external_key}: "
+                f"{report.relationships} relationships "
+                f"from {report.chunks_considered} chunks"
+            )
+
+        elapsed = time.monotonic() - started
+        stats = container_stats(extract)
+        print(
+            f"\nrelationships {stored}   edges projected {projected}   failed {failed}\n"
+            f"api calls     {stats.calls} ({stats.retries} retries)\n"
+            f"dropped       {stats.dropped_unknown_entity} unknown entity, "
+            f"{stats.dropped_low_confidence} low confidence, "
+            f"{stats.dropped_bad_type} bad predicate, "
+            f"{stats.dropped_self} self-referential, of {stats.returned} returned\n"
+            f"prompt chars  {stats.prompt_chars}   response chars {stats.response_chars}\n"
+            f"wall clock    {elapsed:.1f}s"
+        )
+    finally:
+        await container.dispose()
+    return 1 if failed else 0
+
+
+def container_stats(extract: ExtractRelationships) -> ExtractionStats:
+    """The adapter's counters, or empty ones if it keeps none."""
+    stats = getattr(extract, "_extractor", None)
+    return getattr(stats, "stats", ExtractionStats())
+
+
+async def _relationships_with_backoff(
+    extract: ExtractRelationships, memory_id: UUID
+) -> RelationshipReport:
+    """One extraction, waiting out rate limits. See `_extract_with_backoff`."""
+    for attempt in range(EXTRACT_MAX_ATTEMPTS):
+        try:
+            return await extract(memory_id)
+        except TransientError as exc:
+            if attempt == EXTRACT_MAX_ATTEMPTS - 1:
+                raise
+            delay = compute_backoff(attempt)
+            print(f"    rate limited ({exc}); waiting {delay:.0f}s")
+            await asyncio.sleep(delay)
+    raise AssertionError("unreachable")
+
+
 async def run_resolve_entities(
     settings: Settings, *, dry_run: bool, threshold: float, limit: int
 ) -> int:
@@ -1228,6 +1321,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="report what would be extracted without calling the model",
     )
 
+    rel_parser = commands.add_parser(
+        "extract-relationships",
+        help="extract typed relationships between resolved entities",
+    )
+    rel_parser.add_argument("--source", help="limit to one source by name")
+    rel_parser.add_argument("--limit", type=int, help="stop after this many memories")
+    rel_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would be extracted without calling the model",
+    )
+
     resolve_parser = commands.add_parser(
         "resolve-entities", help="merge entities that refer to the same thing"
     )
@@ -1563,6 +1668,13 @@ def main(argv: list[str] | None = None) -> int:
                 source=args.source,
                 limit=args.limit,
                 dry_run=args.dry_run,
+            )
+        )
+
+    if args.command == "extract-relationships":
+        return asyncio.run(
+            run_extract_relationships(
+                settings, source=args.source, limit=args.limit, dry_run=args.dry_run
             )
         )
 

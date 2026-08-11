@@ -209,3 +209,51 @@ async def find_extraction_targets(
             ExtractionTarget(memory_id=row[0], external_key=row[1], chunks=row[2])
             for row in await session.execute(current)
         ]
+
+
+async def find_relationship_targets(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    extractor_version: str,
+    source: str | None = None,
+    limit: int | None = None,
+) -> list[ExtractionTarget]:
+    """Memories with resolved entity mentions and no relationships at this version.
+
+    The join to `entity_mentions` is the useful half: a memory nobody has
+    extracted entities from has nothing to relate, and offering it to the model
+    would spend a request to be told so. On a rate-limited tier that filter is
+    the difference between finishing a corpus and stopping partway.
+    """
+    current = (
+        select(
+            models.Memory.id,
+            models.Memory.external_key,
+            func.count(func.distinct(models.EntityMention.chunk_id)).label("chunks"),
+        )
+        .join(
+            models.EntityMention, models.EntityMention.memory_id == models.Memory.id
+        )
+        .where(
+            models.Memory.is_current.is_(True),
+            models.Memory.deleted_at.is_(None),
+            models.Memory.relationship_extractor_version.is_distinct_from(
+                extractor_version
+            ),
+        )
+        .group_by(models.Memory.id, models.Memory.external_key)
+        .order_by(models.Memory.external_key)
+    )
+
+    if source is not None:
+        current = current.join(
+            models.Source, models.Source.id == models.Memory.source_id
+        ).where(models.Source.name == source)
+    if limit is not None:
+        current = current.limit(limit)
+
+    async with session_factory() as session:
+        return [
+            ExtractionTarget(memory_id=row[0], external_key=row[1], chunks=row[2])
+            for row in await session.execute(current)
+        ]

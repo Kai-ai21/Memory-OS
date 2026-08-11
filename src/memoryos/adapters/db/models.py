@@ -43,6 +43,7 @@ from memoryos.domain.values import (
     MemoryKind,
     MergeStatus,
     MergeStrategy,
+    Predicate,
     SourceKind,
     TimeProvenance,
     Verdict,
@@ -242,6 +243,9 @@ class Memory(Base):
     # Recording the attempt rather than inferring it from its output is the
     # only thing that distinguishes "not yet done" from "done, found nothing".
     entity_extractor_version: Mapped[str | None] = mapped_column(Text)
+    # The same marker for M3.3, and separate from the entity one so the two
+    # prompts can be improved and re-run independently.
+    relationship_extractor_version: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         UniqueConstraint(
@@ -915,3 +919,128 @@ Index(
 
 # The review queue's own read pattern.
 Index("ix_entity_merges_status", EntityMerge.status, EntityMerge.confidence)
+
+
+class EntityRelationship(Base):
+    """One typed, directed claim about two entities, and where it was made.
+
+    **Every row carries the chunk that asserted it, and that is the design.**
+    Without provenance a relationship is an unfalsifiable claim: something in
+    the system believes React depends on Postgres and nothing can say why, which
+    is precisely the failure Phase 2 spent M2.5 eliminating for answers. A
+    Phase 3 answer built on these edges has to stay as citable as a Phase 2 one,
+    and it can only be as citable as its weakest edge.
+
+    **The same relationship asserted in five chunks is five rows.** That is not
+    duplication to be collapsed — it is the evidence, and M3.5 weights edges by
+    how often the corpus repeats them. One assertion is a claim; five is a
+    pattern. Collapsing them at write time would throw away the only signal that
+    distinguishes the two, and the unique constraint is scoped per chunk for
+    exactly that reason.
+
+    Direction is carried by the column names rather than by convention:
+    `subject_id` does `predicate` to `object_id`, and nothing anywhere is
+    allowed to read it the other way.
+    """
+
+    __tablename__ = "entity_relationships"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    subject_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "entities.id", name="fk_entity_relationships_subject_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    object_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "entities.id", name="fk_entity_relationships_object_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    predicate: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(REAL)
+    # Where the claim was made. Both, because a memory locates it for a reader
+    # and a chunk locates it for a citation.
+    memory_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "memories.id", name="fk_entity_relationships_memory_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    chunk_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "memory_chunks.id",
+            name="fk_entity_relationships_chunk_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    # The span that asserts it, into `memory_chunks.content`. Nullable, unlike a
+    # mention's offsets: the model quotes the sentence rather than pointing at a
+    # name, and a quote that cannot be located is worth keeping without a span
+    # where a *mention* without one would be worthless.
+    char_start: Mapped[int | None] = mapped_column(Integer)
+    char_end: Mapped[int | None] = mapped_column(Integer)
+    extractor_version: Mapped[str] = mapped_column(Text, nullable=False)
+    extracted_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        # Per chunk, so repetition across chunks survives as separate rows.
+        UniqueConstraint(
+            "subject_id",
+            "predicate",
+            "object_id",
+            "chunk_id",
+            name="uq_entity_relationships_assertion",
+        ),
+        _enum_check("predicate", Predicate, "ck_entity_relationships_predicate"),
+        CheckConstraint(
+            "confidence IS NULL OR confidence BETWEEN 0.0 AND 1.0",
+            name="ck_entity_relationships_confidence_range",
+        ),
+        # A self-relationship is never informative and is what a model returns
+        # when it has nothing to say about a chunk that names one entity.
+        CheckConstraint(
+            "subject_id <> object_id", name="ck_entity_relationships_distinct"
+        ),
+        CheckConstraint(
+            "(char_start IS NULL) = (char_end IS NULL)",
+            name="ck_entity_relationships_span_pairing",
+        ),
+        CheckConstraint(
+            "char_start IS NULL OR char_start >= 0",
+            name="ck_entity_relationships_char_start_non_negative",
+        ),
+        CheckConstraint(
+            "char_end IS NULL OR char_end > char_start",
+            name="ck_entity_relationships_char_range",
+        ),
+    )
+
+
+# The traversal read pattern: everything this entity does, and everything done
+# to it. Two indexes because direction means the two questions are different.
+Index(
+    "ix_entity_relationships_subject",
+    EntityRelationship.subject_id,
+    EntityRelationship.predicate,
+)
+Index(
+    "ix_entity_relationships_object",
+    EntityRelationship.object_id,
+    EntityRelationship.predicate,
+)
+
+# The skip check, and the per-memory delete that replaces a version's output.
+Index(
+    "ix_entity_relationships_memory_version",
+    EntityRelationship.memory_id,
+    EntityRelationship.extractor_version,
+)
