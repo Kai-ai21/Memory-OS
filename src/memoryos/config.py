@@ -93,6 +93,17 @@ class Settings(BaseSettings):
     # passage that looks vaguely relevant.
     answer_token_budget: int = 6000
     answer_max_tokens: int = 1024
+    # The graph projection. Bolt rather than HTTP: it is what the official
+    # driver speaks, and the browser on 7474 is for reading traversals by eye.
+    #
+    # No key here is optional the way `gemini_api_key` is, and that difference is
+    # deliberate: an absent Gemini key means answering cannot work, while an
+    # unreachable Neo4j means only that the graph is unavailable. So these carry
+    # working local defaults and the *reachability* — not the configuration — is
+    # what everything downstream degrades on.
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "memoryos"
     log_level: str = "INFO"
     log_json: bool = False
     # Browser origins allowed to call this API. Empty by default, which means no

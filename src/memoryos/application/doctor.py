@@ -7,6 +7,7 @@ written, which an assertion cannot see.
 """
 
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -28,18 +29,108 @@ class Finding:
 
 
 @dataclass(slots=True)
-class DoctorReport:
-    findings: list[Finding] = field(default_factory=list)
+class GraphStatus:
+    """What the graph projection reports about itself.
+
+    Its own type rather than another `Finding`, because `Finding` means "count
+    of a bad thing, zero is healthy" and none of this fits that shape. Node
+    counts are information, not defects — a graph with 4,000 entities is not
+    four thousand times unhealthier than one with one.
+    """
+
+    reachable: bool
+    expected_version: int
+    schema_version: int | None = None
+    counts: dict[str, int] = field(default_factory=dict)
+    error: str | None = None
+
+    @property
+    def current(self) -> bool:
+        """Whether the applied schema matches the code.
+
+        `None` — never applied — counts as current, because the next connect
+        applies it. A *stale* number does not: it means somebody has been
+        writing to this database under constraints the code no longer assumes.
+        """
+        return self.schema_version in (None, self.expected_version)
 
     @property
     def healthy(self) -> bool:
-        return all(finding.healthy for finding in self.findings)
+        """Unreachable is not unhealthy here, and that is the milestone's rule.
+
+        Everything Phase 1 and Phase 2 do keeps working without the graph, so a
+        `doctor` that exited non-zero on a machine with no Neo4j running would be
+        reporting an outage of something optional as corpus damage. Drift is
+        different: a reachable database whose schema is behind the code is a
+        real inconsistency, and one nothing else will notice.
+        """
+        return self.current if self.reachable else True
+
+
+@dataclass(slots=True)
+class DoctorReport:
+    findings: list[Finding] = field(default_factory=list)
+    graph: GraphStatus | None = None
+
+    @property
+    def healthy(self) -> bool:
+        corpus = all(finding.healthy for finding in self.findings)
+        return corpus and (self.graph is None or self.graph.healthy)
+
+
+class GraphDiagnostics(Protocol):
+    """The slice of the graph store `doctor` needs.
+
+    Narrower than `GraphStore` on purpose: this reports on the graph and must
+    not be able to write to it, and a protocol that offered `clear` to a
+    diagnostic would be an invitation.
+    """
+
+    async def verify(self) -> None: ...
+
+    async def schema_version(self) -> int | None: ...
+
+    async def counts_by_label(self) -> dict[str, int]: ...
+
+
+async def inspect_graph(graph: GraphDiagnostics, *, expected_version: int) -> GraphStatus:
+    """Reachability, schema version, and node counts — or why not.
+
+    Every failure is caught and reported rather than raised. `doctor` runs when
+    something is already suspected to be wrong, so it has to survive the thing
+    it is diagnosing being broken.
+    """
+    try:
+        await graph.verify()
+    except Exception as exc:
+        return GraphStatus(
+            reachable=False, expected_version=expected_version, error=str(exc)
+        )
+
+    try:
+        version = await graph.schema_version()
+        counts = await graph.counts_by_label()
+    except Exception as exc:
+        # Reachable but unqueryable — a wrong database name, or a user without
+        # read privileges. Distinct from unreachable, and worth saying so.
+        return GraphStatus(
+            reachable=True, expected_version=expected_version, error=str(exc)
+        )
+
+    return GraphStatus(
+        reachable=True,
+        expected_version=expected_version,
+        schema_version=version,
+        counts=counts,
+    )
 
 
 async def run_doctor(
     session_factory: async_sessionmaker[AsyncSession],
     embedder: Embedder,
     *,
+    graph: GraphDiagnostics | None = None,
+    graph_schema_version: int = 0,
     sample_limit: int = 5,
 ) -> DoctorReport:
     findings: list[Finding] = []
@@ -142,4 +233,9 @@ async def run_doctor(
             )
         )
 
-    return DoctorReport(findings=findings)
+    status = (
+        await inspect_graph(graph, expected_version=graph_schema_version)
+        if graph is not None
+        else None
+    )
+    return DoctorReport(findings=findings, graph=status)

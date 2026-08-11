@@ -54,7 +54,7 @@ from memoryos.adapters.db.mappers import to_event
 from memoryos.adapters.db.repositories import SqlAlchemyMemoryRepository
 from memoryos.application.embed import EmbedMemory
 from memoryos.application.normalize import NormalizeMemory
-from memoryos.application.ports import BlobStore, ShadowWorkspace
+from memoryos.application.ports import BlobStore, GraphStore, ShadowWorkspace
 from memoryos.application.projection import memory_from_event, recorded_at_of
 from memoryos.domain.entities import IngestionEvent
 from memoryos.domain.ids import new_id
@@ -134,6 +134,22 @@ CACHE_TABLE = "embedding_cache"
 SHADOW_TABLES: tuple[str, ...] = tuple(
     name for name in DERIVED_TABLES if name != CACHE_TABLE
 )
+
+# Derived state that is not a Postgres table at all.
+#
+# A separate set rather than another name in `DERIVED_TABLES`, because
+# everything that reads that tuple puts its contents in a `TRUNCATE`, and a
+# Neo4j database is not truncatable by SQL. The classification is the same —
+# rebuildable, disposable, never source of truth — and it is written down here
+# for the same reason the tables are: a projection nobody classified is a
+# projection a replay silently leaves stale.
+#
+# The rule this set carries: **Postgres wins on disagreement.** A full replay
+# empties the graph and rebuilds it, so anything the graph knew that Postgres
+# did not is gone by design. That is what makes it safe for no use case to write
+# here directly — and what makes a use case that did so a bug rather than a
+# shortcut, because its writes would survive exactly until the next rebuild.
+DERIVED_PROJECTIONS: frozenset[str] = frozenset({"neo4j_graph"})
 
 
 def derived_tables(*, clear_cache: bool) -> tuple[str, ...]:
@@ -289,6 +305,7 @@ class ReplayCorpus:
         make_embed: MakeEmbed,
         make_shadow: Callable[[], ShadowWorkspace] | None = None,
         blobs: BlobStore | None = None,
+        graph: GraphStore | None = None,
     ) -> None:
         self._sessions = session_factory
         self._make_normalize = make_normalize
@@ -298,6 +315,10 @@ class ReplayCorpus:
         # `NormalizeMemory`. Optional so a caller that has not wired one still
         # works — it simply skips the check rather than failing to construct.
         self._blobs = blobs
+        # Optional for the same reason, and with a sharper consequence: a replay
+        # run without one rebuilds Postgres and leaves the graph holding memory
+        # ids that no longer exist. `doctor` is where that shows up.
+        self._graph = graph
 
     async def __call__(
         self,
@@ -320,7 +341,15 @@ class ReplayCorpus:
             )
         else:
             report = await self._in_place(
-                self._sessions, resolved, clear_cache=clear_cache
+                self._sessions,
+                resolved,
+                clear_cache=clear_cache,
+                # Only a whole-corpus replay. A scoped one rebuilds part of the
+                # corpus, and the graph has no equivalent of `--source notes`
+                # until M3.1 gives its nodes a source to be narrowed by; clearing
+                # all of it would discard the other sources' projection to
+                # rebuild one.
+                clear_graph=resolved.is_complete,
             )
 
         report.into_shadow = into_shadow
@@ -365,11 +394,19 @@ class ReplayCorpus:
         await shadow.create()
         try:
             sessions = await shadow.sessions()
-            report = await self._in_place(sessions, scope, clear_cache=clear_cache)
+            # Not during the rebuild. The point of a workspace is that the live
+            # corpus stays usable while it runs, and the graph is part of the
+            # live corpus until the swap makes the workspace's tables the live
+            # ones.
+            report = await self._in_place(
+                sessions, scope, clear_cache=clear_cache, clear_graph=False
+            )
             # After loading, never during: an index built on an empty table and
             # maintained through every insert is slower and worse-connected.
             await shadow.build_indexes()
             await shadow.swap_in()
+            # The moment the memory ids the graph referenced stopped existing.
+            await self._clear_graph()
         except BaseException:
             # The live tables were never touched, so throwing the workspace away
             # is a complete rollback.
@@ -400,7 +437,12 @@ class ReplayCorpus:
         await shadow.create()
         try:
             sessions = await shadow.sessions()
-            report = await self._in_place(sessions, resolved, clear_cache=clear_cache)
+            # Never, on this path: `verify-replay` builds a rebuild in order to
+            # compare it and then throws it away. Touching the live graph here
+            # would make a read-only verification destructive.
+            report = await self._in_place(
+                sessions, resolved, clear_cache=clear_cache, clear_graph=False
+            )
             report.into_shadow = True
             report.cache_cleared = clear_cache
             report.duration_ms = int((time.monotonic() - started) * 1000)
@@ -414,6 +456,7 @@ class ReplayCorpus:
         scope: ReplayScope,
         *,
         clear_cache: bool,
+        clear_graph: bool,
     ) -> ReplayReport:
         report = ReplayReport()
 
@@ -424,6 +467,11 @@ class ReplayCorpus:
             await self._preflight_blobs(scope, source_id)
 
         await self._clear(sessions, scope, source_id, clear_cache=clear_cache)
+        if clear_graph:
+            # Alongside the truncation, for the same reason: every memory id
+            # about to be written is new, so every node the graph holds is about
+            # to refer to a row that no longer exists.
+            await self._clear_graph()
 
         if scope.rebuilds_memories:
             # One pass, interleaved: apply an event, then run the pipeline for
@@ -566,6 +614,26 @@ class ReplayCorpus:
 
             if clear_cache:
                 await session.execute(delete(models.EmbeddingCacheEntry))
+
+    async def _clear_graph(self) -> None:
+        """Empty the graph projection, if one is wired.
+
+        Not caught, and that is the deliberate half of this. A replay whose graph
+        clear failed has rebuilt Postgres and left Neo4j holding nodes keyed by
+        memory ids that no longer exist — every one of them dangling, and nothing
+        downstream able to tell the difference between a stale node and a real
+        one. Reporting success there would be reporting a rebuild that did not
+        happen.
+
+        This is also why a graph is not required to construct a `ReplayCorpus`:
+        the choice is between failing loudly when a configured graph cannot be
+        cleared and not configuring one at all, never between the two silently.
+        """
+        if self._graph is None:
+            logger.debug("replay.graph_not_configured")
+            return
+        await self._graph.clear()
+        logger.info("replay.graph_cleared")
 
     # ----------------------------------------------------------------------
     # Memories, from the log

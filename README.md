@@ -10,6 +10,8 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 M2.1 (keyword search), M2.2 (hybrid retrieval), M2.3a (measurement reliability),
 M2.3b (ranking signals, measured and switched off), M2.4 (cross-encoder reranking),
 M2.5 (citations and explainability) and M2.6 (grounded answers). **Phase 2 complete.**
+**Phase 3 in progress**: M3.0 (Neo4j and the graph schema) — infrastructure only, no extraction
+and no retrieval changes yet. See [Graph](#graph).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -874,6 +876,67 @@ there — falls through to `public.sources`. The pipeline needs no changes at al
 schema beats suffixed table names in one schema: with suffixes, every model and query would need a
 parallel definition.
 
+## Graph
+
+M3.0 adds Neo4j alongside Postgres. Infrastructure only — the schema, the port and the adapter
+exist; nothing extracts entities yet, so the graph is empty until M3.1.
+
+**Why a graph rather than more Postgres tables.** Fixed one- and two-hop relationships are
+genuinely fine in SQL and frequently faster; a join table with the right index beats a graph
+database at "which entities does this memory mention". The break comes at *variable-depth*
+traversal. "What connects this decision to that person?" is two hops or five, and which one is not
+known when the query is written. In SQL that is a recursive CTE whose readability and cost both
+degrade with depth; in Cypher it is `[*1..5]`. Traversal also costs what the neighbourhood costs
+rather than what the tables cost, because relationships are stored as pointers instead of being
+resolved through an index on every hop.
+
+**Everything in the graph is a projection.** `Memory` nodes carry `memory_id`, `external_key`,
+`kind` and `occurred_at` — no content and no chunks. Postgres stays the system of record, and a
+copy of the text here would be a second thing to keep correct and a second answer to give when the
+two differ. On any disagreement Postgres wins and the graph is rebuilt, which is why no use case
+may write to Neo4j directly: writes that bypassed the rebuild would survive exactly until the next
+one.
+
+`GraphStore.clear()` exists to make that concrete, and it is only affordable because Phase 1
+designed the derived state to be disposable. `DERIVED_PROJECTIONS` in `application/replay.py`
+classifies the graph the way `DERIVED_TABLES` classifies the tables — a separate set, because
+everything reading that tuple puts its contents inside a `TRUNCATE`.
+
+**A full replay clears the graph; a scoped one does not.** After a whole-corpus rebuild every
+memory id is new, so every node the graph held refers to a row that no longer exists. A scoped
+replay is the opposite case: `clear()` empties the entire projection, so calling it to rebuild one
+source would discard every other source's nodes. Narrowing the projection by source is M3.1's
+problem. `verify-replay` never touches the graph at all, because it is a read-only comparison.
+
+**There is no Alembic for Neo4j.** The constraints and indexes live in `adapters/graph/schema.py`,
+every statement carries `IF NOT EXISTS`, and the whole set is applied on first use rather than by a
+migration somebody has to remember to run. A `:SchemaVersion` node records which revision was
+applied, so a database that predates a constraint is distinguishable from one that has it —
+`memoryos doctor` reports the drift. Uniqueness on each label's identity property is not only a
+constraint but the index that backs `MERGE`: an unconstrained merge scans, and under concurrency
+two transactions can both find nothing and both create.
+
+**An unreachable Neo4j is degraded, not failed.** `/health/ready` returns 200 with
+`status: degraded` and `graph: false`. A 503 would be the wrong kind of correct — the body would
+accurately say the graph is down, and an orchestrator reading the code would remove an instance
+that can still serve every Phase 1 and Phase 2 request. The status code answers "should traffic
+come here?"; the body answers "what works?".
+
+```bash
+docker compose up -d          # Postgres on 5433, Neo4j on 7474 (browser) and 7687 (bolt)
+memoryos doctor               # reachability, schema version, node counts by label
+```
+
+Graph tests are marked `graph` and skip when Neo4j is absent, so the suite still runs for
+everything Phase 1 and Phase 2 do. CI starts a Neo4j service, because a permanent skip is
+indistinguishable from a passing test.
+
+Isolation works differently here than everywhere else in the suite, and it has to. Postgres gives
+the tests their own database to truncate; Neo4j Community Edition supports exactly one user
+database, so a test run and a developer's graph share it. Tests therefore isolate by identity —
+every id comes from `GraphFixture.new_id`, which records it, and teardown deletes those nodes and
+nothing else.
+
 ## Migrations
 
 ```bash
@@ -948,12 +1011,12 @@ returns `503` when the database is unreachable or `pgvector` is not installed.
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) (dependency resolution and virtualenv management)
-- Docker (for Postgres)
+- Docker (for Postgres and Neo4j)
 
 ## Quickstart
 
 ```bash
-make up        # start Postgres 17 + pgvector on host port 5433
+make up        # Postgres 17 + pgvector on 5433, Neo4j 5 on 7474 and 7687
 make install   # uv sync --frozen --extra dev
 make check     # ruff + mypy --strict + pytest
 make run       # uvicorn on http://localhost:8000
@@ -973,8 +1036,8 @@ make test-slow     # the tests that load the real model
 make phase1-check  # the whole of Phase 1, from an empty volume
 ```
 
-Integration tests are marked `integration` and need Postgres running. `slow` tests load the real
-model and are excluded from the default run.
+Integration tests are marked `integration` and need Postgres running. `graph` tests need Neo4j and
+skip without it. `slow` tests load the real model and are excluded from the default run.
 
 **The suite has its own database.** `clean_database` truncates every table, because truncation is
 the only isolation strategy that survives code under test committing its own transactions — and

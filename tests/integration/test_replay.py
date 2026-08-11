@@ -46,7 +46,11 @@ from tests.integration.conftest import (
     build_harness,
     shadow_schemas,
 )
-from tests.support.fakes import FakeEmbedder
+from tests.support.fakes import (
+    FakeEmbedder,
+    RecordingGraphStore,
+    UnreachableGraphStore,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -887,3 +891,100 @@ async def test_a_failed_shadow_replay_leaves_the_live_corpus_alone(
     # And the workspace was cleaned up rather than left holding a partial rebuild
     # for the next run to continue into.
     assert await shadow_schemas(harness.sessions) == set()
+
+
+# --------------------------------------------------------------------------
+# The graph, which is a derived projection that is not a table
+# --------------------------------------------------------------------------
+
+
+def replay_with_graph(
+    harness: Harness, graph: RecordingGraphStore
+) -> ReplayCorpus:
+    """The harness's replay, rebuilt with a graph attached.
+
+    A `RecordingGraphStore` rather than a real Neo4j, and the reason is in its
+    docstring: what is under test is which scopes decide to clear the graph,
+    which is control flow in `ReplayCorpus`. A real store would answer the same
+    question by deleting every node in the one database Community Edition
+    offers, including a developer's own.
+    """
+    embedder = FakeEmbedder()
+    return ReplayCorpus(
+        harness.sessions,
+        make_normalize=lambda factory: NormalizeMemory(
+            factory,
+            harness.blobs,
+            build_parsers(),
+            StructuralChunker(embedder),
+            enqueue_followup=False,
+        ),
+        make_embed=lambda factory: EmbedMemory(
+            factory, embedder, PostgresEmbeddingCache(factory)
+        ),
+        blobs=harness.blobs,
+        graph=graph,
+    )
+
+
+async def test_a_full_replay_clears_the_graph(harness: Harness) -> None:
+    """The classification in `DERIVED_PROJECTIONS`, made operational.
+
+    After a full replay every memory has a new id, so every node the graph held
+    refers to a row that no longer exists. Leaving them would not fail anything
+    — it would leave a graph whose nodes all look real and none of which join to
+    anything, which is the quietest possible way for a projection to be wrong.
+    """
+    graph = RecordingGraphStore()
+    await replay_with_graph(harness, graph)()
+    assert graph.clears == 1
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        ReplayScope(source_name="corpus"),
+        ReplayScope(after_seq=1),
+        ReplayScope(stage=ReplayStage.NORMALIZE),
+        ReplayScope(stage=ReplayStage.EMBED),
+    ],
+)
+async def test_a_partial_replay_leaves_the_graph_alone(
+    harness: Harness, scope: ReplayScope
+) -> None:
+    """The graph has no equivalent of `--source notes`, so a scoped replay must not touch it.
+
+    `clear` empties the whole projection. Calling it for a replay that rebuilds
+    one source would discard every other source's nodes and rebuild only one —
+    the same shape of damage `PartialShadowReplay` refuses for the tables, and
+    silent rather than refused because nothing would error.
+
+    Which leaves the graph stale for the source that *was* replayed. That is the
+    correct trade at M3.0 — the graph carries no extracted content yet — and it
+    is what M3.1 has to solve properly, by making the projection narrowable by
+    source rather than by making a partial replay destructive.
+    """
+    graph = RecordingGraphStore()
+    await replay_with_graph(harness, graph)(scope)
+    assert graph.clears == 0
+
+
+async def test_a_failing_graph_clear_fails_the_replay(harness: Harness) -> None:
+    """Not swallowed, because a half-rebuilt corpus must not report success.
+
+    A replay that rebuilt Postgres and could not clear the graph has left the
+    two disagreeing, and the whole premise of the projection is that they do
+    not.
+    """
+    with pytest.raises(ConnectionError, match="no route to the graph"):
+        await replay_with_graph(harness, UnreachableGraphStore())()
+
+
+async def test_a_replay_without_a_graph_still_runs(harness: Harness) -> None:
+    """The graph is optional wiring, which is what keeps Phase 1 and 2 working.
+
+    `harness.replay` is built without one, so this asserts the default path
+    through `_clear_graph` rather than a special case.
+    """
+    report = await harness.replay()
+    assert report.chunks > 0

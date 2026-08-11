@@ -20,6 +20,7 @@ from memoryos.adapters.connectors.filesystem import (
 )
 from memoryos.adapters.db import models
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
+from memoryos.adapters.graph.schema import SCHEMA_VERSION
 from memoryos.adapters.llm.gemini import MissingApiKey
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
 from memoryos.application.backfill import (
@@ -28,7 +29,7 @@ from memoryos.application.backfill import (
     gather_stats,
 )
 from memoryos.application.citations import ExplainedHit, explain_hits
-from memoryos.application.doctor import run_doctor
+from memoryos.application.doctor import GraphStatus, run_doctor
 from memoryos.application.evaluate import (
     compare as compare_runs,
 )
@@ -644,10 +645,45 @@ async def run_tune_weights(
     return 0
 
 
+def print_graph_status(status: GraphStatus, uri: str) -> None:
+    """The graph section of `doctor`.
+
+    "degraded" rather than "FAIL" when unreachable, and the word is chosen to
+    match what `/health/ready` returns for the same condition. A reader who sees
+    one and then the other should not have to work out whether they mean the
+    same thing.
+    """
+    if not status.reachable:
+        print(f"[degr] graph: unreachable at {uri}")
+        print(f"        {status.error}")
+        print("        retrieval and answering are unaffected; the graph is a projection")
+        return
+
+    if status.error is not None:
+        print(f"[FAIL] graph: reachable at {uri} but not queryable")
+        print(f"        {status.error}")
+        return
+
+    applied = "not applied" if status.schema_version is None else str(status.schema_version)
+    mark = "ok  " if status.current else "FAIL"
+    print(f"[{mark}] graph schema: {applied} (code expects {status.expected_version})")
+    if not status.current:
+        print("        the database was written under a different set of constraints")
+    total = sum(status.counts.values())
+    print(f"[ok  ] graph nodes: {total}")
+    for label, count in sorted(status.counts.items()):
+        print(f"        {label}: {count}")
+
+
 async def run_doctor_command(settings: Settings) -> int:
     container = Container.build(settings)
     try:
-        report = await run_doctor(container.database.session_factory, container.embedder)
+        report = await run_doctor(
+            container.database.session_factory,
+            container.embedder,
+            graph=container.graph,
+            graph_schema_version=SCHEMA_VERSION,
+        )
         print(f"model:   {container.embedder.model_id}")
         print(f"window:  {container.embedder.max_sequence_tokens} tokens")
         print(f"chunker: {container.chunker.version}\n")
@@ -658,6 +694,9 @@ async def run_doctor_command(settings: Settings) -> int:
                 print(f"        {finding.detail}")
                 for example in finding.examples:
                     print(f"        - {example}")
+        if report.graph is not None:
+            print()
+            print_graph_status(report.graph, container.settings.neo4j_uri)
         print()
         print("healthy" if report.healthy else "problems found")
     finally:

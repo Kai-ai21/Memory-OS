@@ -115,6 +115,50 @@ class SearchMode(StrEnum):
 DEFAULT_SEARCH_MODE = SearchMode.HYBRID
 
 
+class GraphLabel(StrEnum):
+    """The node kinds the graph projection knows about.
+
+    Explicit values rather than `auto()`, which lowercases. Cypher labels are
+    conventionally PascalCase and are case-sensitive, so `Memory` and `memory`
+    are two different labels — a mismatch between a write and a read would not
+    error, it would simply match nothing.
+
+    `Memory` is deliberately a *projection*: `memory_id`, `external_key`, `kind`
+    and `occurred_at`, and no content. Postgres stays the system of record, and a
+    copy of the text here would be a second thing to keep correct and a second
+    answer to give when the two disagree.
+    """
+
+    MEMORY = "Memory"
+    ENTITY = "Entity"
+    SOURCE = "Source"
+
+
+class EdgeType(StrEnum):
+    """The relationship types, defined now and populated in M3.1 and M3.3.
+
+    Declared ahead of the code that writes them because the schema is the
+    milestone: a traversal cannot be written against relationship types that are
+    invented one at a time by whatever happens to need them, and a typo in a
+    relationship type is invisible in Cypher — the pattern just matches nothing.
+    """
+
+    MENTIONS = "MENTIONS"
+    RELATES_TO = "RELATES_TO"
+    FROM_SOURCE = "FROM_SOURCE"
+
+
+# The property that identifies a node of each label, which is also the property
+# each label's uniqueness constraint is declared on. One mapping, because a
+# `MERGE` that keyed on a different property than the constraint would create
+# duplicates rather than fail.
+IDENTITY_PROPERTY: dict[GraphLabel, str] = {
+    GraphLabel.MEMORY: "memory_id",
+    GraphLabel.ENTITY: "entity_id",
+    GraphLabel.SOURCE: "source_id",
+}
+
+
 class EmbeddingRole(StrEnum):
     """Which side of a retrieval a piece of text is on.
 

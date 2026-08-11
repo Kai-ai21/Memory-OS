@@ -19,6 +19,7 @@ from memoryos.adapters.embedding.sentence_transformers import (
     SentenceTransformerEmbedder,
     build_embedder,
 )
+from memoryos.adapters.graph.neo4j_store import Neo4jGraphStore
 from memoryos.adapters.llm.gemini import GeminiLanguageModel
 from memoryos.adapters.parsers.registry import ParserRegistry
 from memoryos.adapters.parsers.registry import build_default_registry as build_parser_registry
@@ -49,6 +50,7 @@ class Container:
     keywords: PostgresKeywordStore
     reranker: CrossEncoderReranker | None
     chunker: StructuralChunker
+    graph: Neo4jGraphStore
 
     @classmethod
     def build(cls, settings: Settings) -> "Container":
@@ -85,6 +87,14 @@ class Container:
                 )
                 if settings.rerank_enabled
                 else None
+            ),
+            # Always constructed, never connected here. Building a driver is
+            # local work — it validates the URI and allocates an empty pool —
+            # so a machine with no Neo4j running still gets a working container
+            # and a working CLI. The graph is the only thing that stops working,
+            # which is the whole point of it being a projection.
+            graph=Neo4jGraphStore(
+                settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password
             ),
         )
 
@@ -186,10 +196,15 @@ class Container:
                 self.settings.database_url, echo=self.settings.db_echo
             ),
             blobs=self.blobs,
+            # A full replay clears the graph along with the derived tables. See
+            # `ReplayCorpus._clear_graph` for why it is not simply another name
+            # in `DERIVED_TABLES`.
+            graph=self.graph,
         )
 
     async def dispose(self) -> None:
         await self.database.dispose()
+        await self.graph.close()
 
 
 class WindowMisalignment(RuntimeError):

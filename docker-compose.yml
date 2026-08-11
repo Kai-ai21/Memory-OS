@@ -18,5 +18,52 @@ services:
       timeout: 3s
       retries: 10
 
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      # `neo4j/<password>`: the username is fixed by the image, only the
+      # password is ours to choose. `MEMOS_NEO4J_PASSWORD` rather than a name of
+      # this file's own, because that is the variable the application already
+      # reads — and compose picks it up from `.env`, so one value configures both
+      # the container and the client that connects to it.
+      #
+      # Neo4j 5 rejects any password under eight characters outright, which is
+      # how a shorter default here would produce a container that starts and then
+      # refuses every connection.
+      NEO4J_AUTH: neo4j/${MEMOS_NEO4J_PASSWORD:-memoryos}
+      # Also passed into the container, because the healthcheck below runs
+      # *inside* it and cannot see compose's interpolation. Without this the
+      # probe would authenticate with a hardcoded password while the server used
+      # the configured one, and a custom password would produce a container that
+      # works and never reports healthy.
+      MEMOS_NEO4J_PASSWORD: ${MEMOS_NEO4J_PASSWORD:-memoryos}
+      NEO4J_server_memory_heap_max__size: 512M
+      NEO4J_server_memory_pagecache_size: 256M
+    ports:
+      # 7474 is the browser at http://localhost:7474, 7687 is bolt, which is
+      # what the driver speaks. Both, because the browser is the fastest way to
+      # see what a traversal actually matched.
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4jdata:/data
+    healthcheck:
+      # Over bolt rather than HTTP: 7474 answers well before the database is
+      # ready to run a query, so an HTTP probe reports healthy while the driver
+      # is still being refused.
+      test:
+        - CMD-SHELL
+        - >-
+          cypher-shell -u neo4j -p "$${MEMOS_NEO4J_PASSWORD}"
+          "RETURN 1" || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      # Neo4j takes appreciably longer than Postgres to become usable, and
+      # without this the retries are spent on a JVM that has not finished
+      # starting.
+      start_period: 30s
+
 volumes:
   pgdata:
+  neo4jdata:

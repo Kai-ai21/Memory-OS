@@ -11,8 +11,17 @@ import hashlib
 import math
 import re
 from collections.abc import Callable, Sequence
+from uuid import UUID
 
-from memoryos.application.ports import Embedder, LanguageModel, Reranker
+from memoryos.application.ports import (
+    Embedder,
+    EntityNode,
+    GraphEdge,
+    GraphPath,
+    LanguageModel,
+    MemoryNode,
+    Reranker,
+)
 
 FAKE_MODEL_ID = "fake/deterministic@1"
 
@@ -189,3 +198,46 @@ class FakeLanguageModel(LanguageModel):
     @property
     def last_user_prompt(self) -> str:
         return self.calls[-1][1]
+
+
+class RecordingGraphStore:
+    """A `GraphStore` that records what was asked of it and stores nothing.
+
+    Deliberately used where a real Neo4j would also work. What the replay tests
+    need to establish is *which scopes clear the graph* — a decision made
+    entirely in `ReplayCorpus`, and one that a real store would answer with a
+    `DETACH DELETE` over the whole database. Neo4j Community Edition has one
+    user database, so that assertion would be run against whatever graph the
+    developer happens to have, to prove something about control flow that never
+    needed a database to be proved.
+    """
+
+    def __init__(self) -> None:
+        self.clears = 0
+        self.memories: list[MemoryNode] = []
+        self.entities: list[EntityNode] = []
+        self.edges: list[GraphEdge] = []
+
+    async def upsert_memory(self, node: MemoryNode) -> None:
+        self.memories.append(node)
+
+    async def upsert_entity(self, node: EntityNode) -> None:
+        self.entities.append(node)
+
+    async def link(self, edge: GraphEdge) -> None:
+        self.edges.append(edge)
+
+    async def neighbours(
+        self, entity_id: UUID, *, depth: int = 2, limit: int = 50
+    ) -> list[GraphPath]:
+        return []
+
+    async def clear(self) -> None:
+        self.clears += 1
+
+
+class UnreachableGraphStore(RecordingGraphStore):
+    """A graph that raises on `clear`, for the case a replay must not swallow."""
+
+    async def clear(self) -> None:
+        raise ConnectionError("no route to the graph")

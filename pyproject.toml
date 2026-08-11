@@ -22,6 +22,7 @@ dependencies = [
   "pydantic-settings>=2.6",
   "structlog>=24.4",
   "google-genai>=1.0",
+  "neo4j>=5.26",
 ]
 
 [project.scripts]
@@ -46,6 +47,7 @@ testpaths = ["tests"]
 addopts = "-q --strict-markers -m 'not slow'"
 markers = [
   "integration: requires a running Postgres",
+  "graph: requires a running Neo4j",
   "slow: downloads and loads the real embedding model",
 ]
 

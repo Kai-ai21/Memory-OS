@@ -1,9 +1,11 @@
-from dataclasses import dataclass
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
 import pytest
+from neo4j import AsyncGraphDatabase
 from sqlalchemy import delete, func, select
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -18,6 +20,7 @@ from memoryos.adapters.db.repositories import (
     SqlAlchemySourceRepository,
 )
 from memoryos.adapters.db.shadow import SHADOW_SCHEMA, PostgresShadowSchema
+from memoryos.adapters.graph.neo4j_store import Neo4jGraphStore
 from memoryos.adapters.parsers.registry import build_default_registry as build_parsers
 from memoryos.application.embed import EmbedMemory, EmbedReport
 from memoryos.application.normalize import NormalizeMemory
@@ -297,6 +300,94 @@ async def add_source(
     async with sessions.begin() as session:
         await SqlAlchemySourceRepository(session).add(source)
     return source
+
+
+# --------------------------------------------------------------------------
+# The graph harness
+#
+# Isolation here works differently from everywhere else in this suite, and it
+# has to. `clean_database` truncates, because Postgres gives the suite its own
+# database to truncate — `memos_test`, which exists precisely so that truncation
+# can never reach a working corpus. Neo4j Community Edition has no equivalent:
+# it supports exactly one user database, so a test run and a developer's own
+# graph share it, and a `clear()` in a fixture would do to the graph exactly what
+# the M2.0a incidents did to the corpus.
+#
+# So isolation is by identity instead of by database. Every id a test uses comes
+# from `GraphFixture.new_id`, which records it; teardown deletes those nodes and
+# nothing else. Fresh UUIDs cannot collide with anything already in the graph, so
+# the tests are isolated from existing data in both directions without emptying
+# it.
+# --------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class GraphFixture:
+    """A graph store, plus the ids it is allowed to delete afterwards."""
+
+    store: Neo4jGraphStore
+    uri: str
+    user: str
+    password: str
+    minted: list[str] = field(default_factory=list)
+
+    def new_id(self) -> UUID:
+        """A fresh id, remembered so teardown can find the node again."""
+        value = new_id()
+        self.minted.append(str(value))
+        return value
+
+    async def cleanup(self) -> None:
+        """Delete only what this test created.
+
+        Its own driver rather than the store's, because deleting by id is test
+        infrastructure and not something `GraphStore` should offer — a port with
+        a node-level delete on it is a port that invites a use case to keep the
+        graph up to date by hand instead of rebuilding it.
+        """
+        if not self.minted:
+            return
+        driver = AsyncGraphDatabase.driver(self.uri, auth=(self.user, self.password))
+        try:
+            await driver.execute_query(
+                "MATCH (n) WHERE n.memory_id IN $ids OR n.entity_id IN $ids "
+                "OR n.source_id IN $ids DETACH DELETE n",
+                {"ids": self.minted},
+            )
+        finally:
+            await driver.close()
+
+
+@pytest.fixture
+async def graph(settings: Settings) -> AsyncIterator[GraphFixture]:
+    """A reachable graph store, or a skipped test.
+
+    Skipped rather than failed when Neo4j is absent, which is the same judgement
+    the milestone makes everywhere else: the graph is optional infrastructure,
+    and a developer without it running should still be able to run the suite for
+    everything Phase 1 and Phase 2 do. CI starts a Neo4j service so the skip does
+    not quietly become permanent.
+    """
+    store = Neo4jGraphStore(
+        settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password
+    )
+    try:
+        await store.verify()
+    except Exception as exc:
+        await store.close()
+        pytest.skip(f"no Neo4j at {settings.neo4j_uri}: {exc}")
+
+    fixture = GraphFixture(
+        store=store,
+        uri=settings.neo4j_uri,
+        user=settings.neo4j_user,
+        password=settings.neo4j_password,
+    )
+    try:
+        yield fixture
+    finally:
+        await fixture.cleanup()
+        await store.close()
 
 
 @pytest.fixture

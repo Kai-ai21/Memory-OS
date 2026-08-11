@@ -21,6 +21,7 @@ from memoryos.application.projection import (
 )
 from memoryos.application.replay import (
     CACHE_TABLE,
+    DERIVED_PROJECTIONS,
     DERIVED_TABLES,
     REPLAYABLE_EVENT_TYPES,
     SHADOW_TABLES,
@@ -167,6 +168,24 @@ def test_the_cache_is_kept_by_default_and_cleared_on_request() -> None:
     assert CACHE_TABLE in derived_tables(clear_cache=True)
     # Keeping the cache must not spare anything else.
     assert set(derived_tables(clear_cache=False)) == set(DERIVED_TABLES) - {CACHE_TABLE}
+
+
+def test_the_graph_is_classified_as_derived_and_is_not_a_table() -> None:
+    """M3.0's addition to the classification, and why it needed its own set.
+
+    The graph is derived by every test the other sets apply: rebuildable from
+    the log and the blobs, never source of truth, safe to destroy. What it is
+    not is a Postgres table, and everything reading `DERIVED_TABLES` puts its
+    contents inside a `TRUNCATE` — so listing it there would produce a replay
+    that fails on a syntax error rather than one that clears the graph.
+    """
+    assert "neo4j_graph" in DERIVED_PROJECTIONS
+    # Kept out of the table sets, which the classification test above checks
+    # against real SQLAlchemy metadata. A name in there that is not a table
+    # would fail that test, which is the intended safety net working.
+    tables = set(DERIVED_TABLES) | SOURCE_OF_TRUTH_TABLES | USER_AUTHORED_TABLES
+    assert not (DERIVED_PROJECTIONS & tables)
+    assert not (DERIVED_PROJECTIONS & set(derived_tables(clear_cache=True)))
 
 
 def test_the_shadow_workspace_copies_everything_except_the_cache() -> None:

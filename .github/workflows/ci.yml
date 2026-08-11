@@ -15,8 +15,23 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U memos -d memos"
           --health-interval 5s --health-timeout 3s --health-retries 10
+      # Without this the `graph` tests skip, and a permanent skip is
+      # indistinguishable from a passing test in the summary. The service is
+      # what stops "Neo4j is optional" turning into "the graph is untested".
+      neo4j:
+        image: neo4j:5-community
+        env:
+          NEO4J_AUTH: neo4j/memoryos
+        ports: ["7687:7687"]
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p memoryos 'RETURN 1'"
+          --health-interval 10s --health-timeout 5s --health-retries 20
+          --health-start-period 30s
     env:
       MEMOS_DATABASE_URL: postgresql+asyncpg://memos:memos@localhost:5432/memos
+      MEMOS_NEO4J_URI: bolt://localhost:7687
+      MEMOS_NEO4J_USER: neo4j
+      MEMOS_NEO4J_PASSWORD: memoryos
       # Pinned so the cache step below and the code agree on where weights live.
       HF_HOME: ${{ github.workspace }}/var/hf
       MEMOS_HF_HOME: ${{ github.workspace }}/var/hf

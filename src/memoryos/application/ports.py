@@ -19,7 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.domain.entities import IngestionEvent, Memory, RawArtifact, Source
 from memoryos.domain.jobs import Job, JobSpec
-from memoryos.domain.values import ContentHash, MemoryKind, SourceKind, TimeProvenance
+from memoryos.domain.values import (
+    ContentHash,
+    EdgeType,
+    GraphLabel,
+    MemoryKind,
+    SourceKind,
+    TimeProvenance,
+)
 
 
 class SourceRepository(Protocol):
@@ -610,6 +617,152 @@ class Reranker(Protocol):
         a cosine similarity or a fused RRF score — which is why the caller
         replaces the score outright rather than combining it with anything.
         """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryNode:
+    """A memory as the graph knows it: identity and nothing else.
+
+    Four fields, and the omissions are the design. No content, no chunks, no
+    normalized text — those live in Postgres, which stays the system of record.
+    A graph carrying its own copy would be a second source of truth, and the
+    question "which one is right?" has no good answer once they differ.
+
+    What is here is what a traversal needs to *report* what it found: an id to
+    join back on, a key a person recognises, and a kind and a date to filter by
+    before paying for the join.
+    """
+
+    memory_id: UUID
+    external_key: str
+    kind: MemoryKind
+    occurred_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class EntityNode:
+    """A thing the corpus talks about. Populated by M3.1's extraction.
+
+    `name` is what the text said; `canonical_name` is what M3.2 resolved it to,
+    and the two are separate fields rather than one overwritten field because
+    losing the surface form loses the evidence for the resolution. "Dr. Chen",
+    "Chen" and "chen@example.com" collapsing to one canonical entity is only
+    reviewable if what each mention actually said survives.
+
+    `confidence` is the extractor's, and it is on the node rather than the edge
+    because it describes how sure we are the entity *exists*, not how sure we
+    are that a given memory mentions it.
+    """
+
+    entity_id: UUID
+    name: str
+    canonical_name: str
+    type: str
+    confidence: float
+
+
+@dataclass(frozen=True, slots=True)
+class GraphNode:
+    """A node by label and identity, with whatever properties it carries.
+
+    The untyped counterpart to `MemoryNode` and `EntityNode` above: those are
+    what a writer supplies, this is what a *reader* gets back, because a
+    traversal returns whatever it walked through and cannot know in advance
+    which labels that will be.
+    """
+
+    label: GraphLabel
+    key: str
+    properties: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class GraphEdge:
+    """One relationship, with both endpoints named by identity.
+
+    The endpoints are `GraphNode` rather than ids alone because a relationship
+    needs to know which label it is attaching to: `entity_id` and `memory_id`
+    are both UUIDs, and a Cypher `MATCH` against the wrong label matches
+    nothing at all rather than failing.
+    """
+
+    type: EdgeType
+    start: GraphNode
+    end: GraphNode
+    properties: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class GraphPath:
+    """A walk from the queried node to something else, in order.
+
+    `nodes` and `edges` interleave: `nodes[i]` is joined to `nodes[i + 1]` by
+    `edges[i]`, so there is always exactly one fewer edge than node. The whole
+    path is returned rather than just the far end because the *route* is the
+    answer — "what connects this decision to that person" is not answered by
+    naming the person.
+    """
+
+    nodes: tuple[GraphNode, ...]
+    edges: tuple[EdgeType, ...]
+
+    @property
+    def length(self) -> int:
+        """Hops. A path to an immediate neighbour has length 1."""
+        return len(self.edges)
+
+
+class GraphStore(Protocol):
+    """The graph projection: relationships as first-class objects.
+
+    **Why this is not more Postgres tables.** Fixed one- and two-hop joins are
+    genuinely fine in SQL and frequently faster; a join table with the right
+    index beats a graph database at "which entities does this memory mention".
+    The break comes at *variable-depth* traversal — "what connects this decision
+    to that person?" is two hops or five, and which one is not known when the
+    query is written. In SQL that is a recursive CTE whose cost and readability
+    both degrade with depth; in Cypher it is `[*1..5]`. Traversal also costs
+    what the neighbourhood costs rather than what the tables cost, because the
+    relationships are stored as pointers rather than resolved through an index
+    on every hop.
+
+    **Everything here is a projection, and `clear` is the proof.** Nothing in
+    this store is source of truth: it is rebuilt from Postgres, and on any
+    disagreement Postgres wins and the graph is thrown away. That is only
+    affordable because Phase 1 designed the derived state to be disposable —
+    and it is why no use case may write here directly. A use case that wrote to
+    the graph and to Postgres would have made the graph a second source of
+    truth in everything but name, and the first replay would silently discard
+    whatever only the graph knew.
+
+    Every write is idempotent (`MERGE`, never `CREATE`), because a rebuild that
+    could not be run twice would not be a rebuild.
+    """
+
+    async def upsert_memory(self, node: MemoryNode) -> None: ...
+
+    async def upsert_entity(self, node: EntityNode) -> None: ...
+
+    async def link(self, edge: GraphEdge) -> None: ...
+
+    async def neighbours(
+        self, entity_id: UUID, *, depth: int = 2, limit: int = 50
+    ) -> list[GraphPath]:
+        """Paths of 1 to `depth` hops out from an entity, shortest first.
+
+        Undirected: `MENTIONS` points from a memory to an entity, so a
+        direction-respecting traversal from an entity would find nothing at all.
+
+        `limit` bounds paths rather than nodes, and the two differ sharply — a
+        well-connected entity has combinatorially many paths to the same handful
+        of neighbours. Shortest-first is what makes the bound useful rather than
+        arbitrary.
+        """
+        ...
+
+    async def clear(self) -> None:
+        """Empty the projection, leaving the schema in place."""
         ...
 
 
