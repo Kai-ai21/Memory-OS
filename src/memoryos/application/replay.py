@@ -132,6 +132,11 @@ DERIVED_TABLES: tuple[str, ...] = (
     # ids, which are minted per write. That is a schema change rather than a
     # classification change, so it is written down here rather than done
     # quietly, and `resolve-entities` must be re-run after any full replay.
+    # M3.3, and first in the list because it references entities, memories and
+    # chunks all three. Derived without the discomfort `entity_merges` carries:
+    # nothing here is anybody's judgement, so re-running the extractor rebuilds
+    # it exactly as re-running the embedder rebuilds a vector.
+    "entity_relationships",
     "entity_merges",
     "entity_mentions",
     "entities",

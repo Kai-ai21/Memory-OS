@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from uuid import UUID
 
 import structlog
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -349,7 +349,14 @@ class ResolveEntities:
                 # doing the wrong thing, which is the good version of this bug.
                 .on_conflict_do_nothing(
                     index_elements=["winner_id", "loser_id"],
-                    index_where=models.EntityMerge.status == MergeStatus.PENDING.value,
+                    # A literal, not a bound parameter. Postgres matches
+                    # `ON CONFLICT` to a partial index by comparing the
+                    # predicate to the index's own, and it cannot prove
+                    # `status = $8` equals `status = 'pending'` — the statement
+                    # fails to plan at all. Comparing a column to an enum value
+                    # produces exactly that bound parameter, which is why this
+                    # is spelled out instead.
+                    index_where=text(f"status = '{MergeStatus.PENDING.value}'"),
                 )
                 .returning(models.EntityMerge.id)
             )

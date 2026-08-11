@@ -139,6 +139,34 @@ class EntityType(StrEnum):
     DECISION = auto()
 
 
+class Predicate(StrEnum):
+    """What one entity does to another.
+
+    **Typed and directed, and both halves earn their place.** An untyped edge
+    says two things are related, which is close to useless for traversal: at
+    depth three every entity relates to every other, so a query that follows
+    "related" returns the corpus. `USES` and `AUTHORED_BY` let a question be
+    asked instead of a neighbourhood being dumped.
+
+    Direction is not symmetric and cannot be flattened. "A supersedes B" and "B
+    supersedes A" are contradictory claims about the same pair, and an edge that
+    could not tell them apart would make the graph unable to answer the one
+    question `SUPERSEDES` exists for.
+
+    Closed, for the reason `EntityType` is: an open predicate vocabulary is what
+    a language model produces when allowed, and `USES` beside `USED_BY` beside
+    `UTILIZES` is three names for one traversal that each return a third of it.
+    """
+
+    USES = auto()
+    DEPENDS_ON = auto()
+    PART_OF = auto()
+    AUTHORED_BY = auto()
+    MENTIONS = auto()
+    SUPERSEDES = auto()
+    RELATES_TO = auto()
+
+
 class MergeStrategy(StrEnum):
     """How a merge candidate was found.
 

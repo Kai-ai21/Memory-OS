@@ -19,7 +19,7 @@ from enum import StrEnum, auto
 from uuid import UUID
 
 import structlog
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -145,16 +145,20 @@ class ExtractEntities:
             return await session.get(models.Memory, memory_id)
 
     async def _already_current(self, memory_id: UUID, version: str) -> bool:
-        stmt = (
-            select(models.EntityMention.id)
-            .where(
-                models.EntityMention.memory_id == memory_id,
-                models.EntityMention.extractor_version == version,
-            )
-            .limit(1)
+        """Whether this memory has already been extracted at this version.
+
+        Reads the marker on `memories` rather than probing for mentions, and the
+        difference is the whole point: "has mentions" and "has been extracted"
+        are different questions, and they disagree for every memory that
+        legitimately contains no entities. Probing for mentions never marks
+        those done, so each run paid to extract them again and the pending
+        count never reached zero.
+        """
+        stmt = select(models.Memory.entity_extractor_version).where(
+            models.Memory.id == memory_id
         )
         async with self._sessions() as session:
-            return (await session.execute(stmt)).first() is not None
+            return (await session.execute(stmt)).scalar_one_or_none() == version
 
     async def _chunks(self, memory_id: UUID) -> list[tuple[UUID, str]]:
         stmt = (
@@ -188,6 +192,14 @@ class ExtractEntities:
                 delete(models.EntityMention).where(
                     models.EntityMention.memory_id == memory_id
                 )
+            )
+            # In the same transaction as the mentions, so a memory is never
+            # marked extracted without the rows that extraction produced — and
+            # never has the rows without the mark.
+            await session.execute(
+                update(models.Memory)
+                .where(models.Memory.id == memory_id)
+                .values(entity_extractor_version=version)
             )
 
             for (chunk_id, chunk_text), candidates in zip(chunks, found, strict=True):

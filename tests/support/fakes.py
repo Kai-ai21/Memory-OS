@@ -11,19 +11,22 @@ import hashlib
 import math
 import re
 from collections.abc import Callable, Sequence
-from uuid import UUID
+from itertools import pairwise
+from uuid import UUID, uuid4
 
 from memoryos.application.ports import (
     Embedder,
     EntityNode,
+    EntityRef,
     ExtractedEntity,
+    ExtractedRelationship,
     GraphEdge,
     GraphPath,
     LanguageModel,
     MemoryNode,
     Reranker,
 )
-from memoryos.domain.values import EntityType, MemoryKind
+from memoryos.domain.values import EntityType, MemoryKind, Predicate
 
 FAKE_MODEL_ID = "fake/deterministic@1"
 
@@ -271,13 +274,18 @@ class FakeEntityExtractor:
         entity_type: EntityType = EntityType.CONCEPT,
         confidence: float = 0.9,
         phantom_names: Sequence[str] = (),
+        predicate: Predicate = Predicate.USES,
+        phantom_relationship: bool = False,
     ) -> None:
         self._version = version
         self._pattern = re.compile(pattern)
         self._type = entity_type
         self._confidence = confidence
         self._phantoms = list(phantom_names)
+        self._predicate = predicate
+        self._phantom_relationship = phantom_relationship
         self.calls: list[str] = []
+        self.relationship_calls: list[str] = []
 
     @property
     def version(self) -> str:
@@ -310,4 +318,40 @@ class FakeEntityExtractor:
             )
             for name in self._phantoms
         )
+        return found
+
+    async def extract_relationships(
+        self, text: str, entities: Sequence[EntityRef]
+    ) -> list[ExtractedRelationship]:
+        """Chain the supplied entities with a fixed predicate.
+
+        Deterministic and structurally valid: every endpoint comes from the
+        supplied list, so the fake exercises the storage path without ever
+        producing the invented endpoint the real adapter has to guard against.
+        `phantom_relationship` is how a test asks for that failure explicitly.
+        """
+        self.relationship_calls.append(text)
+        pairs = list(pairwise(entities))
+        found = [
+            ExtractedRelationship(
+                subject_id=left.entity_id,
+                object_id=right.entity_id,
+                predicate=self._predicate,
+                confidence=self._confidence,
+                evidence=f"{left.name} -> {right.name}",
+            )
+            for left, right in pairs
+        ]
+        if self._phantom_relationship and entities:
+            # An endpoint that is not in the supplied set, which is what a real
+            # model occasionally invents.
+            found.append(
+                ExtractedRelationship(
+                    subject_id=entities[0].entity_id,
+                    object_id=uuid4(),
+                    predicate=self._predicate,
+                    confidence=0.99,
+                    evidence="an entity nobody supplied",
+                )
+            )
         return found

@@ -312,3 +312,35 @@ async def test_the_entity_type_vocabulary_is_closed(pipeline: Pipeline) -> None:
     assert await extractor.extract(text, kind=MemoryKind.NOTE) == []
     assert extractor.stats.dropped_bad_type == 1
     assert set(EntityType) and "spacecraft" not in {member.value for member in EntityType}
+
+
+async def test_a_memory_with_no_entities_is_still_marked_extracted(
+    pipeline: Pipeline,
+) -> None:
+    """The M3.1 defect this fixes, and the reason the skip reads a marker.
+
+    "Has mentions" and "has been extracted" are different questions, and they
+    disagree for every memory that legitimately contains no entities. Keying the
+    skip on mentions never marked those done, so every run paid a model call to
+    rediscover that there was nothing there — measured on the real corpus as 56
+    memories processed, 34 with mentions, and a pending queue that barely moved.
+    """
+    memory_id, _ = await one_memory(pipeline)
+    # An extractor that finds nothing at all, which is a legitimate outcome.
+    extractor = FakeEntityExtractor(pattern=r"zzzznomatchzzzz")
+    extract = ExtractEntities(pipeline.sessions, extractor)
+
+    first = await extract(memory_id)
+    assert first.outcome is ExtractOutcome.EXTRACTED
+    assert first.mentions == 0
+
+    second = await extract(memory_id)
+
+    assert second.outcome is ExtractOutcome.SKIPPED
+    # The model was not consulted again for a memory already known to be empty.
+    assert len(extractor.calls) == first.chunks
+
+    async with pipeline.sessions() as session:
+        memory = await session.get(models.Memory, memory_id)
+        assert memory is not None
+        assert memory.entity_extractor_version == extractor.version

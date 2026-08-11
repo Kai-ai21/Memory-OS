@@ -36,6 +36,7 @@ from memoryos.application.jobs.handlers import build_default_registry
 from memoryos.application.jobs.registry import HandlerRegistry
 from memoryos.application.normalize import NormalizeMemory
 from memoryos.application.ports import Chunker, Embedder, LanguageModel
+from memoryos.application.relationships import ExtractRelationships
 from memoryos.application.replay import ReplayCorpus
 from memoryos.application.search import FusionWeights, SearchMemories
 from memoryos.application.sync import SyncSource
@@ -146,6 +147,11 @@ class Container:
             self.language_model(),
             batch_size=self.settings.extraction_batch_size,
             max_tokens=self.settings.extraction_max_tokens,
+        )
+
+    def relationships(self) -> ExtractRelationships:
+        return ExtractRelationships(
+            self.database.session_factory, self.extractor(), self.graph
         )
 
     def extract(self) -> ExtractEntities:
