@@ -22,6 +22,7 @@ from memoryos.domain.jobs import Job, JobSpec
 from memoryos.domain.values import (
     ContentHash,
     EdgeType,
+    EntityType,
     GraphLabel,
     MemoryKind,
     SourceKind,
@@ -616,6 +617,67 @@ class Reranker(Protocol):
         Higher is better. The scale is the model's own and is not comparable to
         a cosine similarity or a fused RRF score — which is why the caller
         replaces the score outright rather than combining it with anything.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractedEntity:
+    """One entity the extractor found, with offsets it has *verified*.
+
+    `char_start` and `char_end` index into the text that was handed to
+    `extract`, and the invariant is exact:
+
+        text[char_start:char_end] == name
+
+    That is checked by the extractor before this object exists, and it is the
+    whole reason the offsets are on this type rather than left to the caller.
+    A language model asked where a name appears returns a plausible number; it
+    is guessing, and a mention stored at a guessed offset points at whatever
+    text happens to live there. The provenance chain M2.5 built for citations is
+    only worth having if every link in it was checked.
+
+    No `canonical_name` here. Canonicalisation is the storage layer's decision
+    and M3.2's problem; an extractor that returned one would be quietly voting
+    on resolution.
+    """
+
+    name: str
+    type: EntityType
+    confidence: float
+    char_start: int
+    char_end: int
+
+
+class EntityExtractor(Protocol):
+    """Finds the things a piece of text talks about.
+
+    Chunk-level rather than memory-level, for two reasons that point the same
+    way. A 500-token chunk gives markedly better precision than a 5,000-token
+    document — the model has less room to drift into summarising — and the
+    mention needs chunk-level offsets anyway, so extracting per document would
+    mean mapping offsets back onto chunks afterwards.
+
+    `version` follows the M1.4 chunker pattern and exists for the same reason:
+    it encodes the model *and* the prompt, so improving extraction becomes a
+    query — select the mentions carrying the old version and redo only those —
+    instead of a full corpus rebuild. Two extractors that disagree must never
+    share a version string, because the version is the only record of what
+    produced a mention.
+    """
+
+    @property
+    def version(self) -> str:
+        """Identifies the extractor, its model, and its prompt."""
+        ...
+
+    async def extract(self, text: str, *, kind: MemoryKind) -> list[ExtractedEntity]:
+        """Entities explicitly present in `text`, with verified offsets.
+
+        `kind` steers the prompt rather than the parsing: code wants
+        identifiers and library names, prose wants people and organisations, and
+        a single prompt that tries to serve both returns English words from
+        source files.
         """
         ...
 

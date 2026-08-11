@@ -100,6 +100,22 @@ USER_AUTHORED_TABLES: frozenset[str] = frozenset({"query_judgements"})
 # child-before-parent, so truncating or dropping them in sequence never fights a
 # foreign key.
 DERIVED_TABLES: tuple[str, ...] = (
+    # M3.1's two, and the pair that stretches the word "derived" hardest.
+    #
+    # They are rebuildable — re-running `extract-entities` produces them from
+    # the memories, which the log produces — but a replay does *not* rebuild
+    # them, because doing so would mean an LLM call per chunk on every rebuild.
+    # So a full replay empties these and leaves them empty until extraction is
+    # run again, which is the honest outcome rather than a gap: every chunk id
+    # is new after a rebuild, so every mention's `chunk_id` would dangle and
+    # every offset would point into text that no longer exists at that row.
+    #
+    # Classifying them source-of-truth instead would be worse in a way that is
+    # easy to miss: it would assert that a language model's output at a
+    # particular moment is irreplaceable input, and it would make the replay
+    # guarantee false, since nothing in the log can reconstruct them.
+    "entity_mentions",
+    "entities",
     "memory_chunks",
     "memories",
     "jobs",

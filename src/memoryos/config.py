@@ -107,6 +107,15 @@ class Settings(BaseSettings):
     # passage that looks vaguely relevant.
     answer_token_budget: int = 6000
     answer_max_tokens: int = 1024
+    # Chunks per extraction request (M3.1). The free tier's binding constraint
+    # is requests per day, not tokens per request, so batching is what decides
+    # whether a corpus of this size can be extracted at all: 1,308 chunks one at
+    # a time exceeds the daily cap before anything else goes wrong.
+    extraction_batch_size: int = 8
+    # Room for the JSON of a whole batch. Too small and the response is
+    # truncated mid-object, which the parser reports as malformed rather than as
+    # what it is.
+    extraction_max_tokens: int = 2048
     # The graph projection. Bolt rather than HTTP: it is what the official
     # driver speaks, and the browser on 7474 is for reading traversals by eye.
     #

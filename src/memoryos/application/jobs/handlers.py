@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from memoryos.adapters.blobs.filesystem import BlobNotFound
 from memoryos.adapters.parsers.registry import build_default_registry as build_parser_registry
 from memoryos.application.embed import EmbedMemory
+from memoryos.application.extraction import ExtractEntities
 from memoryos.application.jobs.registry import Handler, HandlerRegistry, JobContext
 from memoryos.application.normalize import NormalizeMemory
 from memoryos.application.ports import (
@@ -16,6 +17,8 @@ from memoryos.application.ports import (
     Connector,
     Embedder,
     EmbeddingCache,
+    EntityExtractor,
+    GraphStore,
 )
 from memoryos.application.sync import SyncSource
 from memoryos.domain.jobs import JobType, PermanentError, TransientError
@@ -42,6 +45,32 @@ def make_embed_handler(
         logger.info("embed.job_finished", job_id=str(ctx.job.id), **report.as_dict())
 
     return handle_embed_memory
+
+
+def make_extract_handler(
+    session_factory: async_sessionmaker[AsyncSession],
+    extractor: EntityExtractor,
+    graph: GraphStore | None = None,
+) -> Handler:
+    """Build the `EXTRACT_ENTITIES` handler.
+
+    Nothing here catches provider failures. The adapters already classify them —
+    a rate limit is `TransientError` and reaches the worker's existing backoff
+    unchanged, which is exactly what M2.6 built that taxonomy for, and what makes
+    a free tier's quota a pause rather than a dead-lettered corpus.
+    """
+
+    extract = ExtractEntities(session_factory, extractor, graph)
+
+    async def handle_extract_entities(ctx: JobContext) -> None:
+        raw_id = ctx.job.payload.get("memory_id")
+        if not raw_id:
+            raise PermanentError("extract_entities job has no memory_id in its payload")
+
+        report = await extract(UUID(str(raw_id)))
+        logger.info("extract.job_finished", job_id=str(ctx.job.id), **report.as_dict())
+
+    return handle_extract_entities
 
 
 def make_normalize_handler(
@@ -125,6 +154,8 @@ def build_default_registry(
     cache: EmbeddingCache | None = None,
     chunker: Chunker | None = None,
     batch_size: int = 32,
+    extractor: EntityExtractor | None = None,
+    graph: GraphStore | None = None,
 ) -> HandlerRegistry:
     """The registry a worker runs with.
 
@@ -147,6 +178,12 @@ def build_default_registry(
         registry.register(
             JobType.NORMALIZE_MEMORY,
             make_normalize_handler(session_factory, blob_store, chunker),
+        )
+
+    if session_factory is not None and extractor is not None:
+        registry.register(
+            JobType.EXTRACT_ENTITIES,
+            make_extract_handler(session_factory, extractor, graph),
         )
 
     if session_factory is not None and connector is not None and blob_store is not None:

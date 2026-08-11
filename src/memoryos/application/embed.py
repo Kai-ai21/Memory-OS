@@ -12,8 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
 from memoryos.adapters.db.embedding_cache import cache_key_for
+from memoryos.adapters.db.job_queue import enqueue_in
 from memoryos.application.ports import CacheEntry, Embedder, EmbeddingCache
-from memoryos.domain.jobs import PermanentError
+from memoryos.domain.jobs import JobSpec, JobType, PermanentError
 from memoryos.domain.values import EmbeddingRole
 
 logger = structlog.get_logger(__name__)
@@ -58,11 +59,18 @@ class EmbedMemory:
         embedder: Embedder,
         cache: EmbeddingCache,
         batch_size: int = 32,
+        *,
+        enqueue_followup: bool = True,
     ) -> None:
         self._sessions = session_factory
         self._embedder = embedder
         self._cache = cache
         self._batch_size = max(1, batch_size)
+        # M3.1's extraction job. Off during a replay for the same reason
+        # `NormalizeMemory` takes this flag: a rebuild that queued an extraction
+        # per memory would spend real money re-deriving what it already has, and
+        # a replay is supposed to be cheap enough to run for verification.
+        self._enqueue_followup = enqueue_followup
 
     @property
     def model_id(self) -> str:
@@ -86,8 +94,33 @@ class EmbedMemory:
             return _finish(EmbedReport(EmbedOutcome.SKIPPED), started)
 
         report = await self._embed_chunks(pending)
+        await self._enqueue_extraction(memory_id)
         log.info("embed.finished", **report.as_dict())
         return _finish(report, started)
+
+    async def _enqueue_extraction(self, memory_id: UUID) -> None:
+        """Queue entity extraction now that this memory is searchable.
+
+        Its own transaction rather than the one that wrote the vectors, and that
+        is the one place this chain differs from `normalize` enqueuing `embed`.
+        The vector write is idempotent and re-runnable; if this enqueue fails,
+        the retried embed job finds the chunks already current, returns SKIPPED,
+        and would never reach this line. So the enqueue is deliberately not
+        allowed to roll back vectors that are correct — a missing extraction job
+        is recoverable with `memoryos extract-entities`, and a rolled-back batch
+        of embeddings is model work paid for twice.
+        """
+        if not self._enqueue_followup:
+            return
+        async with self._sessions.begin() as session:
+            await enqueue_in(
+                session,
+                JobSpec(
+                    job_type=JobType.EXTRACT_ENTITIES,
+                    payload={"memory_id": str(memory_id)},
+                    dedupe_key=f"extract:{memory_id}",
+                ),
+            )
 
     async def _load(self, memory_id: UUID) -> models.Memory | None:
         async with self._sessions() as session:

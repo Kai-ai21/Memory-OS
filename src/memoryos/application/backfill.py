@@ -150,3 +150,64 @@ async def gather_stats(session_factory: async_sessionmaker[AsyncSession]) -> Sta
         cache_entries=cache_entries,
         models=by_model,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractionTarget:
+    memory_id: UUID
+    external_key: str
+    chunks: int
+
+
+async def find_extraction_targets(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    extractor_version: str,
+    source: str | None = None,
+    limit: int | None = None,
+) -> list[ExtractionTarget]:
+    """Current, undeleted memories with chunks and no mentions at this version.
+
+    The version predicate is the whole idempotency story, and it is a `NOT
+    EXISTS` rather than a join so that a memory with *some* mentions at the
+    current version counts as done. Extraction writes all of a memory's mentions
+    in one transaction, so partial state is not reachable — and treating it as
+    done anyway is what makes re-running the command free rather than a second
+    full spend.
+
+    Ordered by `external_key` so a `--limit` run is reproducible: the same
+    twenty memories every time, rather than whatever the planner returned.
+    """
+    current = (
+        select(
+            models.Memory.id,
+            models.Memory.external_key,
+            func.count(models.MemoryChunk.id).label("chunks"),
+        )
+        .join(models.MemoryChunk, models.MemoryChunk.memory_id == models.Memory.id)
+        .where(
+            models.Memory.is_current.is_(True),
+            models.Memory.deleted_at.is_(None),
+            ~select(models.EntityMention.id)
+            .where(
+                models.EntityMention.memory_id == models.Memory.id,
+                models.EntityMention.extractor_version == extractor_version,
+            )
+            .exists(),
+        )
+        .group_by(models.Memory.id, models.Memory.external_key)
+        .order_by(models.Memory.external_key)
+    )
+
+    if source is not None:
+        current = current.join(
+            models.Source, models.Source.id == models.Memory.source_id
+        ).where(models.Source.name == source)
+    if limit is not None:
+        current = current.limit(limit)
+
+    async with session_factory() as session:
+        return [
+            ExtractionTarget(memory_id=row[0], external_key=row[1], chunks=row[2])
+            for row in await session.execute(current)
+        ]

@@ -7,6 +7,7 @@ command gets written in it; the commands here do not need one.
 import argparse
 import asyncio
 import json
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
@@ -25,11 +26,13 @@ from memoryos.adapters.llm.errors import MissingApiKey
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
 from memoryos.application.backfill import (
     enqueue_embedding,
+    find_extraction_targets,
     find_unembedded,
     gather_stats,
 )
 from memoryos.application.citations import ExplainedHit, explain_hits
 from memoryos.application.doctor import GraphStatus, run_doctor
+from memoryos.application.entity_stats import gather_entity_stats
 from memoryos.application.evaluate import (
     compare as compare_runs,
 )
@@ -40,6 +43,7 @@ from memoryos.application.evaluate import (
     format_verbose,
 )
 from memoryos.application.evaluation import format_table, measure_recall
+from memoryos.application.extraction import ExtractEntities
 from memoryos.application.golden import load_golden_set
 from memoryos.application.importance import recompute_importance
 from memoryos.application.judgements import export_golden_set
@@ -704,6 +708,112 @@ async def run_doctor_command(settings: Settings) -> int:
     return 0 if report.healthy else 1
 
 
+async def run_extract_entities(
+    settings: Settings, *, source: str | None, limit: int | None, dry_run: bool
+) -> int:
+    """Extract entities across the corpus, memory by memory.
+
+    Sequential rather than concurrent, deliberately. The free tier's limit is
+    requests per minute, so parallelism buys nothing but 429s — and the worker's
+    backoff would then serialise them anyway, with the retries costing real
+    requests against the daily cap.
+    """
+    container = Container.build(settings)
+    try:
+        targets = await find_extraction_targets(
+            container.database.session_factory,
+            extractor_version=_extractor_version(container),
+            source=source,
+            limit=limit,
+        )
+
+        print(f"extractor: {_extractor_version(container)}")
+        print(f"provider:  {settings.llm_provider}")
+        print(f"memories pending: {len(targets)}")
+        print(f"chunks pending:   {sum(target.chunks for target in targets)}")
+        for target in targets[:20]:
+            print(f"  {target.external_key} ({target.chunks} chunks)")
+        if len(targets) > 20:
+            print(f"  ... and {len(targets) - 20} more")
+
+        if dry_run:
+            print("\ndry run; no model calls made, nothing written")
+            return 0
+        if not targets:
+            print("\nnothing to do")
+            return 0
+
+        extractor = container.extractor()
+        extract = ExtractEntities(
+            container.database.session_factory, extractor, container.graph
+        )
+
+        started = time.monotonic()
+        entities = mentions = failed = 0
+        for index, target in enumerate(targets, start=1):
+            try:
+                report = await extract(target.memory_id)
+            except (TransientError, PermanentError) as exc:
+                # Reported and stepped over rather than aborting the run. One
+                # memory the model refuses to process must not cost the corpus
+                # every extraction after it.
+                failed += 1
+                print(f"[{index}/{len(targets)}] FAILED {target.external_key}: {exc}")
+                continue
+            entities += report.entities
+            mentions += report.mentions
+            print(
+                f"[{index}/{len(targets)}] {target.external_key}: "
+                f"{report.mentions} mentions, {report.entities} new entities"
+                + ("" if report.projected else "  (not projected)")
+            )
+
+        elapsed = time.monotonic() - started
+        stats = extractor.stats
+        print(
+            f"\nnew entities {entities}   mentions {mentions}   failed {failed}\n"
+            f"api calls    {stats.calls} ({stats.retries} retries)\n"
+            f"dropped      {stats.dropped_not_found} not in text, "
+            f"{stats.dropped_low_confidence} low confidence, "
+            f"{stats.dropped_bad_type} bad type, of {stats.returned} returned\n"
+            f"prompt chars {stats.prompt_chars}   response chars {stats.response_chars}\n"
+            f"wall clock   {elapsed:.1f}s"
+        )
+    finally:
+        await container.dispose()
+    return 1 if failed else 0
+
+
+def _extractor_version(container: Container) -> str:
+    return container.extractor().version
+
+
+async def run_entity_stats(settings: Settings, *, top: int) -> int:
+    container = Container.build(settings)
+    try:
+        stats = await gather_entity_stats(container.database.session_factory, top=top)
+        print(f"entities  {stats.entities}")
+        print(f"mentions  {stats.mentions}\n")
+        for entity_type, count in stats.by_type.items():
+            print(f"  {entity_type:14} {count}")
+        print(f"\ntop {len(stats.top)} by mentions")
+        for name, entity_type, count in stats.top:
+            print(f"  {count:5}  {entity_type:14} {name}")
+
+        print(
+            f"\nduplicate groups {len(stats.duplicate_groups)}   "
+            f"surplus rows {stats.duplicate_surplus} "
+            f"({stats.duplicate_rate:.1%} of entities)"
+        )
+        for group in stats.duplicate_groups[:20]:
+            print(f"  {group.mentions:5}  {group.key}: {', '.join(group.names)}")
+        for version, count in stats.extractor_versions.items():
+            print(f"\nextractor {version}: {count} mentions")
+    finally:
+        await container.dispose()
+    return 0
+
+
 async def run_stats(settings: Settings) -> int:
     container = Container.build(settings)
     try:
@@ -928,6 +1038,26 @@ def build_parser() -> argparse.ArgumentParser:
     reembed.add_argument("--source", help="limit to one source by name")
     reembed.add_argument(
         "--dry-run", action="store_true", help="report what would be enqueued"
+    )
+
+    extract_parser = commands.add_parser(
+        "extract-entities", help="extract entities from memories using the configured LLM"
+    )
+    extract_parser.add_argument("--source", help="limit to one source by name")
+    extract_parser.add_argument(
+        "--limit", type=int, help="stop after this many memories"
+    )
+    extract_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would be extracted without calling the model",
+    )
+
+    entity_stats_parser = commands.add_parser(
+        "entity-stats", help="report entities, mentions, and the duplicate problem"
+    )
+    entity_stats_parser.add_argument(
+        "--top", type=int, default=20, help="how many entities to list by mention count"
     )
 
     commands.add_parser("stats", help="report corpus and embedding coverage")
@@ -1215,6 +1345,19 @@ def main(argv: list[str] | None = None) -> int:
                 settings, source=args.source, dry_run=args.dry_run, stale_only=True
             )
         )
+
+    if args.command == "extract-entities":
+        return asyncio.run(
+            run_extract_entities(
+                settings,
+                source=args.source,
+                limit=args.limit,
+                dry_run=args.dry_run,
+            )
+        )
+
+    if args.command == "entity-stats":
+        return asyncio.run(run_entity_stats(settings, top=args.top))
 
     if args.command == "stats":
         return asyncio.run(run_stats(settings))
