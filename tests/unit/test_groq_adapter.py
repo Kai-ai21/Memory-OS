@@ -8,10 +8,11 @@ What is deliberately *not* mocked is the error taxonomy. The exceptions raised
 below are the SDK's own classes, constructed the way the SDK constructs them, so
 these assert against Groq's real types rather than against a belief about them.
 
-Three tests, which is the milestone's budget. The provider selection goes
-through `build_language_model` rather than `Container.build`, because building a
-container constructs the embedder — seconds of work and a HuggingFace round trip
-that has nothing to do with which language model was chosen.
+M2.6a's budget was three; the fourth was proposed there, deferred, and added by
+M3.1 step 0b. The provider selection goes through `build_language_model` rather
+than `Container.build`, because building a container constructs the embedder —
+seconds of work and a HuggingFace round trip that has nothing to do with which
+language model was chosen.
 """
 
 from types import SimpleNamespace
@@ -115,3 +116,33 @@ async def test_an_empty_response_is_permanent() -> None:
 
     with pytest.raises(PermanentError, match="returned no text"):
         await model.complete("system", "user")
+
+
+async def test_both_prompts_reach_the_request_at_zero_temperature() -> None:
+    """The translation the port hides, pinned.
+
+    Gemini takes the system prompt as its own `system_instruction` field; Groq
+    takes it as the first message. The port hands over two strings either way,
+    so the mapping is this adapter's private business — and a system prompt
+    dropped in that translation is the defect worth a test, because nothing
+    would fail. The call would succeed, the answer would come back fluent, and
+    the instruction to stay inside the passages and refuse otherwise would
+    simply not have been sent. M2.6's entire guardrail lives in that string.
+
+    Temperature is asserted for the same reason it is set: the job is to restate
+    what the passages say, and sampling in a grounded answer is another word for
+    drift away from the source.
+    """
+    completions = FakeCompletions(content="an answer")
+    model = model_with(completions)
+
+    assert await model.complete("be grounded", "the question", max_tokens=64) == "an answer"
+
+    sent = completions.calls[0]
+    assert sent["messages"] == [
+        {"role": "system", "content": "be grounded"},
+        {"role": "user", "content": "the question"},
+    ]
+    assert sent["temperature"] == 0.0
+    assert sent["max_tokens"] == 64
+    assert sent["model"] == model.model_id
