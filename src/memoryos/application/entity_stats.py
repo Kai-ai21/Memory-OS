@@ -90,7 +90,11 @@ async def gather_entity_stats(
     async with session_factory() as session:
         stats = EntityStats(
             entities=(
-                await session.execute(select(func.count()).select_from(models.Entity))
+                await session.execute(
+                    select(func.count())
+                    .select_from(models.Entity)
+                    .where(models.Entity.merged_into_id.is_(None))
+                )
             ).scalar_one(),
             mentions=(
                 await session.execute(
@@ -103,6 +107,7 @@ async def gather_entity_stats(
             row[0]: row[1]
             for row in await session.execute(
                 select(models.Entity.type, func.count())
+                .where(models.Entity.merged_into_id.is_(None))
                 .group_by(models.Entity.type)
                 .order_by(func.count().desc())
             )
@@ -129,6 +134,7 @@ async def gather_entity_stats(
                     models.EntityMention,
                     models.EntityMention.entity_id == models.Entity.id,
                 )
+                .where(models.Entity.merged_into_id.is_(None))
                 .group_by(models.Entity.id, models.Entity.name, models.Entity.type)
                 .order_by(func.count(models.EntityMention.id).desc(), models.Entity.name)
                 .limit(top)
@@ -156,6 +162,7 @@ async def _duplicates(session: AsyncSession) -> list[DuplicateGroup]:
         .outerjoin(
             models.EntityMention, models.EntityMention.entity_id == models.Entity.id
         )
+        .where(models.Entity.merged_into_id.is_(None))
         .group_by(models.Entity.id, models.Entity.canonical_name, models.Entity.type)
     )
 

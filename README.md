@@ -995,6 +995,66 @@ would mean an LLM call per chunk on every verification run, and every chunk id i
 new after a rebuild, so every mention would dangle regardless. Re-run
 `extract-entities` after a full replay.
 
+## Entity resolution
+
+M3.2 merges entities that refer to the same thing. This is where a graph phase
+succeeds or fails: an unresolved graph looks impressive in a picture and is
+useless to traverse, because the path you need runs through a node that exists
+four times under four spellings and therefore does not exist at all.
+
+```bash
+memoryos resolve-entities --dry-run     # proposals with evidence, changes nothing
+memoryos resolve-entities               # apply the certain ones, queue the rest
+memoryos entity merges --pending        # the review queue
+memoryos entity merge <a> <b>           # your verdict on a pending pair
+memoryos entity unmerge <merge-id>      # undo any merge
+```
+
+**One asymmetry decides every threshold here: a false merge is worse than a
+missed one.** A missed merge leaves a traversal short a path — visible, and
+fixed by a later merge. A false merge *invents* a path, and every traversal
+through it reports a connection nobody wrote.
+
+Three strategies, cheapest first:
+
+1. **Exact canonical match**, from `domain/canonicalize.py`. Type-specific,
+   because the rules contradict each other: stripping a trailing `js` is right
+   for a TECHNOLOGY and destroys a FILE called `index.js`. `sql` is deliberately
+   *not* stripped — it turns "PostgreSQL" into "postgre" and "MySQL" into "my",
+   forms that match nothing at all.
+2. **Embedding similarity**, reusing the corpus's own `Embedder`. It reaches
+   pairs no character rule can, and it **proposes rather than decides** — see
+   below.
+3. **Aliases**, a deliberately tiny hand-written table. A long alias list is a
+   resolver somebody is maintaining by hand instead of fixing.
+
+Blocking keeps this out of O(n²): only entities of the same type are compared.
+
+**Embedding similarity does not auto-merge, and that is measured rather than
+cautious.** The milestone proposed auto-merging above a high threshold. On this
+corpus no such threshold exists — two different constraint names scored 0.952
+while a real match (`ingestion_events`/`IngestionEvent`) scored 0.939. A
+bi-encoder embeds identifier-like names by their shared prefix, and a shared
+prefix is not a shared referent. So embedding feeds the review queue and a
+person decides.
+
+**Nothing is deleted.** The losing entity keeps its row, gains a
+`merged_into_id`, and its mentions are repointed at the winner. The ids that
+moved are recorded on the merge, because after a repoint nothing distinguishes
+the mentions that came from the loser from the ones the winner always had — that
+record is the difference between `unmerge` restoring the previous state and
+restoring something that resembles it.
+
+Extraction follows `merged_into_id`. Without that, the next run re-attaches
+mentions to a merged-away row by canonical name and silently undoes the
+resolution.
+
+**Known gap:** `entity_merges` is classified derived, forced by its foreign key
+to `entities`, which a replay truncates. Automatic merges are rebuildable by
+re-running the resolver; *manual* merges and the pending queue are not, and a
+full replay loses them. The fix is M1.7's — key merges on `(canonical_name,
+type)`, which survives a rebuild, rather than on entity ids, which do not.
+
 ## Migrations
 
 ```bash

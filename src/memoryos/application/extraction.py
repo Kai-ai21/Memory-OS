@@ -271,12 +271,21 @@ class ExtractEntities:
             return entity_id, True
 
         existing = await session.execute(
-            select(models.Entity.id).where(
+            select(models.Entity.id, models.Entity.merged_into_id).where(
                 models.Entity.canonical_name == canonical,
                 models.Entity.type == entity_type,
             )
         )
-        return existing.scalar_one(), False
+        entity_id, merged_into = existing.one()
+        if merged_into is None:
+            return entity_id, False
+
+        # M3.2: this name was merged away, so its mentions belong to the winner.
+        # Without this the next extraction re-attaches mentions to a merged-away
+        # row and silently undoes the resolution — no error, no log, just a
+        # duplicate quietly coming back to life and the entity counts drifting
+        # upwards after every sync.
+        return await _follow_merge(session, merged_into), False
 
     async def _project(
         self,
@@ -354,6 +363,24 @@ class ExtractEntities:
                 )
                 for row in rows
             ]
+
+
+async def _follow_merge(session: AsyncSession, entity_id: UUID, depth: int = 8) -> UUID:
+    """The entity a merged-away one now belongs to.
+
+    Bounded, for the reason `resolution._follow` is: a chain is data, and an
+    unbounded walk over cyclic data is an infinite loop holding a transaction
+    open. The last id reached is returned rather than raising, because a
+    too-deep chain should cost a misfiled mention, not a failed extraction.
+    """
+    current = entity_id
+    for _ in range(depth):
+        row = await session.get(models.Entity, current)
+        if row is None or row.merged_into_id is None:
+            return current
+        current = row.merged_into_id
+    logger.warning("extract.merge_chain_too_deep", entity_id=str(entity_id))
+    return current
 
 
 def _offsets_hold(chunk_text: str, candidate: ExtractedEntity) -> bool:

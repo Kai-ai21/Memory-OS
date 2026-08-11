@@ -114,6 +114,25 @@ DERIVED_TABLES: tuple[str, ...] = (
     # easy to miss: it would assert that a language model's output at a
     # particular moment is irreplaceable input, and it would make the replay
     # guarantee false, since nothing in the log can reconstruct them.
+    # M3.2's ledger, and the most uncomfortable classification in this file.
+    #
+    # It is derived *by force* rather than by argument: it has a foreign key to
+    # `entities`, which is derived and truncated, so leaving this table behind
+    # would leave every row referencing an entity that no longer exists. The FK
+    # decides it, not the reasoning.
+    #
+    # **And that costs something real.** An automatic merge is genuinely
+    # rebuildable — re-run `resolve-entities`. A *manual* merge is not: it is a
+    # person's judgement on a pair the resolver was unsure about, which is
+    # exactly the property `USER_AUTHORED_TABLES` exists to protect, and a full
+    # replay destroys it along with the pending review queue.
+    #
+    # The fix is the one M1.7 found for `query_judgements`: key merges on
+    # `(canonical_name, type)` — stable across rebuilds — instead of on entity
+    # ids, which are minted per write. That is a schema change rather than a
+    # classification change, so it is written down here rather than done
+    # quietly, and `resolve-entities` must be re-run after any full replay.
+    "entity_merges",
     "entity_mentions",
     "entities",
     "memory_chunks",
