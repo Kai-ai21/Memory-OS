@@ -666,7 +666,12 @@ class Entity(Base):
     # delete the entities that were merged into it. They become active again,
     # which is wrong-but-recoverable, where cascading would be data loss.
     merged_into_id: Mapped[UUID | None] = mapped_column(
-        _UUID, ForeignKey("entities.id", ondelete="SET NULL")
+        _UUID,
+        ForeignKey(
+            "entities.id",
+            name="fk_entities_merged_into_id",
+            ondelete="SET NULL",
+        ),
     )
 
     __table_args__ = (
@@ -718,13 +723,31 @@ class EntityMention(Base):
 
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     entity_id: Mapped[UUID] = mapped_column(
-        _UUID, ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+        _UUID,
+        ForeignKey(
+            "entities.id",
+            name="fk_entity_mentions_entity_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
     )
     memory_id: Mapped[UUID] = mapped_column(
-        _UUID, ForeignKey("memories.id", ondelete="CASCADE"), nullable=False
+        _UUID,
+        ForeignKey(
+            "memories.id",
+            name="fk_entity_mentions_memory_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
     )
     chunk_id: Mapped[UUID] = mapped_column(
-        _UUID, ForeignKey("memory_chunks.id", ondelete="CASCADE"), nullable=False
+        _UUID,
+        ForeignKey(
+            "memory_chunks.id",
+            name="fk_entity_mentions_chunk_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
     )
     char_start: Mapped[int] = mapped_column(Integer, nullable=False)
     char_end: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -803,10 +826,18 @@ class EntityMerge(Base):
 
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     winner_id: Mapped[UUID] = mapped_column(
-        _UUID, ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+        _UUID,
+        ForeignKey(
+            "entities.id", name="fk_entity_merges_winner_id", ondelete="CASCADE"
+        ),
+        nullable=False,
     )
     loser_id: Mapped[UUID] = mapped_column(
-        _UUID, ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+        _UUID,
+        ForeignKey(
+            "entities.id", name="fk_entity_merges_loser_id", ondelete="CASCADE"
+        ),
+        nullable=False,
     )
     strategy: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(
