@@ -13,6 +13,7 @@ projection follows. A crash between them leaves a correct corpus and a graph
 that is behind, which the next run repairs because every graph write is a MERGE.
 """
 
+import asyncio
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -33,11 +34,16 @@ from memoryos.application.ports import (
     GraphNode,
     GraphStore,
 )
+from memoryos.domain.backoff import compute_backoff
 from memoryos.domain.ids import new_id
-from memoryos.domain.jobs import PermanentError
+from memoryos.domain.jobs import PermanentError, TransientError
 from memoryos.domain.values import EdgeType, EntityType, GraphLabel
 
 logger = structlog.get_logger(__name__)
+
+# Retries for one chunk before the memory is given up on. Five with exponential
+# backoff is roughly ten minutes, longer than any free-tier window this has met.
+_CHUNK_MAX_ATTEMPTS = 5
 
 
 class RelationshipOutcome(StrEnum):
@@ -118,13 +124,39 @@ class ExtractRelationships:
             text = texts.get(chunk_id)
             if text is None:
                 continue
-            found[chunk_id] = await self._extractor.extract_relationships(text, refs)
+            found[chunk_id] = await self._with_backoff(text, refs)
 
         report = await self._store(memory_id, found)
         report.chunks_considered = len(eligible)
         report.projected = await self._project(memory_id)
         log.info("relationships.stored", **report.as_dict())
         return _finish(report, started)
+
+    async def _with_backoff(
+        self, text: str, refs: list[EntityRef]
+    ) -> list[ExtractedRelationship]:
+        """One chunk, waiting out a rate limit rather than losing the memory.
+
+        Retrying at chunk granularity rather than letting the caller retry the
+        whole memory, and on a token-capped tier that is not a refinement. A
+        memory whose eighth chunk is rate-limited would otherwise re-send the
+        seven that already succeeded — spending the quota that caused the limit
+        on work already done, which makes the next limit arrive sooner. Measured
+        on the first live run: a two-memory extraction re-sent four chunks.
+
+        `PermanentError` is not caught. The adapter has already made that
+        judgement, including its own retry for malformed JSON.
+        """
+        for attempt in range(_CHUNK_MAX_ATTEMPTS):
+            try:
+                return await self._extractor.extract_relationships(text, refs)
+            except TransientError:
+                if attempt == _CHUNK_MAX_ATTEMPTS - 1:
+                    raise
+                delay = compute_backoff(attempt)
+                logger.info("relationships.rate_limited", waiting_seconds=round(delay))
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
 
     async def _load(self, memory_id: UUID) -> models.Memory | None:
         async with self._sessions() as session:
