@@ -29,6 +29,7 @@ from memoryos.application.ports import (
     SourceNode,
 )
 from memoryos.domain.values import (
+    EDGE_IDENTITY_PROPERTIES,
     IDENTITY_PROPERTY,
     EdgeType,
     EntityType,
@@ -244,9 +245,10 @@ class InMemoryGraphStore:
     def __init__(self) -> None:
         self.clears = 0
         self._nodes: dict[tuple[GraphLabel, str], GraphNode] = {}
-        # Keyed by (type, start, end): Neo4j's `MERGE (a)-[r:T]->(b)` is one
-        # relationship per triple, and `SET r +=` overwrites its properties.
-        self._edges: dict[tuple[EdgeType, str, str], GraphEdge] = {}
+        # Keyed by (type, start, end) plus whatever the edge merges on: Neo4j's
+        # `MERGE (a)-[r:T {k: v}]->(b)` is one relationship per that tuple, and
+        # `SET r +=` overwrites the rest of its properties.
+        self._edges: dict[tuple[str, ...], GraphEdge] = {}
 
     # -- writes --------------------------------------------------------
 
@@ -301,7 +303,7 @@ class InMemoryGraphStore:
                     properties={IDENTITY_PROPERTY[node.label]: node.key},
                 ),
             )
-        self._edges[(edge.type, edge.start.key, edge.end.key)] = edge
+        self._edges[_edge_key(edge)] = edge
 
     async def prune_memories(self, memory_ids: Sequence[UUID]) -> int:
         return self._prune(GraphLabel.MEMORY, memory_ids)
@@ -316,9 +318,8 @@ class InMemoryGraphStore:
             if self._nodes.pop((label, key), None) is not None:
                 removed += 1
         # Detached, so every edge touching a removed node goes with it.
-        for edge_key in list(self._edges):
-            _, start, end = edge_key
-            if start in keys or end in keys:
+        for edge_key, edge in list(self._edges.items()):
+            if edge.start.key in keys or edge.end.key in keys:
                 del self._edges[edge_key]
         return removed
 
@@ -329,14 +330,19 @@ class InMemoryGraphStore:
 
     # -- reads ---------------------------------------------------------
 
-    async def memories_mentioning(
-        self, entity_ids: Sequence[UUID]
+    async def mention_edges(
+        self,
+        *,
+        memory_ids: Sequence[UUID] = (),
+        entity_ids: Sequence[UUID] = (),
     ) -> list[tuple[UUID, UUID]]:
-        wanted = {str(value) for value in entity_ids}
+        memories = {str(value) for value in memory_ids}
+        entities = {str(value) for value in entity_ids}
         return [
-            (UUID(start), UUID(end))
-            for edge_type, start, end in self._edges
-            if edge_type is EdgeType.MENTIONS and end in wanted
+            (UUID(edge.start.key), UUID(edge.end.key))
+            for edge in self._edges.values()
+            if edge.type is EdgeType.MENTIONS
+            and (edge.start.key in memories or edge.end.key in entities)
         ]
 
     async def all_nodes(self) -> list[GraphNode]:
@@ -363,6 +369,26 @@ class InMemoryGraphStore:
     @property
     def edges(self) -> list[GraphEdge]:
         return list(self._edges.values())
+
+
+def _edge_key(edge: GraphEdge) -> tuple[str, ...]:
+    """What `MERGE` treats as one relationship: type, endpoints, identity properties.
+
+    Reproduced rather than simplified, because the difference is a real defect this
+    fake would otherwise hide: keying on the endpoints alone collapses two
+    predicates between one pair into a single edge, which is exactly what Neo4j did
+    before `GraphEdge.identity` existed.
+    """
+    return (
+        edge.type.value,
+        edge.start.key,
+        edge.end.key,
+        *(
+            str(edge.properties[name])
+            for name in sorted(EDGE_IDENTITY_PROPERTIES)
+            if name in edge.properties
+        ),
+    )
 
 
 class UnreachableGraphStore(InMemoryGraphStore):

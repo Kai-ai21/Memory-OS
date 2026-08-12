@@ -52,6 +52,7 @@ from memoryos.adapters.blobs.filesystem import BlobNotFound
 from memoryos.adapters.db import models
 from memoryos.adapters.db.mappers import to_event
 from memoryos.adapters.db.repositories import SqlAlchemyMemoryRepository
+from memoryos.application import graph_projection
 from memoryos.application.embed import EmbedMemory
 from memoryos.application.normalize import NormalizeMemory
 from memoryos.application.ports import BlobStore, GraphStore, ShadowWorkspace
@@ -187,8 +188,16 @@ SHADOW_TABLES: tuple[str, ...] = tuple(
 # The rule this set carries: **Postgres wins on disagreement.** A full replay
 # empties the graph and rebuilds it, so anything the graph knew that Postgres
 # did not is gone by design. That is what makes it safe for no use case to write
-# here directly — and what makes a use case that did so a bug rather than a
-# shortcut, because its writes would survive exactly until the next rebuild.
+# here directly — and as of M3.4 nothing does: extraction and resolution enqueue
+# a `SYNC_GRAPH` job, and `application/graph_sync.py` is the only writer.
+#
+# "Rebuilds it" is new in M3.4 and is the half M3.0 left out. Clearing alone left
+# the graph empty until somebody re-ran extraction, and empty is not the same as
+# correct — a divergence check cannot tell a projection nobody built from one that
+# has drifted. What the rebuild produces after a full replay is every memory and
+# its source and no entities, because the entity tables are derived-and-not-rebuilt
+# for the reasons given above them. That projection matches Postgres, which is the
+# only thing the graph has ever promised.
 DERIVED_PROJECTIONS: frozenset[str] = frozenset({"neo4j_graph"})
 
 
@@ -271,6 +280,11 @@ class ReplayReport:
     chunks: int = 0
     vectors_computed: int = 0
     cache_hits: int = 0
+    # What the graph projection holds after the rebuild. Zero on a scoped replay,
+    # which does not touch the graph at all, and zero-entity on a full one — see
+    # `_rebuild_graph` for why that is the honest outcome rather than a gap.
+    graph_nodes: int = 0
+    graph_edges: int = 0
     duration_ms: int = 0
     into_shadow: bool = False
     cache_cleared: bool = False
@@ -286,6 +300,8 @@ class ReplayReport:
             "chunks": self.chunks,
             "vectors_computed": self.vectors_computed,
             "cache_hits": self.cache_hits,
+            "graph_nodes": self.graph_nodes,
+            "graph_edges": self.graph_edges,
             "duration_ms": self.duration_ms,
             "into_shadow": self.into_shadow,
             "cache_cleared": self.cache_cleared,
@@ -445,8 +461,14 @@ class ReplayCorpus:
             # maintained through every insert is slower and worse-connected.
             await shadow.build_indexes()
             await shadow.swap_in()
-            # The moment the memory ids the graph referenced stopped existing.
+            # The moment the memory ids the graph referenced stopped existing —
+            # and, immediately after, the first moment a projection can be built
+            # from ids that will still be there. Through `self._sessions`, not the
+            # workspace's: the swap has made those tables the live ones, and the
+            # workspace factory is about to be discarded.
             await self._clear_graph()
+            await self._project_graph(self._sessions)
+            await self._count_graph(self._sessions, report)
         except BaseException:
             # The live tables were never touched, so throwing the workspace away
             # is a complete rollback.
@@ -525,7 +547,28 @@ class ReplayCorpus:
             await self._embed(sessions, source_id, report)
 
         await self._count_chunks(sessions, report)
+        if clear_graph:
+            # Last, and only for the scope that cleared it. Every memory id is
+            # new, so this is the first moment the projection can be built from
+            # ids that will still exist when somebody queries them.
+            await self._project_graph(sessions)
+            await self._count_graph(sessions, report)
         return report
+
+    async def _count_graph(
+        self, sessions: async_sessionmaker[AsyncSession], report: ReplayReport
+    ) -> None:
+        """Record what the projection now holds, from Postgres rather than Neo4j.
+
+        Derived from the corpus rather than counted in the graph, which sounds
+        backwards for a report about the graph and is not: the projection is a
+        pure function of Postgres, so this is the number that has to be true, and
+        a count read back from Neo4j would report what the projection *managed*
+        rather than what it owes. `graph verify` is where the two are compared.
+        """
+        projection = await graph_projection.read(sessions)
+        report.graph_nodes = projection.nodes
+        report.graph_edges = len(projection.edges)
 
     async def _preflight_blobs(self, scope: ReplayScope, source_id: UUID | None) -> None:
         """Refuse to start if the bytes the log references are not reachable.
@@ -674,6 +717,41 @@ class ReplayCorpus:
             return
         await self._graph.clear()
         logger.info("replay.graph_cleared")
+
+    async def _project_graph(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        """Re-project the graph from the corpus that has just been rebuilt.
+
+        Projects without clearing, because `_clear_graph` has already run — before
+        the tables were rebuilt rather than after, so that the graph never holds
+        nodes keyed by memory ids Postgres has already deleted. Calling
+        `graph_projection.rebuild` here instead would clear a second time, which
+        is harmless and would also mean the window of unavailability spans the
+        whole table rebuild rather than ending with it.
+
+        Clearing alone was M3.0's answer and it left the graph empty until
+        somebody happened to run extraction again. Empty is not the same as
+        correct: `graph verify` cannot tell a projection nobody has built from one
+        that has diverged, and a graph that is *supposed* to be empty for hours
+        after every replay makes the check useless exactly when it matters.
+
+        What this projects is not what was there before, and the difference is the
+        honest part of this milestone. `entities`, `entity_mentions` and
+        `entity_relationships` are derived tables a replay truncates and does not
+        rebuild — see `DERIVED_TABLES`, which explains why: rebuilding them means
+        an LLM call per chunk, and every mention's offsets point into chunk text
+        that no longer exists at that row. So the projection that follows a full
+        replay holds every memory and its source and *no entities at all*, and
+        `resolve-entities` and the two extraction passes have to be re-run to get
+        them back.
+
+        Reporting that as a rebuild is right. The projection matches Postgres,
+        which is the only guarantee the graph ever offered.
+        """
+        if self._graph is None:
+            return
+        projection = await graph_projection.read(sessions)
+        await graph_projection.write(self._graph, projection)
+        logger.info("replay.graph_rebuilt", **projection.counts)
 
     # ----------------------------------------------------------------------
     # Memories, from the log

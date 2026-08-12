@@ -23,6 +23,7 @@ from memoryos.adapters.db.repositories import (
     SqlAlchemyMemoryRepository,
     SqlAlchemySourceRepository,
 )
+from memoryos.application.graph_sync import graph_sync_spec
 from memoryos.application.ports import BlobStore, Connector, ObservedItem
 from memoryos.application.projection import memory_from_event, recorded_at_of
 from memoryos.domain.entities import IngestionEvent, RawArtifact, Source
@@ -204,6 +205,20 @@ class SyncSource:
                     dedupe_key=str(memory_id),
                 ),
             )
+            # And the graph, in the same transaction and for the same reason.
+            #
+            # The graph projects *every* current memory, not only the ones
+            # extraction has reached, so a new memory is a projection change on
+            # its own — before anything has parsed it, and whether or not this
+            # deployment has an API key to extract entities with. Without this
+            # enqueue the only thing that ever announced a memory to the graph was
+            # extraction, and `graph verify` would report a permanent divergence
+            # for every file nobody had extracted yet.
+            #
+            # It also handles the superseded version implicitly: the projection
+            # reads `is_current`, so re-projecting this memory's neighbourhood
+            # removes the node for the version this one has just replaced.
+            await enqueue_in(session, graph_sync_spec(memory_ids=[memory_id]))
 
             return current is not None
 
@@ -251,6 +266,14 @@ class SyncSource:
                 # replay of this event lands on the same `deleted_at`.
                 await SqlAlchemyMemoryRepository(session).tombstone(
                     known[external_key], recorded_at_of(event)
+                )
+                # A tombstoned memory leaves the projection: `graph_projection`
+                # reads `deleted_at IS NULL`, so the sync prunes the node and
+                # writes nothing back. Queued in the tombstone's own transaction,
+                # so there is no window where the row is deleted and the job that
+                # removes its node does not exist.
+                await enqueue_in(
+                    session, graph_sync_spec(memory_ids=[known[external_key]])
                 )
             log.info("item.deleted", key=external_key)
             deleted += 1

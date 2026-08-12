@@ -8,9 +8,11 @@ than letting it name entities is what makes an edge to a non-existent entity
 structurally impossible rather than merely unlikely — an edge to a fabricated
 node looks exactly like a real one until somebody follows it.
 
-Transaction boundary as everywhere else in Phase 3: Postgres commits, then the
-projection follows. A crash between them leaves a correct corpus and a graph
-that is behind, which the next run repairs because every graph write is a MERGE.
+Transaction boundary as everywhere else in Phase 3: Postgres commits, then a
+`SYNC_GRAPH` job is queued. Nothing here writes to Neo4j — see
+`application/graph_sync.py` — so a crash between the two leaves a correct corpus
+and a graph that is behind, which the next sync repairs because every graph write
+is a MERGE.
 """
 
 import asyncio
@@ -26,12 +28,12 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
-from memoryos.application import graph_projection
+from memoryos.application.graph_sync import enqueue_sync
 from memoryos.application.ports import (
     EntityExtractor,
     EntityRef,
     ExtractedRelationship,
-    GraphStore,
+    JobQueue,
 )
 from memoryos.domain.backoff import compute_backoff
 from memoryos.domain.ids import new_id
@@ -57,15 +59,15 @@ class RelationshipReport:
     outcome: RelationshipOutcome
     chunks_considered: int = 0
     relationships: int = 0
-    projected: int = 0
+    sync_enqueued: bool = False
     duration_ms: int = 0
 
-    def as_dict(self) -> dict[str, str | int]:
+    def as_dict(self) -> dict[str, str | int | bool]:
         return {
             "outcome": self.outcome.value,
             "chunks_considered": self.chunks_considered,
             "relationships": self.relationships,
-            "projected": self.projected,
+            "sync_enqueued": self.sync_enqueued,
             "duration_ms": self.duration_ms,
         }
 
@@ -75,13 +77,13 @@ class ExtractRelationships:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         extractor: EntityExtractor,
-        graph: GraphStore | None = None,
+        queue: JobQueue | None = None,
         *,
         version: str | None = None,
     ) -> None:
         self._sessions = session_factory
         self._extractor = extractor
-        self._graph = graph
+        self._queue = queue
         # The relationship extractor's own version, distinct from the entity
         # one so the two prompts can be improved independently.
         fallback = getattr(extractor, "relationship_version", None)
@@ -127,7 +129,7 @@ class ExtractRelationships:
 
         report = await self._store(memory_id, found)
         report.chunks_considered = len(eligible)
-        report.projected = await self._project(memory_id)
+        report.sync_enqueued = await self._queue_sync(memory_id)
         log.info("relationships.stored", **report.as_dict())
         return _finish(report, started)
 
@@ -270,46 +272,21 @@ class ExtractRelationships:
                 .values(relationship_extractor_version=self._version)
             )
 
-    async def _project(self, memory_id: UUID) -> int:
-        """Mirror this memory's neighbourhood of the graph onto what was committed.
+    async def _queue_sync(self, memory_id: UUID) -> bool:
+        """Ask for this memory's neighbourhood of the graph to be re-projected.
 
-        Read back from Postgres rather than reusing the in-memory claims, and
-        through the shared projection rather than a query of its own. Two reasons,
-        and M3.3 got the first right and the second wrong.
-
-        `assertion_count` is a property of the whole corpus rather than of this
-        memory: the same pair may have been asserted by chunks belonging to
-        memories extracted weeks apart, and an edge weighted by only what this run
-        saw would under-report every repeated claim. That much was already true
-        here.
-
-        What was not is that the endpoints have to be resolved through
-        `entities.merged_into_id`. A relationship row keeps naming whichever entity
-        the extractor saw, so after any merge this projected an edge to an entity
-        that no longer takes part in the graph — and because `link` merges its
-        endpoints, it *created* that node, carrying an id and no name. See
-        `graph_projection`, which now owns that rule for every writer.
+        The job names the memory rather than the edges it just wrote, and the
+        difference is not cosmetic. `assertion_count` is a property of the whole
+        corpus rather than of this memory — the same pair may have been asserted by
+        chunks belonging to memories extracted weeks apart — so an edge built from
+        what this run saw would under-report every repeated claim. Naming the
+        memory and letting the projection do the arithmetic is what keeps the count
+        corpus-wide.
         """
-        if self._graph is None:
-            return 0
-        try:
-            projection = await graph_projection.read(
-                self._sessions,
-                graph_projection.Scope(memory_ids=frozenset({memory_id})),
-            )
-            await graph_projection.write(self._graph, projection)
-        except Exception as exc:
-            logger.warning(
-                "relationships.projection_failed",
-                memory_id=str(memory_id),
-                error=str(exc),
-            )
-            return 0
-        return sum(
-            1
-            for edge in projection.edges
-            if edge.type is graph_projection.ENTITY_EDGE_TYPE
-        )
+        if self._queue is None:
+            return False
+        await enqueue_sync(self._queue, memory_ids=[memory_id])
+        return True
 
 
 def _finish(report: RelationshipReport, started: float) -> RelationshipReport:

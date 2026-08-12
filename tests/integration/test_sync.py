@@ -22,7 +22,7 @@ from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.application.sync import SyncReport, SyncSource
 from memoryos.domain.entities import Source
 from memoryos.domain.ids import new_id
-from memoryos.domain.jobs import JobSpec
+from memoryos.domain.jobs import JobSpec, JobType
 from memoryos.domain.values import ContentHash, EventType, SourceKind
 
 pytestmark = pytest.mark.integration
@@ -132,7 +132,10 @@ async def test_a_first_sync_records_everything_it_observed(fixture: Fixture) -> 
         "artifacts": 4,
         "events": 4,
         "memories": 4,
-        "jobs": 4,
+        # Two per memory: normalize, and the graph sync M3.4 added. Both are
+        # enqueued inside the transaction that writes the memory, which is the
+        # entire reason this queue is a table rather than a broker.
+        "jobs": 8,
     }
 
 
@@ -173,10 +176,36 @@ async def test_every_new_memory_enqueues_exactly_one_normalize_job(
             for row in (await session.execute(select(models.Memory.id))).scalars()
         }
 
-    assert {job.job_type for job in jobs} == {"normalize_memory"}
-    assert {job.payload["memory_id"] for job in jobs} == memory_ids
+    normalize = [job for job in jobs if job.job_type == JobType.NORMALIZE_MEMORY.value]
+    assert {job.payload["memory_id"] for job in normalize} == memory_ids
     # dedupe_key is the memory id, so a re-run cannot queue the same work twice.
-    assert {job.dedupe_key for job in jobs} == memory_ids
+    assert {job.dedupe_key for job in normalize} == memory_ids
+
+
+async def test_every_new_memory_enqueues_exactly_one_graph_sync(
+    fixture: Fixture,
+) -> None:
+    """M3.4: the graph projects every current memory, so ingestion is a change to it.
+
+    Before this, the only thing that ever announced a memory to the graph was
+    entity extraction — so a deployment with no API key projected nothing at all,
+    and `graph verify` reported a permanent divergence for every file nobody had
+    extracted. Queued here rather than after normalization because a `Memory` node
+    depends on the memory row and nothing downstream of it.
+    """
+    await fixture.run(full=True)
+
+    async with fixture.sessions() as session:
+        jobs = list((await session.execute(select(models.Job))).scalars())
+        memory_ids = {
+            str(row)
+            for row in (await session.execute(select(models.Memory.id))).scalars()
+        }
+
+    syncs = [job for job in jobs if job.job_type == JobType.SYNC_GRAPH.value]
+    assert len(syncs) == len(memory_ids)
+    assert {payload for job in syncs for payload in job.payload["memory_ids"]} == memory_ids
+    assert all(job.priority < 0 for job in syncs), "a projection never jumps the queue"
 
 
 # --------------------------------------------------------------------------

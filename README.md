@@ -10,8 +10,9 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 M2.1 (keyword search), M2.2 (hybrid retrieval), M2.3a (measurement reliability),
 M2.3b (ranking signals, measured and switched off), M2.4 (cross-encoder reranking),
 M2.5 (citations and explainability) and M2.6 (grounded answers). **Phase 2 complete.**
-**Phase 3 in progress**: M3.0 (Neo4j and the graph schema) — infrastructure only, no extraction
-and no retrieval changes yet. See [Graph](#graph).
+**Phase 3 in progress**: M3.0 (Neo4j and the graph schema), M3.1 (entity extraction),
+M3.2 (entity resolution), M3.3 (typed relationships) and M3.4 (projection sync, rebuild and
+divergence detection). See [Graph](#graph).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -878,8 +879,9 @@ parallel definition.
 
 ## Graph
 
-M3.0 adds Neo4j alongside Postgres. Infrastructure only — the schema, the port and the adapter
-exist; nothing extracts entities yet, so the graph is empty until M3.1.
+M3.0 adds Neo4j alongside Postgres. Infrastructure only at that milestone — the schema, the port
+and the adapter — with M3.1 to M3.3 filling it and M3.4 deciding who is allowed to write to it.
+See [Projection sync](#projection-sync).
 
 **Why a graph rather than more Postgres tables.** Fixed one- and two-hop relationships are
 genuinely fine in SQL and frequently faster; a join table with the right index beats a graph
@@ -902,11 +904,13 @@ designed the derived state to be disposable. `DERIVED_PROJECTIONS` in `applicati
 classifies the graph the way `DERIVED_TABLES` classifies the tables — a separate set, because
 everything reading that tuple puts its contents inside a `TRUNCATE`.
 
-**A full replay clears the graph; a scoped one does not.** After a whole-corpus rebuild every
-memory id is new, so every node the graph held refers to a row that no longer exists. A scoped
-replay is the opposite case: `clear()` empties the entire projection, so calling it to rebuild one
-source would discard every other source's nodes. Narrowing the projection by source is M3.1's
-problem. `verify-replay` never touches the graph at all, because it is a read-only comparison.
+**A full replay clears the graph and rebuilds it; a scoped one does neither.** After a
+whole-corpus rebuild every memory id is new, so every node the graph held refers to a row that no
+longer exists. A scoped replay is the opposite case: `clear()` empties the entire projection, so
+calling it to rebuild one source would discard every other source's nodes. `verify-replay` never
+touches the graph at all, because it is a read-only comparison — what it compares instead is the
+projection each side of the rebuild *implies*, read from Postgres. See
+[Projection sync](#projection-sync).
 
 **There is no Alembic for Neo4j.** The constraints and indexes live in `adapters/graph/schema.py`,
 every statement carries `IF NOT EXISTS`, and the whole set is applied on first use rather than by a
@@ -936,6 +940,13 @@ the tests their own database to truncate; Neo4j Community Edition supports exact
 database, so a test run and a developer's graph share it. Tests therefore isolate by identity —
 every id comes from `GraphFixture.new_id`, which records it, and teardown deletes those nodes and
 nothing else.
+
+Which leaves the assertions that are about the *whole* graph — a rebuild, a clear, a divergence
+check — with nowhere to run. Those use `InMemoryGraphStore`, a `GraphStore` with `MERGE` semantics
+and no database, because what they test is arithmetic over two projections and a database does not
+make it more true. The one claim a fake cannot make is that Cypher reads back exactly what it was
+given, so that is asserted against a real Neo4j, scoped to minted ids, in
+`test_the_projection_reads_back_exactly_as_written`. Every in-memory assertion rests on it.
 
 ## Entity extraction
 
@@ -1105,6 +1116,164 @@ gain — `[:RELATES_TO {predicate: 'uses'}]` filters just as precisely.
 Only chunks naming two or more entities are sent to the model. A chunk with one
 entity has nothing to relate, and on a rate-limited tier a request spent being
 told so is the difference between finishing a corpus and stopping partway.
+
+## Projection sync
+
+Postgres is the system of record; Neo4j is a projection. M3.4 makes that
+operational rather than aspirational: **nothing writes to Neo4j from a use case.**
+
+```bash
+memoryos graph rebuild --dry-run   # what would be projected, touching nothing
+memoryos graph rebuild             # clear and re-project everything from Postgres
+memoryos graph verify              # compare the two; exits non-zero on divergence
+memoryos graph sync --memory <id>  # re-project one neighbourhood, inline
+```
+
+Ingestion, extraction and resolution enqueue a `SYNC_GRAPH` job naming what
+changed; `application/graph_sync.py` is the only writer. M3.1 and M3.3 projected
+inline, which is a use case writing to two stores — the graph becomes a second
+source of truth in everything but name, however carefully the write is ordered.
+
+The queued version also fixes the failure handling. An inline projection had to
+catch its own errors and report a degraded graph, because the rows were already
+committed and taking the job down would turn a projection outage into a failed
+extraction. A queued sync has no such conflict: it raises, the worker retries it
+with backoff, and a Neo4j that was down for a minute is a pause rather than a
+divergence nobody records.
+
+**One definition of the projection.** `application/graph_projection.py` reads
+Postgres into data; `write` puts that data into a store, `content_hash` hashes it,
+and `graph verify` compares the two. A projector that wrote as it read could only
+be verified against itself. Three writers with three ideas of what the graph
+should hold is what M3.3 shipped, and two of them were wrong — see the commit
+that removed them.
+
+```
+(:Source)<-[:FROM_SOURCE]-(:Memory)-[:MENTIONS]->(:Entity)-[:RELATES_TO]->(:Entity)
+```
+
+Every current, undeleted memory is projected, not only the ones extraction has
+reached. The old rule made the graph's memory count a fact about extraction
+progress and left a divergence check unable to tell a missing node from an
+unextracted one. That is also why ingestion enqueues a sync: without it the only
+thing announcing a memory to the graph was extraction, so a deployment with no API
+key projected nothing and `graph verify` reported permanent divergence.
+
+### Delete, then project. Never patch.
+
+A scoped sync is a rebuild of a neighbourhood and works exactly as the full
+rebuild does: prune the scope, then write what Postgres says that scope should be.
+An additive sync converges on the graph *containing* everything Postgres implies
+and never removes what it has stopped implying — a mention dropped by a
+re-extraction, a merged-away entity, an edge whose row is gone. None of those is
+visible in a node count.
+
+That makes idempotence structural rather than tested for. What the test actually
+checks is the **scope expansion**, which is the only difficult part. Pruning is
+detaching, so removing an entity takes every `MENTIONS` edge into it, including
+edges from memories the payload never named. So a payload is widened until it is
+closed under one step of the mention relation, against *both* stores:
+
+- a memory in scope brings the entities it mentions;
+- an entity in scope brings every memory that mentions it — according to Postgres,
+  which knows what is true now, **and** according to the graph, which knows what
+  it currently claims.
+
+The graph's opinion is not redundant, and two cases show why. An entity that has
+just lost its last mention is unreachable from Postgres, but its node is still
+there with an edge from a memory in scope; without the graph's answer it survives
+every scoped sync as an orphan. A merged-away loser is the mirror image.
+
+Expansion through a hub is expensive and visible: on this corpus, syncing the one
+memory that mentions `sqlalchemy` and `postgres` widens to 18 memories and 185
+entities. Above 200 memories the sync escalates to a full rebuild and says so,
+because pruning most of the graph a node at a time is strictly more work than one
+`DETACH DELETE`.
+
+### There is no shadow swap, and it is not for want of trying
+
+The Postgres equivalent builds the replacement in a second schema and moves the
+tables in one transaction, so the corpus is never unavailable. Neo4j Community
+Edition offers nowhere to build a replacement — measured on 5.26.29:
+
+```
+CREATE DATABASE memosshadow            -> Unsupported administration command
+CREATE ALIAS memosalias FOR DATABASE   -> Unsupported administration command
+CREATE COMPOSITE DATABASE memoscomposite -> Unsupported administration command
+```
+
+Refused by *edition*, not by permissions: `SHOW DATABASES` returns exactly
+`neo4j` and `system`. Nor can it be faked inside the one database with a parallel
+set of labels, because Cypher has no operation that renames a label or a
+relationship type — the "swap" would be a write over every node and edge, which is
+the rebuild again with an extra copy of the data.
+
+**So the rebuild accepts documented downtime**, and reports it: the graph is empty
+between the clear and the last write, which is 1.7s for 450 nodes and 577 edges on
+this corpus. It grows with the corpus, which is the honest argument for the
+incremental sync existing at all — a rebuild after every change would work today
+and would not at ten times the size.
+
+### Divergence detection
+
+`graph verify` compares counts *and* a content hash of every node and edge, per
+type, and exits non-zero on any difference. The rules differ from
+`verify-replay`'s in one way worth stating, because it looks like an
+inconsistency: this compares on **primary keys**, where the replay check compares
+on natural keys. A rebuild mints new ids, so an id comparison there fails on every
+honest replay; here the graph *copies* Postgres' ids by construction, so an
+`Entity` node whose `entity_id` names no entity is a real divergence.
+
+Content and not counts, for the reason M1.6.1 established: counts match while a
+node carries a stale name. Proven by corrupting one — measured on the live corpus,
+`SET e.name = 'SQLAlchemy CORRUPTED'` on two nodes:
+
+```
+[ok  ] Memory               162       162   79cf00e96740
+[FAIL] Entity               287       287   c5b65b1ef6c2 != 3f25b5167011
+         differs: 019ff00d-... (SQLAlchemy CORRUPTED (technology)): ('sqlalchemy', ...) -> ('SQLAlchemy CORRUPTED', ...)
+```
+
+Both counts unchanged, exit code 1. Nothing is repaired: `graph rebuild` is the
+repair, and keeping them separate leaves somebody able to answer how often the
+projection actually diverges.
+
+A node carrying a label the projection does not define is counted separately from
+a stale one, because it is a different kind of wrong — a stale `Entity` is a
+projection that is behind, a foreign label is a writer nobody knows about.
+
+### The predicate is part of an edge's identity
+
+Found by `graph rebuild --dry-run` reporting 25 `RELATES_TO` where the graph held
+24. Neo4j merges one relationship per `(type, start, end)`, so "sqlalchemy uses
+postgres" and "sqlalchemy depends_on postgres" — both real claims — collapsed into
+a single edge whose predicate was whichever the projection wrote last, and which
+one survived depended on row order. Nothing failed.
+
+`GraphEdge.identity` names the properties that belong inside the `MERGE` pattern
+rather than in the `SET` after it. `domain.values.EDGE_IDENTITY_PROPERTIES` is the
+closed set they may come from, because a property name is interpolated into Cypher
+for the same reason a label is: it cannot be a bound parameter.
+
+### A replay clears the graph and rebuilds it
+
+M3.0 cleared and stopped, and empty is not the same as correct — a projection
+nobody has built is indistinguishable, to `graph verify`, from one that has
+diverged. A full replay now clears before the tables are rebuilt (so the graph
+never holds ids Postgres has deleted) and projects after.
+
+What it projects is **not what was there before**, and that is the honest outcome
+rather than a gap. `entities`, `entity_mentions` and `entity_relationships` are
+derived tables a replay truncates and deliberately does not rebuild — an LLM call
+per chunk, against offsets that no longer point anywhere — so the projection after
+a full replay holds every memory and its source and no entities at all. Re-run
+`extract-entities`, `resolve-entities` and `extract-relationships` afterwards.
+
+`verify-replay`'s snapshot gains `graph_memory_nodes`, compared on natural keys
+like every other row in it. The entity half is *reported* and not diffed, for
+exactly the reason `Snapshot` has never held an entity row: a diff of a section
+that is empty by design on one side is a check that fails every time and teaches
+nobody anything.
 
 ## Migrations
 

@@ -241,6 +241,21 @@ IDENTITY_PROPERTY: dict[GraphLabel, str] = {
     GraphLabel.SOURCE: "source_id",
 }
 
+# Properties that identify a *relationship*, as opposed to describing one. The
+# counterpart of `IDENTITY_PROPERTY` for edges, and here for the same reason: the
+# projection merges on these, the divergence check keys on these, and two places
+# that disagreed about the set would compare one edge against a different one.
+#
+# `predicate` is the only member, and it earns it. Neo4j merges one relationship
+# per (type, start, end), so "sqlalchemy uses postgres" and "sqlalchemy depends_on
+# postgres" collapsed into a single `RELATES_TO` whose predicate was whichever the
+# projection happened to write last. Both claims are in the corpus.
+#
+# Nothing may be added here without a thought that does not apply to node
+# properties: these names are interpolated into Cypher, because a property name
+# cannot be a bound parameter any more than a label can.
+EDGE_IDENTITY_PROPERTIES: frozenset[str] = frozenset({"predicate"})
+
 
 class EmbeddingRole(StrEnum):
     """Which side of a retrieval a piece of text is on.

@@ -834,6 +834,21 @@ class GraphEdge:
     start: GraphNode
     end: GraphNode
     properties: dict[str, Any] = field(default_factory=dict)
+    # Property names that are part of the relationship's *identity*, and therefore
+    # belong inside the `MERGE` pattern rather than in the `SET` after it.
+    #
+    # Empty for `MENTIONS` and `FROM_SOURCE`, where the endpoints are the whole
+    # identity. Not empty for `RELATES_TO`, and that is not a refinement: Neo4j
+    # merges one relationship per (type, start, end), so two predicates between one
+    # pair — "sqlalchemy uses postgres" and "sqlalchemy depends_on postgres" — were
+    # collapsing into a single edge whose predicate was whichever one was written
+    # last. Both claims are in the corpus, the projection reported 25 edges, the
+    # graph held 24, and which of the two survived depended on row order.
+    #
+    # Only names in `domain.values.EDGE_IDENTITY_PROPERTIES` are accepted, because
+    # these are interpolated into Cypher: a property name cannot be a bound
+    # parameter any more than a label can.
+    identity: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -922,17 +937,26 @@ class GraphStore(Protocol):
         """
         ...
 
-    async def memories_mentioning(
-        self, entity_ids: Sequence[UUID]
+    async def mention_edges(
+        self,
+        *,
+        memory_ids: Sequence[UUID] = (),
+        entity_ids: Sequence[UUID] = (),
     ) -> list[tuple[UUID, UUID]]:
-        """`(memory_id, entity_id)` for every `MENTIONS` edge into these entities.
+        """`(memory_id, entity_id)` for every `MENTIONS` edge touching either set.
 
         Read from the graph rather than from Postgres deliberately, and the
-        difference is the whole point of the call: the sync needs to know what
-        the *graph* currently claims, because the rows that produced those claims
-        may already have moved. After a merge, Postgres no longer associates the
-        loser with any memory; the graph still does, and those are exactly the
-        edges that have to be found and removed.
+        difference is the whole point of the call: the sync needs to know what the
+        *graph* currently claims, because the rows that produced those claims may
+        already have moved or gone.
+
+        Both directions, because the sync needs both and each covers a case the
+        other cannot see. An entity that has just lost its last mention is
+        unreachable from Postgres — nothing there associates it with any memory —
+        but the graph still has the edge, and without it the entity's node survives
+        every scoped sync as an orphan. After a merge it is the mirror image: the
+        loser is unreachable from Postgres, and only the graph can say which
+        memories have to be re-projected once its node is pruned.
         """
         ...
 

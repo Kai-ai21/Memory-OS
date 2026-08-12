@@ -49,7 +49,7 @@ from memoryos.application.ports import (
     MemoryNode,
     SourceNode,
 )
-from memoryos.domain.values import EdgeType, GraphLabel
+from memoryos.domain.values import EDGE_IDENTITY_PROPERTIES, EdgeType, GraphLabel
 
 logger = structlog.get_logger(__name__)
 
@@ -65,6 +65,7 @@ MAX_DEPTH = 6
 # not part of the projection.
 _LABELS_BY_NAME: dict[str, GraphLabel] = {label.value: label for label in GraphLabel}
 _EDGES_BY_NAME: dict[str, EdgeType] = {edge.value: edge for edge in EdgeType}
+
 
 # The driver defaults to 30 seconds to open a connection and 60 to take one from
 # the pool, which are reasonable for a batch job and wrong for the readiness
@@ -241,6 +242,12 @@ class Neo4jGraphStore:
                 "start_key": edge.start.key,
                 "end_key": edge.end.key,
                 "properties": dict(edge.properties),
+                # Bound under a prefixed name, so an identity property called
+                # `properties` could not shadow the map above.
+                **{
+                    f"identity_{name}": edge.properties.get(name)
+                    for name in _checked_identity(edge)
+                },
             },
             database_=self._database,
         )
@@ -249,25 +256,39 @@ class Neo4jGraphStore:
     def _link_statement(edge: GraphEdge) -> str:
         """Assemble the `MERGE`, whose labels and relationship type cannot be bound.
 
-        Cypher parameters can carry values but not structure: `MERGE (n:$label)`
-        and `-[:$type]->` are both syntax errors before Neo4j 5.26 and remain a
-        different feature after it. So these three fragments are formatted in.
+        Cypher parameters can carry values but not structure: `MERGE (n:$label)`,
+        `-[:$type]->` and `{$name: $value}` are all syntax errors before Neo4j 5.26
+        and remain a different feature after it. So those fragments are formatted
+        in.
 
         That is safe here for a reason worth stating rather than assuming: every
         interpolated fragment is the `.value` of a `GraphLabel` or `EdgeType`
-        member — checked, at runtime, immediately below — so the set of
-        statements this function can produce is finite and enumerable. No caller
-        input reaches the string. Caller input is `$start_key`, `$end_key` and
-        `$properties`, all of which are bound.
+        member, or a name from `EDGE_IDENTITY_PROPERTIES` — each checked, at
+        runtime, immediately below — so the set of statements this function can
+        produce is finite and enumerable. No caller input reaches the string.
+        Caller input is `$start_key`, `$end_key`, `$properties` and the
+        `$identity_*` bindings, all of which are bound.
+
+        The identity properties go *inside* the relationship pattern. See
+        `ports.GraphEdge.identity` for what that fixes.
         """
         start_label = _checked_label(edge.start.label)
         end_label = _checked_label(edge.end.label)
+        names = _checked_identity(edge)
+        # Omitted entirely rather than emitted as an empty map: `-[r:T {}]->` is
+        # accepted by the parser and there is no reason to make a reader of the
+        # query log wonder whether it means something.
+        identity = (
+            " {" + ", ".join(f"{name}: $identity_{name}" for name in names) + "}"
+            if names
+            else ""
+        )
         return (
             f"MERGE (a:{start_label} "
             f"{{{identity_property(edge.start.label)}: $start_key}}) "
             f"MERGE (b:{end_label} "
             f"{{{identity_property(edge.end.label)}: $end_key}}) "
-            f"MERGE (a)-[r:{_checked_edge(edge.type)}]->(b) "
+            f"MERGE (a)-[r:{_checked_edge(edge.type)}{identity}]->(b) "
             f"SET r += $properties"
         )
 
@@ -308,13 +329,18 @@ class Neo4jGraphStore:
         checked = _checked_label(label)
         key = identity_property(label)
         result = await self._driver.execute_query(
-            # `count` before the delete: after `DETACH DELETE` there is nothing
+            # Counted before the delete: after `DETACH DELETE` there is nothing
             # left to count, and the caller needs to know whether the graph
             # actually held what it was asked to remove.
+            #
+            # `FOREACH` rather than a `CALL` subquery, which is what this was and
+            # which the server deprecates without a variable scope clause — a
+            # clause that does not exist before 5.23. `FOREACH` has been the
+            # spelling for a delete over a collected list throughout.
             f"MATCH (n:{checked}) WHERE n.{key} IN $ids "
-            f"WITH collect(n) AS found "
-            f"CALL {{ WITH found UNWIND found AS n DETACH DELETE n }} "
-            f"RETURN size(found) AS removed",
+            f"WITH collect(n) AS found, count(n) AS removed "
+            f"FOREACH (node IN found | DETACH DELETE node) "
+            f"RETURN removed",
             {"ids": [str(value) for value in ids]},
             database_=self._database,
         )
@@ -326,17 +352,23 @@ class Neo4jGraphStore:
     # Reads
     # ------------------------------------------------------------------
 
-    async def memories_mentioning(
-        self, entity_ids: Sequence[UUID]
+    async def mention_edges(
+        self,
+        *,
+        memory_ids: Sequence[UUID] = (),
+        entity_ids: Sequence[UUID] = (),
     ) -> list[tuple[UUID, UUID]]:
-        if not entity_ids:
+        if not memory_ids and not entity_ids:
             return []
         await self.ensure_schema()
         result = await self._driver.execute_query(
             "MATCH (m:Memory)-[:MENTIONS]->(e:Entity) "
-            "WHERE e.entity_id IN $ids "
+            "WHERE m.memory_id IN $memories OR e.entity_id IN $entities "
             "RETURN DISTINCT m.memory_id AS memory_id, e.entity_id AS entity_id",
-            {"ids": [str(value) for value in entity_ids]},
+            {
+                "memories": [str(value) for value in memory_ids],
+                "entities": [str(value) for value in entity_ids],
+            },
             database_=self._database,
         )
         return [
@@ -435,6 +467,32 @@ def _checked_edge(edge: EdgeType) -> str:
     if not isinstance(edge, EdgeType):
         raise UnknownGraphLabel(f"{edge!r} is not an EdgeType")
     return edge.value
+
+
+def _checked_identity(edge: GraphEdge) -> tuple[str, ...]:
+    """The identity property names, having confirmed each is one this schema knows.
+
+    The same guarantee `_checked_label` makes, for the same reason: these names are
+    interpolated into Cypher because a property name cannot be bound, so the set of
+    statements this adapter can emit has to stay finite and enumerable. An
+    allowlist rather than a character check, because "looks like an identifier" is
+    a weaker claim than "is one of two known names".
+    """
+    for name in edge.identity:
+        if name not in EDGE_IDENTITY_PROPERTIES:
+            raise UnknownGraphLabel(
+                f"{name!r} is not an edge identity property; the projection may "
+                f"only merge on {sorted(EDGE_IDENTITY_PROPERTIES)}"
+            )
+        if name not in edge.properties:
+            raise UnknownGraphLabel(
+                f"edge {edge.type.value} declares {name!r} as part of its identity "
+                f"but does not carry it. Merging on a null would collapse every "
+                f"edge that omitted it into one."
+            )
+    # Sorted, so two edges built with the same names in a different order produce
+    # the same statement and share the driver's query plan cache.
+    return tuple(sorted(edge.identity))
 
 
 def _checked_depth(depth: int) -> int:

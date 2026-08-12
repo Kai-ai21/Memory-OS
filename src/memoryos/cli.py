@@ -12,7 +12,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.connectors.filesystem import (
     DEFAULT_EXCLUDE,
@@ -24,7 +25,7 @@ from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.extraction.llm import ExtractionStats
 from memoryos.adapters.graph.schema import SCHEMA_VERSION
 from memoryos.adapters.llm.errors import MissingApiKey
-from memoryos.application import graph_projection
+from memoryos.application import graph_projection, graph_sync, graph_verify
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
 from memoryos.application.backfill import (
     enqueue_embedding,
@@ -55,11 +56,7 @@ from memoryos.application.ports import ScoreBreakdown, SearchFilters
 from memoryos.application.rechunk import enqueue_rechunk, find_stale
 from memoryos.application.relationships import ExtractRelationships, RelationshipReport
 from memoryos.application.replay import PartialShadowReplay, ReplayScope, ReplayStage
-from memoryos.application.resolution import (
-    DEFAULT_THRESHOLD,
-    MergeCandidate,
-    ResolveEntities,
-)
+from memoryos.application.resolution import DEFAULT_THRESHOLD, MergeCandidate
 from memoryos.application.tuning import (
     COARSE,
     FINE,
@@ -78,7 +75,7 @@ from memoryos.domain.backoff import compute_backoff
 from memoryos.domain.entities import Source
 from memoryos.domain.fusion import DEFAULT_RRF_K
 from memoryos.domain.ids import new_id
-from memoryos.domain.jobs import PermanentError, TransientError
+from memoryos.domain.jobs import JobStatus, JobType, PermanentError, TransientError
 from memoryos.domain.values import (
     DEFAULT_SEARCH_MODE,
     MergeStatus,
@@ -762,7 +759,7 @@ async def run_extract_entities(
 
         extractor = container.extractor()
         extract = ExtractEntities(
-            container.database.session_factory, extractor, container.graph
+            container.database.session_factory, extractor, container.queue
         )
 
         started = time.monotonic()
@@ -782,7 +779,7 @@ async def run_extract_entities(
             print(
                 f"[{index}/{len(targets)}] {target.external_key}: "
                 f"{report.mentions} mentions, {report.entities} new entities"
-                + ("" if report.projected else "  (not projected)")
+                + ("" if report.sync_enqueued else "  (no graph sync queued)")
             )
 
         elapsed = time.monotonic() - started
@@ -872,7 +869,7 @@ async def run_extract_relationships(
             return 0
 
         started = time.monotonic()
-        stored = projected = failed = 0
+        stored = queued = failed = 0
         for index, target in enumerate(targets, start=1):
             try:
                 report = await _relationships_with_backoff(extract, target.memory_id)
@@ -881,7 +878,7 @@ async def run_extract_relationships(
                 print(f"[{index}/{len(targets)}] FAILED {target.external_key}: {exc}")
                 continue
             stored += report.relationships
-            projected += report.projected
+            queued += int(report.sync_enqueued)
             print(
                 f"[{index}/{len(targets)}] {target.external_key}: "
                 f"{report.relationships} relationships "
@@ -891,7 +888,7 @@ async def run_extract_relationships(
         elapsed = time.monotonic() - started
         stats = container_stats(extract)
         print(
-            f"\nrelationships {stored}   edges projected {projected}   failed {failed}\n"
+            f"\nrelationships {stored}   graph syncs queued {queued}   failed {failed}\n"
             f"api calls     {stats.calls} ({stats.retries} retries)\n"
             f"dropped       {stats.dropped_unknown_entity} unknown entity, "
             f"{stats.dropped_low_confidence} low confidence, "
@@ -932,9 +929,7 @@ async def run_resolve_entities(
 ) -> int:
     container = Container.build(settings)
     try:
-        resolve = ResolveEntities(
-            container.database.session_factory, container.embedder, threshold=threshold
-        )
+        resolve = container.resolve(threshold=threshold)
 
         candidates = await resolve.propose()
         auto = [c for c in candidates if resolve.would_auto_merge(c)]
@@ -965,17 +960,38 @@ async def run_resolve_entities(
         for strategy, count in sorted(report.by_strategy.items()):
             print(f"  {strategy:10} {count} candidates")
 
-        # The graph is a projection of the tables that just changed, so it is
-        # rebuilt rather than patched: a merge removes nodes and moves edges,
-        # and an incremental update would have to know which. Clearing and
-        # re-projecting is what "rebuildable projection" is for.
-        projection = await graph_projection.rebuild(
-            container.database.session_factory, container.graph
-        )
-        print(f"  graph rebuilt: {projection.nodes} nodes, {len(projection.edges)} edges")
+        # Queued, not written. Every merge enqueued a `SYNC_GRAPH` job naming its
+        # winner and loser as it was applied, so the projection catches up when a
+        # worker runs — and the loser's node is pruned rather than left behind,
+        # which an upsert-only update could never do.
+        #
+        # M3.2 rebuilt the whole projection here instead, which was correct and
+        # also a use case writing to Neo4j. `graph rebuild` is still the answer to
+        # divergence; it is no longer the answer to a merge.
+        pending = await _pending_graph_syncs(container.database.session_factory)
+        print(f"  queued {pending} graph syncs; run `memoryos worker --drain`")
     finally:
         await container.dispose()
     return 0
+
+
+async def _pending_graph_syncs(sessions: async_sessionmaker[AsyncSession]) -> int:
+    """How many projection updates are waiting for a worker."""
+    async with sessions() as session:
+        return int(
+            (
+                await session.execute(
+                    select(func.count())
+                    .select_from(models.Job)
+                    .where(
+                        models.Job.job_type == JobType.SYNC_GRAPH.value,
+                        models.Job.status.in_(
+                            [JobStatus.PENDING.value, JobStatus.RUNNING.value]
+                        ),
+                    )
+                )
+            ).scalar_one()
+        )
 
 
 async def run_list_merges(
@@ -1018,9 +1034,7 @@ async def run_manual_merge(settings: Settings, *, winner: str, loser: str) -> in
             print(str(exc))
             return 1
 
-        resolve = ResolveEntities(
-            container.database.session_factory, container.embedder
-        )
+        resolve = container.resolve()
         moved = await resolve.apply(
             MergeCandidate(
                 left_id=winner_id,
@@ -1034,6 +1048,7 @@ async def run_manual_merge(settings: Settings, *, winner: str, loser: str) -> in
             print("nothing to do: they are already the same entity")
             return 0
         print(f"merged; {moved} mentions moved")
+        print("queued a graph sync; run `memoryos worker --drain`")
     finally:
         await container.dispose()
     return 0
@@ -1042,15 +1057,128 @@ async def run_manual_merge(settings: Settings, *, winner: str, loser: str) -> in
 async def run_unmerge(settings: Settings, *, merge_id: str) -> int:
     container = Container.build(settings)
     try:
-        resolve = ResolveEntities(
-            container.database.session_factory, container.embedder
-        )
+        resolve = container.resolve()
         try:
             restored = await resolve.revert(UUID(merge_id))
         except (LookupError, ValueError) as exc:
             print(str(exc))
             return 1
         print(f"reverted; {restored} mentions restored")
+        print("queued a graph sync; run `memoryos worker --drain`")
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_graph_rebuild(settings: Settings, *, dry_run: bool) -> int:
+    """Clear the projection and build it again from Postgres.
+
+    **There is no shadow swap, and it is not for want of trying.** The Postgres
+    equivalent builds the replacement in a second schema and moves the tables in
+    one transaction, so the live corpus is never unavailable. Neo4j Community
+    Edition offers nowhere to build the replacement: it supports exactly one user
+    database, and `CREATE DATABASE`, `CREATE ALIAS` and `CREATE COMPOSITE DATABASE`
+    are all refused outright — "Unsupported administration command", by edition
+    rather than by permissions. Nor can it be faked inside the one database with a
+    parallel set of labels: Cypher has no operation that renames a label or a
+    relationship type, so the "swap" would be a write over every node and edge,
+    which is the rebuild again with an extra copy of the data.
+
+    So this accepts downtime, and says how much: the graph is empty between the
+    clear and the last write. On this corpus that is under a second. It grows with
+    the corpus, which is the honest argument for the incremental sync existing at
+    all — see `application/graph_sync.py`.
+
+    `--dry-run` reads the projection and prints what it would write, touching
+    nothing. That is genuinely useful before a rebuild rather than a courtesy: the
+    counts it prints are what the graph *owes*, so a `--dry-run` beside
+    `graph verify` is how you tell "the projection is behind" from "Postgres has
+    less in it than you thought".
+    """
+    container = Container.build(settings)
+    try:
+        sessions = container.database.session_factory
+        if dry_run:
+            projection = await graph_projection.read(sessions)
+            print("dry run; the graph was not touched\n")
+            print(f"would project {projection.nodes} nodes, {len(projection.edges)} edges")
+            for name, count in projection.counts.items():
+                print(f"  {name:<12} {count}")
+            return 0
+
+        before = await container.graph.counts_by_label()
+        print(f"before: {sum(before.values())} nodes  {before or '{}'}")
+        print("clearing the projection — the graph answers nothing until this finishes")
+        print("(Neo4j Community has one database, so there is nowhere to swap in)\n")
+
+        started = time.monotonic()
+        projection = await graph_projection.rebuild(sessions, container.graph)
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+
+        after = await container.graph.counts_by_label()
+        print(f"after:  {sum(after.values())} nodes")
+        for name, count in projection.counts.items():
+            print(f"  {name:<12} {count}")
+        print(f"\n{elapsed_ms}ms, of which the graph was unavailable for all of it")
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_graph_verify(settings: Settings) -> int:
+    """Report every way the projection differs from Postgres. Non-zero on any.
+
+    The same requirement `verify-replay` carries: a check that cannot fail is not
+    a check. One of this milestone's tests corrupts a node's name — a change no
+    count would see — and requires this to exit non-zero.
+
+    Nothing is repaired here. `graph rebuild` is the repair, and keeping them
+    separate is what leaves anybody able to answer how often the projection
+    actually diverges.
+    """
+    container = Container.build(settings)
+    try:
+        divergence = await graph_verify.verify(
+            container.database.session_factory, container.graph
+        )
+        print(divergence.render())
+        print()
+        if divergence.identical:
+            print("identical: the projection matches Postgres")
+            return 0
+        print("DIVERGED: Postgres is the system of record — run `memoryos graph rebuild`")
+        return 1
+    finally:
+        await container.dispose()
+
+
+async def run_graph_sync(settings: Settings, *, memories: list[str], entities: list[str]) -> int:
+    """Run one sync inline, with the payload a job would have carried.
+
+    For diagnosing a neighbourhood rather than for routine use: the routine path is
+    the `SYNC_GRAPH` job that extraction and resolution enqueue. Inline, because
+    somebody debugging a single memory's projection should not have to start a
+    worker to see what happens.
+    """
+    container = Container.build(settings)
+    try:
+        try:
+            payload = graph_sync.payload_for(
+                memory_ids=[UUID(value) for value in memories],
+                entity_ids=[UUID(value) for value in entities],
+            )
+        except ValueError as exc:
+            print(f"not an id: {exc}")
+            return 1
+        if not payload["memory_ids"] and not payload["entity_ids"]:
+            print("nothing to sync: name at least one --memory or --entity")
+            return 1
+
+        report = await container.graph_sync()(payload)
+        print(json.dumps(report.as_dict(), indent=2))
+    except PermanentError as exc:
+        print(str(exc))
+        return 1
     finally:
         await container.dispose()
     return 0
@@ -1367,6 +1495,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     unmerge_parser = entity_commands.add_parser("unmerge", help="undo a merge")
     unmerge_parser.add_argument("merge_id", help="id from `entity merges`")
+
+    graph_parser = commands.add_parser("graph", help="the Neo4j projection")
+    graph_commands = graph_parser.add_subparsers(dest="graph_command", required=True)
+
+    graph_rebuild = graph_commands.add_parser(
+        "rebuild", help="clear the graph and re-project everything from Postgres"
+    )
+    graph_rebuild.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would be projected without touching the graph",
+    )
+
+    graph_commands.add_parser(
+        "verify", help="compare the graph against Postgres; exits non-zero on divergence"
+    )
+
+    graph_sync_parser = graph_commands.add_parser(
+        "sync", help="re-project one neighbourhood, the way the job does"
+    )
+    graph_sync_parser.add_argument(
+        "--memory", action="append", default=[], metavar="ID", help="a memory id"
+    )
+    graph_sync_parser.add_argument(
+        "--entity", action="append", default=[], metavar="ID", help="an entity id"
+    )
 
     entity_stats_parser = commands.add_parser(
         "entity-stats", help="report entities, mentions, and the duplicate problem"
@@ -1686,6 +1840,15 @@ def main(argv: list[str] | None = None) -> int:
                 threshold=args.threshold,
                 limit=args.limit,
             )
+        )
+
+    if args.command == "graph":
+        if args.graph_command == "rebuild":
+            return asyncio.run(run_graph_rebuild(settings, dry_run=args.dry_run))
+        if args.graph_command == "verify":
+            return asyncio.run(run_graph_verify(settings))
+        return asyncio.run(
+            run_graph_sync(settings, memories=args.memory, entities=args.entity)
         )
 
     if args.command == "entity":

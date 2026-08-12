@@ -35,6 +35,16 @@ class JobType(StrEnum):
     # stages means a memory that fails to parse or chunk never reaches the
     # model at all.
     EXTRACT_ENTITIES = auto()
+    # M3.4. Enqueued when extraction or resolution changes anything the graph
+    # projects, and the *only* thing that writes to Neo4j. Its payload names the
+    # memories and entities that changed, so the job updates a neighbourhood
+    # rather than rebuilding the whole projection.
+    #
+    # Last in the chain and lowest priority, because the graph is a projection:
+    # a sync that jumped the queue would delay ingestion to keep derived state
+    # current, and derived state that is a few seconds behind is the normal
+    # condition of this system rather than a fault.
+    SYNC_GRAPH = auto()
 
     # Test types. The worker's success, retry, and dead-letter paths are
     # exercised through these rather than through real work.

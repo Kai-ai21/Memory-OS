@@ -409,6 +409,11 @@ async def _relationship_edges(
                 "assertion_count": int(row[3]),
                 "confidence": float(row[4]) if row[4] is not None else 0.0,
             },
+            # The predicate is part of the edge's identity, not a label on it: two
+            # predicates between one pair are two claims, and merging on the
+            # endpoints alone silently kept whichever was written last. See
+            # `ports.GraphEdge.identity`.
+            identity=("predicate",),
         )
         for row in await session.execute(stmt)
     )

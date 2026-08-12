@@ -44,7 +44,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
-from memoryos.application.ports import Embedder
+from memoryos.application.graph_sync import enqueue_sync
+from memoryos.application.ports import Embedder, JobQueue
 from memoryos.domain.canonicalize import canonicalize
 from memoryos.domain.ids import new_id
 from memoryos.domain.values import (
@@ -162,12 +163,18 @@ class ResolveEntities:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         embedder: Embedder,
+        queue: JobQueue | None = None,
         *,
         threshold: float = DEFAULT_THRESHOLD,
         review_floor: float = REVIEW_FLOOR,
     ) -> None:
         self._sessions = session_factory
         self._embedder = embedder
+        # A merge changes the graph, and this is where the change is announced.
+        # Optional for the same reason it is everywhere else in Phase 3: the graph
+        # is a projection, and a deployment without one still resolves entities
+        # correctly — `graph verify` is what reports the projection is behind.
+        self._queue = queue
         self._threshold = threshold
         self._review_floor = min(review_floor, threshold)
 
@@ -277,6 +284,15 @@ class ResolveEntities:
                     merged_at=func.now(),
                 )
             )
+
+        # After the commit. The sync reads Postgres, so a job queued inside the
+        # transaction could be claimed by a worker before the merge was visible
+        # and would project the state the merge was about to replace.
+        #
+        # Both ids, and the loser is the one that matters: the winner only gains
+        # mentions, but the loser has to *leave* the graph, and only a payload
+        # naming it will prune its node and the edges into it.
+        await self._queue_sync(winner, loser)
         return len(moved)
 
     async def revert(self, merge_id: UUID) -> int:
@@ -310,7 +326,17 @@ class ResolveEntities:
             )
             merge.status = MergeStatus.REVERTED.value
             merge.reverted_at = func.now()
+            winner_id, loser_id = merge.winner_id, merge.loser_id
+
+        # An unmerge is as much a graph change as a merge: the loser becomes a
+        # node again and takes back the mentions that moved.
+        await self._queue_sync(winner_id, loser_id)
         return len(mention_ids)
+
+    async def _queue_sync(self, *entity_ids: UUID) -> None:
+        if self._queue is None:
+            return
+        await enqueue_sync(self._queue, entity_ids=list(entity_ids))
 
     async def record_pending(self, candidate: MergeCandidate) -> bool:
         """Queue a candidate for review. False if it was already queued."""

@@ -13,15 +13,27 @@ from uuid import UUID
 import pytest
 from neo4j import AsyncGraphDatabase
 
-from memoryos.adapters.graph.neo4j_store import MAX_DEPTH, Neo4jGraphStore
+from memoryos.adapters.graph.neo4j_store import (
+    MAX_DEPTH,
+    Neo4jGraphStore,
+    UnknownGraphLabel,
+)
 from memoryos.adapters.graph.schema import (
     SCHEMA_VERSION,
     STATEMENTS,
     apply_schema,
     read_schema_version,
 )
-from memoryos.application.ports import EntityNode, GraphEdge, GraphNode, MemoryNode
-from memoryos.domain.values import EdgeType, GraphLabel, MemoryKind
+from memoryos.application import graph_projection, graph_verify
+from memoryos.application.graph_projection import GraphProjection
+from memoryos.application.ports import (
+    EntityNode,
+    GraphEdge,
+    GraphNode,
+    MemoryNode,
+    SourceNode,
+)
+from memoryos.domain.values import EdgeType, GraphLabel, MemoryKind, Predicate
 from tests.integration.conftest import GraphFixture
 
 pytestmark = pytest.mark.graph
@@ -307,3 +319,271 @@ async def test_an_out_of_range_depth_is_refused(
     """
     with pytest.raises(ValueError, match="depth must be between"):
         await graph.store.neighbours(graph.new_id(), depth=depth, limit=10)
+
+
+# --------------------------------------------------------------------------
+# Round trip: what the projection writes is what it reads back
+#
+# The one claim in M3.4 that the in-memory store cannot make, and the link every
+# assertion in `test_graph_sync.py` rests on. Those tests compare a projection
+# against what a `GraphStore` reports; if Cypher lost a property, rounded a float,
+# or returned a `neo4j.time.DateTime` that compared unequal to a `datetime`, every
+# one of them would still pass and `graph verify` would report divergence on a
+# perfectly good graph.
+#
+# Scoped to ids the fixture minted, so this needs no `clear()` — see the note above
+# `GraphFixture`. `all_nodes` and `all_edges` read the whole database, so the
+# assertions filter to the minted set rather than comparing totals.
+# --------------------------------------------------------------------------
+
+
+async def test_the_projection_reads_back_exactly_as_written(graph: GraphFixture) -> None:
+    """Write one of every node and edge type, then read them back and compare.
+
+    Every property that `graph_verify` compares is checked here, including the two
+    that cross a type boundary: `occurred_at`, which the driver returns as its own
+    temporal type, and `confidence`, which Postgres stores as a 32-bit REAL and
+    Neo4j as a double.
+    """
+    source_id, memory_id, entity_id, other_id = (graph.new_id() for _ in range(4))
+    expected = GraphProjection(
+        sources=(SourceNode(source_id=source_id, name="vault", kind="filesystem"),),
+        memories=(
+            MemoryNode(
+                memory_id=memory_id,
+                external_key="notes/design.md",
+                kind=MemoryKind.NOTE,
+                occurred_at=OCCURRED_AT,
+            ),
+        ),
+        entities=(
+            EntityNode(entity_id, "Postgres", "postgres", "technology", 0.9),
+            EntityNode(other_id, "SQLAlchemy", "sqlalchemy", "technology", 0.75),
+        ),
+        edges=(
+            GraphEdge(
+                type=EdgeType.FROM_SOURCE,
+                start=GraphNode(GraphLabel.MEMORY, str(memory_id)),
+                end=GraphNode(GraphLabel.SOURCE, str(source_id)),
+            ),
+            GraphEdge(
+                type=EdgeType.MENTIONS,
+                start=GraphNode(GraphLabel.MEMORY, str(memory_id)),
+                end=GraphNode(GraphLabel.ENTITY, str(entity_id)),
+                properties={"mentions": 3, "chunk_ordinal": 0},
+            ),
+            GraphEdge(
+                type=EdgeType.RELATES_TO,
+                start=GraphNode(GraphLabel.ENTITY, str(other_id)),
+                end=GraphNode(GraphLabel.ENTITY, str(entity_id)),
+                properties={
+                    "predicate": Predicate.USES.value,
+                    "assertion_count": 2,
+                    "confidence": 0.8,
+                },
+            ),
+        ),
+    )
+
+    await graph_projection.write(graph.store, expected)
+    actual = await _minted_projection(graph)
+
+    divergence = graph_verify.compare(expected, actual)
+    assert divergence.identical, divergence.render()
+
+
+async def test_projecting_twice_leaves_one_of_everything(graph: GraphFixture) -> None:
+    """`MERGE`, not `CREATE`, all the way down.
+
+    Asserted against a real database because it is a claim about Cypher: the fake's
+    dict cannot double a node however the projection is written, so this is the only
+    place the property is actually under test.
+    """
+    memory_id, entity_id = graph.new_id(), graph.new_id()
+    projection = GraphProjection(
+        memories=(
+            MemoryNode(memory_id, "notes/twice.md", MemoryKind.NOTE, OCCURRED_AT),
+        ),
+        entities=(EntityNode(entity_id, "Neo4j", "neo4j", "technology", 0.5),),
+        edges=(
+            GraphEdge(
+                type=EdgeType.MENTIONS,
+                start=GraphNode(GraphLabel.MEMORY, str(memory_id)),
+                end=GraphNode(GraphLabel.ENTITY, str(entity_id)),
+                properties={"mentions": 1, "chunk_ordinal": 0},
+            ),
+        ),
+    )
+
+    await graph_projection.write(graph.store, projection)
+    once = await _minted_projection(graph)
+    await graph_projection.write(graph.store, projection)
+    twice = await _minted_projection(graph)
+
+    assert graph_projection.content_hash(once) == graph_projection.content_hash(twice)
+
+
+async def test_pruning_a_memory_takes_its_edges_with_it(graph: GraphFixture) -> None:
+    """Detached, which is what makes a scoped sync a rebuild rather than a merge.
+
+    An edge that should no longer exist cannot survive by not being mentioned — so
+    the delete has to remove the relationships, not only the node.
+    """
+    memory_id, entity_id = graph.new_id(), graph.new_id()
+    await graph_projection.write(
+        graph.store,
+        GraphProjection(
+            memories=(
+                MemoryNode(memory_id, "notes/gone.md", MemoryKind.NOTE, OCCURRED_AT),
+            ),
+            entities=(EntityNode(entity_id, "Kept", "kept", "concept", 0.5),),
+            edges=(
+                GraphEdge(
+                    type=EdgeType.MENTIONS,
+                    start=GraphNode(GraphLabel.MEMORY, str(memory_id)),
+                    end=GraphNode(GraphLabel.ENTITY, str(entity_id)),
+                    properties={"mentions": 1, "chunk_ordinal": 0},
+                ),
+            ),
+        ),
+    )
+    assert len((await _minted_projection(graph)).edges) == 1
+
+    removed = await graph.store.prune_memories([memory_id])
+    after = await _minted_projection(graph)
+
+    assert removed == 1
+    assert not after.memories
+    assert not after.edges, "the MENTIONS edge went with the node"
+    assert len(after.entities) == 1, "the entity at the other end did not"
+    # Idempotent: pruning what is already gone is not an error, and reports zero.
+    assert await graph.store.prune_memories([memory_id]) == 0
+
+
+async def test_the_graph_reports_what_it_claims_a_memory_mentions(
+    graph: GraphFixture,
+) -> None:
+    """The read the sync's scope expansion depends on, in both directions.
+
+    Postgres cannot answer either question once the rows have moved: an entity that
+    lost its last mention, and a merged-away loser, are both unreachable there. The
+    graph still holds the edge, and this is how the sync finds it.
+    """
+    memory_id, entity_id = graph.new_id(), graph.new_id()
+    await graph.store.link(
+        GraphEdge(
+            type=EdgeType.MENTIONS,
+            start=GraphNode(GraphLabel.MEMORY, str(memory_id)),
+            end=GraphNode(GraphLabel.ENTITY, str(entity_id)),
+        )
+    )
+
+    by_memory = await graph.store.mention_edges(memory_ids=[memory_id])
+    by_entity = await graph.store.mention_edges(entity_ids=[entity_id])
+
+    assert by_memory == [(memory_id, entity_id)]
+    assert by_entity == [(memory_id, entity_id)]
+    assert await graph.store.mention_edges() == []
+
+
+async def _minted_projection(graph: GraphFixture) -> GraphProjection:
+    """Everything this test wrote, read back through the port.
+
+    Filtered to the fixture's own ids, because `all_nodes` reads the whole database
+    and Community Edition has only the one.
+    """
+    whole, foreign = await graph_verify.read_graph(graph.store)
+    assert not foreign, f"a label the projection does not define: {foreign}"
+    # `GraphFixture.minted` records ids as strings, for the Cypher its teardown
+    # runs. Parsed back, because everything below compares UUIDs.
+    minted = {UUID(value) for value in graph.minted}
+    return GraphProjection(
+        sources=tuple(
+            node for node in whole.sources if node.source_id in minted
+        ),
+        memories=tuple(
+            node for node in whole.memories if node.memory_id in minted
+        ),
+        entities=tuple(
+            node for node in whole.entities if node.entity_id in minted
+        ),
+        edges=tuple(
+            edge
+            for edge in whole.edges
+            if UUID(edge.start.key) in minted and UUID(edge.end.key) in minted
+        ),
+    )
+
+
+async def test_two_predicates_between_one_pair_are_two_edges(
+    graph: GraphFixture,
+) -> None:
+    """The predicate is part of a relationship's identity, not a label on it.
+
+    Neo4j merges one relationship per (type, start, end), so before
+    `GraphEdge.identity` existed, "a uses b" and "a depends_on b" — both real claims
+    in the corpus — collapsed into a single `RELATES_TO` carrying whichever
+    predicate the projection happened to write last. Nothing failed. The projection
+    reported 25 edges and the graph held 24, and which of the two survived depended
+    on the order Postgres returned the rows in.
+
+    Against a real Neo4j because it is a claim about what `MERGE` treats as one
+    relationship, which no fake can establish.
+    """
+    subject, obj = graph.new_id(), graph.new_id()
+    for predicate in (Predicate.USES, Predicate.DEPENDS_ON):
+        await graph.store.link(
+            GraphEdge(
+                type=EdgeType.RELATES_TO,
+                start=GraphNode(GraphLabel.ENTITY, str(subject)),
+                end=GraphNode(GraphLabel.ENTITY, str(obj)),
+                properties={
+                    "predicate": predicate.value,
+                    "assertion_count": 1,
+                    "confidence": 0.9,
+                },
+                identity=("predicate",),
+            )
+        )
+
+    edges = (await _minted_projection(graph)).edges
+
+    assert len(edges) == 2
+    assert {edge.properties["predicate"] for edge in edges} == {
+        Predicate.USES.value,
+        Predicate.DEPENDS_ON.value,
+    }
+
+
+async def test_an_identity_property_outside_the_allowlist_is_refused(
+    graph: GraphFixture,
+) -> None:
+    """These names are interpolated into Cypher, so the set has to be closed.
+
+    A property name cannot be a bound parameter any more than a label can, which is
+    what makes `EDGE_IDENTITY_PROPERTIES` a guard rather than a convention.
+    """
+    edge = GraphEdge(
+        type=EdgeType.RELATES_TO,
+        start=GraphNode(GraphLabel.ENTITY, str(graph.new_id())),
+        end=GraphNode(GraphLabel.ENTITY, str(graph.new_id())),
+        properties={"confidence": 0.5},
+        identity=("confidence",),
+    )
+    with pytest.raises(UnknownGraphLabel, match="not an edge identity property"):
+        await graph.store.link(edge)
+
+
+async def test_an_identity_property_the_edge_does_not_carry_is_refused(
+    graph: GraphFixture,
+) -> None:
+    """Merging on a null would collapse every edge that omitted it into one."""
+    edge = GraphEdge(
+        type=EdgeType.RELATES_TO,
+        start=GraphNode(GraphLabel.ENTITY, str(graph.new_id())),
+        end=GraphNode(GraphLabel.ENTITY, str(graph.new_id())),
+        properties={"assertion_count": 1},
+        identity=("predicate",),
+    )
+    with pytest.raises(UnknownGraphLabel, match="does not carry it"):
+        await graph.store.link(edge)
