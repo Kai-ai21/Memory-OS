@@ -9,7 +9,7 @@
     "predictions.md"
   ],
   "totals": {
-    "queries": 46,
+    "queries": 52,
     "judgements": 503,
     "relevant": 232,
     "not_relevant": 227,
@@ -5876,6 +5876,447 @@
           "score_at_judgement": 0.788983,
           "judged_at": "2026-08-12T08:46:43.778109+00:00",
           "memory_id": "019fec74-bce5-7311-b8fc-a5c16d6251cb"
+        }
+      ]
+    },
+    {
+      "query_text": "what was written about the durable job queue on 8 August",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "migrations/versions/0003_jobs.py",
+        "src/memoryos/adapters/db/job_queue.py",
+        "src/memoryos/application/jobs/handlers.py",
+        "src/memoryos/application/jobs/registry.py",
+        "src/memoryos/domain/jobs.py",
+        "tests/integration/test_job_queue.py",
+        "tests/integration/test_worker.py",
+        "tests/unit/test_worker_decisions.py"
+      ],
+      "items": [
+        {
+          "external_key": "migrations/versions/0003_jobs.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/job_queue.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/application/jobs/handlers.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/application/jobs/registry.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/domain/jobs.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "tests/integration/test_job_queue.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "tests/integration/test_worker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "tests/unit/test_worker_decisions.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        }
+      ]
+    },
+    {
+      "query_text": "what did I change in the chunking code in August",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "src/memoryos/adapters/chunking/sentences.py",
+        "src/memoryos/adapters/chunking/structural.py",
+        "src/memoryos/adapters/chunking/tokens.py",
+        "src/memoryos/application/normalize.py",
+        "src/memoryos/application/rechunk.py",
+        "tests/integration/test_normalize.py",
+        "tests/unit/test_chunker.py"
+      ],
+      "items": [
+        {
+          "external_key": "src/memoryos/adapters/chunking/sentences.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/adapters/chunking/structural.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/adapters/chunking/tokens.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/application/normalize.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/application/rechunk.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "tests/integration/test_normalize.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "tests/unit/test_chunker.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        }
+      ]
+    },
+    {
+      "query_text": "what was I working on most recently",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "src/memoryos/adapters/llm/gemini.py",
+        "src/memoryos/api/routes/answer.py",
+        "src/memoryos/application/answer_eval.py",
+        "src/memoryos/application/answering.py",
+        "tests/integration/test_answering.py",
+        "tests/unit/test_grounding.py"
+      ],
+      "items": [
+        {
+          "external_key": "src/memoryos/adapters/llm/gemini.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/api/routes/answer.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/application/answer_eval.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/application/answering.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "tests/integration/test_answering.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "tests/unit/test_grounding.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        }
+      ]
+    },
+    {
+      "query_text": "what was the first version of the durable job queue",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "migrations/versions/0003_jobs.py",
+        "src/memoryos/adapters/db/job_queue.py",
+        "src/memoryos/application/jobs/registry.py",
+        "src/memoryos/domain/jobs.py"
+      ],
+      "items": [
+        {
+          "external_key": "migrations/versions/0003_jobs.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/adapters/db/job_queue.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/application/jobs/registry.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/domain/jobs.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        }
+      ]
+    },
+    {
+      "query_text": "the latest change to how a result explains itself",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "src/memoryos/application/citations.py",
+        "src/memoryos/domain/citation.py",
+        "src/memoryos/domain/explanation.py",
+        "tests/unit/test_citations.py"
+      ],
+      "items": [
+        {
+          "external_key": "src/memoryos/application/citations.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/domain/citation.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/domain/explanation.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "tests/unit/test_citations.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        }
+      ]
+    },
+    {
+      "query_text": "what may cause a chunk to be discarded",
+      "filters": {
+        "k": 10,
+        "kind": null,
+        "exact": false,
+        "sources": []
+      },
+      "relevant_keys": [
+        "src/memoryos/application/context.py",
+        "src/memoryos/application/normalize.py",
+        "src/memoryos/application/rechunk.py",
+        "src/memoryos/application/replay.py"
+      ],
+      "items": [
+        {
+          "external_key": "src/memoryos/application/context.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/application/normalize.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/application/rechunk.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
+        },
+        {
+          "external_key": "src/memoryos/application/replay.py",
+          "source_name": "self",
+          "chunk_ordinal": null,
+          "verdict": "missing",
+          "rank_at_judgement": null,
+          "score_at_judgement": null,
+          "judged_at": "2026-08-12T18:41:02.167176+00:00",
+          "memory_id": null
         }
       ]
     }

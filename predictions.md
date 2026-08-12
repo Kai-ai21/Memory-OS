@@ -2,6 +2,71 @@
 
 Written before the measurement, so that the result can disagree with it.
 
+## M4.3 — does query-conditional recency beat the resolution floor?
+
+**Prediction: no on the corpus-wide mean, yes on some of the six.** I expect the
+mean over 52 queries to move by less than M2.3a's 0.0122 floor, and I expect the
+six temporal queries to split rather than move together.
+
+The reasoning, per mechanism, because the three do different things and only one
+of them can plausibly move a mean.
+
+**1. The month-range query cannot change anything, and that is structural.** The
+whole corpus occurred between 7 and 10 August 2026. A filter for August 2026
+therefore admits all 162 current memories, so the query runs against exactly the
+set it ran against before. **Predicted delta: exactly zero, on every metric.**
+If it moves at all, the filter is doing something other than filtering.
+
+**2. The day-range query is the one explicit-range case that can act.** Filtering
+to 8 August admits 50 of 162, and the discriminating fact is that the module
+implementing the worker carries a 10 August mtime while everything else about
+the job queue carries an 8 August one. So the filter removes a memory that is
+topically relevant and outside the named day, which is precisely what a range
+filter is for. **Predicted: precision improves, recall unchanged or slightly
+worse** — the removed memory is one I judged not-relevant *because* of its date,
+so this is partly a test of whether that judgement was fair.
+
+**3. The relative query should improve most, and for an unflattering reason.**
+The retrieval for it is near-random: every result comes back around −11, which is
+the reranker saying nothing in the corpus answers "what was I working on". When
+relevance has no opinion, recency is the only signal with one, and the corpus
+does have a real answer — the last cluster of mtimes is the M2.6 answering work.
+**Predicted: the largest single gain of the six.** It is also the weakest kind of
+gain: a signal that helps most exactly where the retrievers have failed is not
+evidence that the signal is good, only that noise is easy to beat.
+
+**4. Ordering is the risky pair and I expect it to split.** Re-sorting the top ten
+by date discards the relevance order inside it, so it wins only when the temporal
+extreme and the relevant set coincide. For the "first version" query they do —
+the queue migration and its module are both the oldest job-queue memories and the
+right answers. For the "latest change" query they do too, but less cleanly: the
+citation work is the newest cluster, and the top ten also contains the README and
+the CLI, which are newer still and are not the answer. **Predicted: earliest
+improves, latest is flat or slightly worse.**
+
+**5. The trap must produce a delta of exactly zero.** "What may cause a chunk to
+be discarded" contains a month name used as a modal verb. The parser requires a
+temporal preposition in front of a month, so this parses to `None`, and intent
+`None` takes the M3.5 code path unchanged. **Predicted: zero delta, and any
+non-zero delta here is a defect rather than a result.**
+
+**6. The other 46 queries must be identical.** Not approximately — identically,
+on every metric, for every query. `_narrow` is not called and the weights object
+is not replaced when intent is `None`, so the only way this fails is if the
+parser fires on a query nobody intended as temporal. That is the single most
+important number in this milestone's report, and it is a pass/fail rather than a
+delta.
+
+**What would falsify the "it does not pay for itself" reading:** a corpus-wide
+mean gain above 0.0122 on any metric. Given that 6 of 52 queries can change at
+all, a query would have to move by roughly 0.10 on average to drag the mean that
+far, and only the relative query looks capable of it.
+
+**What I expect the honest headline to be:** three mechanisms, of which one is
+inert on this corpus by arithmetic, one works and is measurable, and one is a
+coin flip — with the corpus-wide mean flat, because 46 of 52 queries are
+untouched by construction.
+
 ## M3.5 — will graph expansion beat the resolution floor?
 
 **Prediction: no, not on this corpus.** Mean nDCG@10 and MRR move by less than
