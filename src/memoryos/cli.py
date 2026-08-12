@@ -26,7 +26,7 @@ from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.extraction.llm import ExtractionStats
 from memoryos.adapters.graph.schema import SCHEMA_VERSION
 from memoryos.adapters.llm.errors import MissingApiKey
-from memoryos.application import graph_projection, graph_sync, graph_verify
+from memoryos.application import graph_projection, graph_sync, graph_verify, temporal
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
 from memoryos.application.backfill import (
     enqueue_embedding,
@@ -81,6 +81,7 @@ from memoryos.domain.values import (
     DEFAULT_SEARCH_MODE,
     MergeStatus,
     MergeStrategy,
+    Period,
     SearchMode,
     SourceKind,
 )
@@ -1216,6 +1217,216 @@ async def run_graph_sync(settings: Settings, *, memories: list[str], entities: l
     return 0
 
 
+def parse_moment(value: str, *, name: str) -> datetime:
+    """A date or a timestamp on the command line, as an instant in UTC.
+
+    A bare `2026-08-01` means midnight UTC that morning, not midnight wherever
+    the terminal happens to be. The alternative — resolving it against the local
+    zone — makes `timeline --from` return different rows on two laptops looking
+    at the same corpus, and the difference is a few hours, which is exactly the
+    size of error nobody notices.
+    """
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        raise ValueError(
+            f"{name} must be a date or timestamp like 2026-08-01 "
+            f"or 2026-08-01T14:30:00Z, got {value!r}"
+        ) from None
+    return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment
+
+
+async def _source_id_named(
+    sessions: async_sessionmaker[AsyncSession], name: str
+) -> UUID | None:
+    async with sessions() as session:
+        return (
+            await session.execute(
+                select(models.Source.id).where(models.Source.name == name)
+            )
+        ).scalars().first()
+
+
+def _print_provenance(bands: list[temporal.ProvenanceBand], total: int) -> None:
+    """The assessment, above every timeline that is drawn from it."""
+    print("occurred_at provenance")
+    for band in bands:
+        share = f"{band.count / total:6.1%}" if total else f"{'-':>6}"
+        span = (
+            f"{band.earliest:%Y-%m-%d} .. {band.latest:%Y-%m-%d}"
+            if band.earliest is not None and band.latest is not None
+            else "-"
+        )
+        print(f"  {band.provenance.value:11} {band.count:6}  {share}  {span}")
+
+
+async def _print_backfill(
+    sessions: async_sessionmaker[AsyncSession],
+    total: int,
+    *,
+    source_id: UUID | None,
+    threshold: timedelta = timedelta(days=1),
+) -> None:
+    """How far the corpus's world-time trails its ingestion-time.
+
+    Printed with the provenance rather than behind its own command, because it
+    answers the other half of the same question. Provenance says how the dates
+    were derived; this says whether the system watched the content happen or was
+    pointed at a pile of it afterwards — and a corpus that was assembled rather
+    than accumulated has a timeline meaning something different from one that
+    grew.
+    """
+    lagging = await temporal.out_of_order(sessions, threshold, source_id=source_id)
+    share = f" of {total}" if total else ""
+    print(
+        f"\nbackfill lag over {threshold.days}d: {len(lagging)}{share} memories"
+    )
+    if lagging:
+        # Ordered by lag descending, so the head is the largest.
+        worst = lagging[0]
+        assert worst.ingested_at is not None and worst.occurred_at is not None
+        span = worst.ingested_at - worst.occurred_at
+        hours = span.seconds // 3600
+        print(f"  longest {span.days}d {hours}h  {worst.external_key}")
+
+
+def _histogram(buckets: list[temporal.Bucket], *, width: int = 46) -> None:
+    """A bar per period, scaled to the largest.
+
+    Crude on purpose. The question it answers is whether the corpus has any
+    shape at all, and a wrong answer to that is visible at this resolution.
+    """
+    peak = max((bucket.count for bucket in buckets), default=0)
+    for bucket in buckets:
+        bar = "#" * round(bucket.count / peak * width) if peak else ""
+        print(f"  {bucket.start:%Y-%m-%d}  {bucket.count:6}  {bar}")
+
+
+async def run_timeline(
+    settings: Settings,
+    *,
+    start: str | None,
+    end: str | None,
+    period: Period,
+    source: str | None,
+) -> int:
+    container = Container.build(settings)
+    sessions = container.database.session_factory
+    try:
+        source_id = None
+        if source is not None:
+            source_id = await _source_id_named(sessions, source)
+            if source_id is None:
+                print(f"no source named {source!r}")
+                return 1
+
+        bands = await temporal.provenance_profile(sessions, source_id=source_id)
+        total = sum(band.count for band in bands)
+        _print_provenance(bands, total)
+        await _print_backfill(sessions, total, source_id=source_id)
+
+        observed = temporal.observed_bounds(bands)
+        if observed is None:
+            print("\nnothing dated: no timeline to draw")
+            return 0
+
+        # The window defaults to what the corpus actually covers, so that the
+        # first run of this command needs no arguments and cannot silently draw
+        # an empty chart because the default window missed the data.
+        window_start = parse_moment(start, name="--from") if start else observed[0]
+        window_end = (
+            parse_moment(end, name="--to")
+            if end
+            else temporal.advance(observed[1], period)
+        )
+        if window_end <= window_start:
+            print(f"empty window: --from {window_start} is not before --to {window_end}")
+            return 1
+
+        buckets = await temporal.activity_by_period(
+            sessions, window_start, window_end, period=period, source_id=source_id
+        )
+        counted = sum(bucket.count for bucket in buckets)
+        print(
+            f"\n{counted} memories by {period.value}, "
+            f"{window_start:%Y-%m-%d} to {window_end:%Y-%m-%d} "
+            f"({len(buckets)} periods, {sum(1 for b in buckets if b.count)} non-empty)"
+        )
+        _histogram(buckets)
+    except ValueError as exc:
+        print(str(exc))
+        return 1
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_gaps(settings: Settings, *, min_days: float, source: str | None) -> int:
+    container = Container.build(settings)
+    sessions = container.database.session_factory
+    try:
+        async with sessions() as session:
+            rows = (
+                await session.execute(
+                    select(models.Source.id, models.Source.name).order_by(
+                        models.Source.name
+                    )
+                )
+            ).all()
+        if source is not None:
+            rows = [row for row in rows if row[1] == source]
+            if not rows:
+                print(f"no source named {source!r}")
+                return 1
+
+        min_gap = timedelta(days=min_days)
+        found = 0
+        for source_id, name in rows:
+            gaps = await temporal.find_gaps(
+                sessions, temporal.SourceScope(source_id), min_gap=min_gap
+            )
+            found += len(gaps)
+            print(f"{name}: {len(gaps)} gaps of {min_days:g} days or more")
+            for gap in gaps:
+                days = gap.duration.total_seconds() / 86400
+                print(
+                    f"  {gap.start:%Y-%m-%d %H:%M} -> {gap.end:%Y-%m-%d %H:%M}  "
+                    f"{days:.1f}d"
+                )
+                print(f"    before: {gap.before.external_key}")
+                print(f"    after:  {gap.after.external_key}")
+        if not found:
+            # The absence is the result, and it has two readings that a bare
+            # empty list would not distinguish for the reader.
+            print("\nno gaps: either the activity is continuous, or it is too "
+                  "short a span to contain one")
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_as_of(settings: Settings, *, moment: str) -> int:
+    container = Container.build(settings)
+    try:
+        query_time = parse_moment(moment, name="DATE")
+        view = await temporal.as_of(container.database.session_factory, query_time)
+        print(f"as of {view.query_time:%Y-%m-%d %H:%M:%S %Z}")
+        print(f"  memories        {view.count}")
+        latest = view.latest_ingested_at
+        stamp = "-" if latest is None else f"{latest:%Y-%m-%d %H:%M:%S}"
+        print(f"  latest ingest   {stamp}")
+        for kind, count in view.by_kind().items():
+            print(f"    {kind:10} {count}")
+        if view.count == 0:
+            print("\n  the system knew nothing at this time")
+    except ValueError as exc:
+        print(str(exc))
+        return 1
+    finally:
+        await container.dispose()
+    return 0
+
+
 async def run_entity_stats(settings: Settings, *, top: int) -> int:
     container = Container.build(settings)
     try:
@@ -1561,6 +1772,41 @@ def build_parser() -> argparse.ArgumentParser:
         "--top", type=int, default=20, help="how many entities to list by mention count"
     )
 
+    timeline = commands.add_parser(
+        "timeline", help="activity per period, by when things happened"
+    )
+    # `--from` is a Python keyword, so the destination is named rather than
+    # derived; the flag itself is what a person would type.
+    timeline.add_argument(
+        "--from", dest="start", help="ISO date or timestamp, default the earliest dated memory"
+    )
+    timeline.add_argument(
+        "--to", dest="end", help="ISO date or timestamp, exclusive, default just past the latest"
+    )
+    timeline.add_argument(
+        "--period",
+        choices=[value.value for value in Period],
+        default=Period.MONTH.value,
+        help="the calendar grain each bar covers",
+    )
+    timeline.add_argument("--source", help="limit to one source by name")
+
+    gaps = commands.add_parser(
+        "gaps", help="stretches with activity either side and none during"
+    )
+    gaps.add_argument(
+        "--min-days",
+        type=float,
+        default=30.0,
+        help="the shortest silence worth reporting",
+    )
+    gaps.add_argument("--source", help="limit to one source by name")
+
+    as_of_parser = commands.add_parser(
+        "as-of", help="what the system had ingested at a past instant"
+    )
+    as_of_parser.add_argument("date", help="ISO date or timestamp, interpreted as UTC")
+
     commands.add_parser("stats", help="report corpus and embedding coverage")
     commands.add_parser(
         "doctor", help="check the corpus for silently-degrading conditions"
@@ -1902,6 +2148,25 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "entity-stats":
         return asyncio.run(run_entity_stats(settings, top=args.top))
+
+    if args.command == "timeline":
+        return asyncio.run(
+            run_timeline(
+                settings,
+                start=args.start,
+                end=args.end,
+                period=Period(args.period),
+                source=args.source,
+            )
+        )
+
+    if args.command == "gaps":
+        return asyncio.run(
+            run_gaps(settings, min_days=args.min_days, source=args.source)
+        )
+
+    if args.command == "as-of":
+        return asyncio.run(run_as_of(settings, moment=args.date))
 
     if args.command == "stats":
         return asyncio.run(run_stats(settings))

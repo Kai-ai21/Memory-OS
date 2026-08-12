@@ -57,6 +57,26 @@ class TimeProvenance(StrEnum):
     UNKNOWN = auto()
 
 
+class Period(StrEnum):
+    """The calendar grain an activity histogram is bucketed at.
+
+    The values are exactly Postgres' `date_trunc` field names, which is not a
+    coincidence and is also not an invitation to interpolate them into SQL:
+    `date_trunc` takes its field as a *parameter*, so the enum is bound rather
+    than formatted. The equality matters because M4.0 truncates in two places —
+    Postgres groups the counts, Python generates the empty buckets between them
+    — and a week that started on Monday in one and on Sunday in the other would
+    produce a histogram whose bars did not line up with its own axis.
+
+    Three grains, and no `YEAR` or `HOUR`. Both are trivial to add and neither
+    has a caller; a grain nobody asked for is a branch nobody tests.
+    """
+
+    DAY = auto()
+    WEEK = auto()
+    MONTH = auto()
+
+
 class SourceKind(StrEnum):
     FILESYSTEM = auto()
 

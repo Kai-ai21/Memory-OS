@@ -10,9 +10,11 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 M2.1 (keyword search), M2.2 (hybrid retrieval), M2.3a (measurement reliability),
 M2.3b (ranking signals, measured and switched off), M2.4 (cross-encoder reranking),
 M2.5 (citations and explainability) and M2.6 (grounded answers). **Phase 2 complete.**
-**Phase 3 in progress**: M3.0 (Neo4j and the graph schema), M3.1 (entity extraction),
-M3.2 (entity resolution), M3.3 (typed relationships) and M3.4 (projection sync, rebuild and
-divergence detection). See [Graph](#graph).
+**Phase 3 complete**: M3.0 (Neo4j and the graph schema), M3.1 (entity extraction),
+M3.2 (entity resolution), M3.3 (typed relationships), M3.4 (projection sync, rebuild and
+divergence detection) and M3.5 (graph-augmented retrieval, measured and shipped at weight
+zero). See [Graph](#graph) and [Graph-augmented retrieval](#graph-augmented-retrieval).
+**Phase 4 in progress**: M4.0 (the temporal query layer). See [Time](#time).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -1426,6 +1428,195 @@ reported at two hops — the graph distance the path would have had — so that 
 scale weights a co-mention against a traversed hop. A `target <> seed` filter that
 looked like it was removing a degenerate self-path was in fact removing every
 direct co-mention in the corpus.
+
+## Time
+
+M4.0 makes the bitemporal data queryable. `application/temporal.py`, five functions over a
+session factory, no ranking change and no UI.
+
+```bash
+memoryos timeline --period month           # activity per period, by when things happened
+memoryos timeline --period day --source self
+memoryos gaps --min-days 14                # silences with activity either side
+memoryos as-of 2026-08-10T16:25:00Z        # what the system had ingested by then
+```
+
+**Two clocks, and every question here is about which one.** `occurred_at` is when the thing
+happened in the world; `ingested_at` is when this system learned about it. `memories_in_range`,
+`activity_by_period` and `find_gaps` read the first — it is the clock a person means by "when".
+`as_of` reads the second, and only the second — it is the clock a *debugger* means by "when".
+`out_of_order` reads both, because the distance between them is itself the signal.
+
+**Why this milestone is a query and not a migration.** M1.1 stored the two columns and recorded
+in `occurred_at_source` how each was derived, six milestones before anything read them. Adding
+the column today would have been an afternoon. Recovering the values it should have held would
+have been impossible: a source moves, a file is rewritten, and the mtime that would have said
+last March says today.
+
+### What temporal signal this corpus actually has
+
+Everything below is only as good as this, so it prints above every histogram rather than living
+in a doc nobody opens.
+
+```
+occurred_at provenance
+  filesystem     162  100.0%  2026-08-07 .. 2026-08-10
+  unknown          0    0.0%  -
+
+backfill lag over 1d: 88 of 162 memories
+  longest 2d 17h  src/memoryos/logging.py
+```
+
+| | |
+| --- | --- |
+| current memories | 162, one source, 160 `code` and 2 `note` |
+| `occurred_at_source` | `filesystem` for all 162. No `declared`, no `parsed`, none unknown |
+| `occurred_at` span | 2026-08-07 22:28 to 2026-08-10 16:35 — **2 days 18 hours** |
+| distinct days | 4, none empty: 14, 50, 33, 65 |
+| `ingested_at` span | 2026-08-10 16:15 to 16:35 — **one 20-minute window** |
+| backfill lag over 1 day | 88 of 162, longest 2d 17h |
+
+**The honest reading: there is almost no temporal signal here, and what exists is the weakest
+kind.** Every date is an mtime, which is `filesystem` provenance for a reason — it records when
+a file was last written on this disk, not when the work happened. The corpus is this repository,
+written by one person over one week and read once, so the mtimes cluster into the three days
+that work happened and the ingestion timestamps into the twenty minutes it took to read them.
+Nothing was declared by a source, and no month has a neighbour to be compared against.
+
+The backfill line is the same fact from the other side, and it is a case where the number is
+real and the interpretation is not. 88 of 162 memories have `occurred_at` more than a day
+behind `ingested_at`, which in a corpus of emails or commits would mean most of it was imported
+from somewhere older. Here the longest lag is **2 days 17 hours**, which is the age of the
+repository. Nothing was backfilled; the whole corpus was simply read at once, a few days after
+it was written. `out_of_order` is measuring correctly and there is nothing here to find — which
+is why the threshold is the parameter, and why the *size* of the lag matters more than the count
+above it.
+
+So the layer is exercised rather than demonstrated. Every function returns correct answers about
+a corpus that has very little to say, and the tests supply the shapes the corpus does not have —
+a month boundary, a 39-day silence, a revision ingested after the query time, an undated memory.
+That is the right division: the corpus proves the queries run against real data, and the fixtures
+prove they are right.
+
+### The timeline has shape, and only at the day grain
+
+```
+162 memories by month, 2026-08-07 to 2026-09-01 (1 periods, 1 non-empty)
+  2026-08-01     162  ##############################################
+
+162 memories by day, 2026-08-07 to 2026-08-11 (4 periods, 4 non-empty)
+  2026-08-07      14  ##########
+  2026-08-08      50  ###################################
+  2026-08-09      33  #######################
+  2026-08-10      65  ##############################################
+```
+
+One bar at the default grain — the whole corpus is inside one calendar month, so `--period month`
+can only ever draw a single spike. At `--period day` there are four bars and they differ by a
+factor of four and a half, which is the shape of somebody's week rather than an artifact. It is
+also the finest grain this data supports: below a day the mtimes fragment into fifteen hourly
+buckets separated by sleep, which is a chart of when a person was awake.
+
+### Nulls are excluded, never defaulted
+
+An unknown date is not evidence of any date. `occurred_at IS NULL` is in no range and in no
+bucket, and the domain already refuses to let it mean anything else — `Memory` raises unless a
+null timestamp is paired with `TimeProvenance.UNKNOWN`, and `ck_memories_occurred_at_provenance`
+says the same to every other writer.
+
+The tempting implementation coalesces the missing value to `ingested_at` so that every memory
+lands somewhere. It would stack every undated memory onto the day the corpus was read and draw
+a spike that no event produced — and the spike would be indistinguishable from a real one,
+which is what makes it worse than a hole. The undated band is counted in the provenance profile
+instead, where a corpus with a large unknown share says so rather than looking smaller.
+
+Ranges are **half-open**, `[start, end)`, for the same reason: closed at both ends puts a memory
+timestamped midnight on the 1st into two consecutive months, and a histogram whose bars sum to
+more than the corpus is one nobody can reason from.
+
+### `as_of` is reconstructed, not read off `is_current`
+
+The function people skip and later need. Without it "why did this query return that last
+Tuesday" has no answer: the corpus has moved on, a ranking is reproducible only against the
+inputs it actually had, and a retrieval bug reported against a corpus that no longer exists
+cannot be re-run.
+
+`is_current` is a fact about **now**. At a past instant the current version of an item was
+whichever version had been ingested by then, and the row wearing the flag today may not have
+existed. So `as_of` takes the newest version per `(source_id, external_key)` at or before the
+query time — and filters deletion *after* picking the version, because the tombstone updates a
+column rather than appending a row, so a memory deleted last week was still known the week
+before. Doing both in one pass erases an item retroactively from every past view.
+
+**What it does not reconstruct, stated here rather than discovered later:** the retrieval state.
+Chunks are deleted and rewritten in place by re-chunking, embeddings carry only the time they
+were last computed, and extraction records a version rather than a history. The *text* the
+system held at a past instant is recoverable from this; the ranking it would have produced is
+not. A view that quietly claimed the second would be worse than no view at all.
+
+On this corpus the whole ingestion fits in twenty minutes, so `as-of` is a step function with
+one step in it — 0 memories before 16:15, 151 at 16:25, 162 after 16:35. That is a real
+measurement of a corpus read in one pass.
+
+### Gaps, and the one that is not a gap
+
+A gap is a stretch with activity before it and after it and none during. **This is the
+capability the phase exists for.** "When did I abandon this" has no document to retrieve, because
+abandonment is never written down — it is the absence of anything after a point, and an absence
+is invisible to every retriever here. Vector search finds text that means what the question
+means, keyword search finds text that says it, and neither can return a document nobody wrote.
+Only aggregation over time can see a hole.
+
+The stretch since the newest memory is deliberately **not** reported. It has activity on one side
+only, so nothing distinguishes "abandoned" from "still going, nothing written lately" — and the
+open-ended version would fire on every source in every corpus, every time.
+
+At `--min-days 14`, this corpus has none, and could not: it is 2.75 days long. Lowering the
+threshold far enough to find anything finds three silences of 10 to 11 hours each, bounded at
+22:46→09:31, 20:44→08:13 and 17:52→05:27. **Those are artifacts — they are nights.** Reported
+here because the honest version of "gap detection works" on a corpus this shape is that it
+correctly finds the only interruptions present, and they are somebody sleeping. The synthetic
+39-day gap in the tests is what demonstrates the capability.
+
+### No index was added, and the M1.1 index is why
+
+`EXPLAIN ANALYZE` on the range query, against the real corpus:
+
+```
+Seq Scan on memories  (cost=0.00..19.54 rows=82) (actual time=0.004..0.027 rows=83)
+  Filter: (is_current AND occurred_at >= ... AND occurred_at < ...)
+  Buffers: shared hit=17
+```
+
+The planner ignores `ix_memories_occurred_at` and it is right to: the table is **17 pages**.
+Forcing the index with `enable_seqscan = off` costs more and reads more — `cost=9.02..27.29`,
+18 buffers instead of 17 — because a bitmap scan still has to visit every heap page that holds
+a matching row, and at this size that is all of them.
+
+Since "small corpus" is not an argument about the schema, the composite index M4.0 was scoped to
+consider was measured at a size where an index certainly is used — 200,000 rows, one month
+selected out of thirty:
+
+| indexes available | planner's choice | cost |
+| ----------------- | ---------------- | ---- |
+| `(occurred_at)` only | bitmap scan on it | 1865.52 |
+| `(is_current, occurred_at)` only | bitmap scan on it | 1887.80 |
+| both | **`(occurred_at)`** — the composite declined | 1865.52 |
+
+**The composite loses even where indexes win, and it loses on its leading column.** `is_current`
+is true for about 95% of rows, so leading with it buys no selectivity and costs a wider key;
+the two indexes are the same size and the composite's estimate is 1% worse. Postgres declined
+it when offered both. Adding it would have been a migration whose only effect was a second index
+to maintain on every write.
+
+The crossover for the *existing* index is somewhere between 169 and 2,000 rows — at 2,000 the
+planner already prefers it. So the M1.1 index handles range queries at every size this corpus
+might reach, and needs no help. The aggregate behind `activity_by_period` is a sequential scan
+at any size, correctly: a histogram over the whole corpus reads every row by definition, and no
+index can improve a query that has no rows to skip.
+
+This is the M1.6 lesson applied a second time. An index is not used because it exists, and the
+planner is usually right about that.
 
 ## Migrations
 
