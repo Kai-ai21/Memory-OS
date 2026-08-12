@@ -14,8 +14,9 @@ M2.5 (citations and explainability) and M2.6 (grounded answers). **Phase 2 compl
 M3.2 (entity resolution), M3.3 (typed relationships), M3.4 (projection sync, rebuild and
 divergence detection) and M3.5 (graph-augmented retrieval, measured and shipped at weight
 zero). See [Graph](#graph) and [Graph-augmented retrieval](#graph-augmented-retrieval).
-**Phase 4 in progress**: M4.0 (the temporal query layer), M4.1 (the timeline view) and
-M4.2 (evolution and change detection). See [Time](#time).
+**Phase 4 complete**: M4.0 (the temporal query layer), M4.1 (the timeline view),
+M4.2 (evolution and change detection) and M4.3 (time-aware retrieval, measured).
+See [Time](#time) and the [Phase 4 retrospective](#phase-4-retrospective).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -1813,6 +1814,222 @@ the diffs are unchanged and only the descriptions are lost. Keying the cache on 
 of normalized hashes rather than on memory ids would make these survivable, exactly as
 M1.7 proposed for merges. That is a schema change, so it is written down rather than done
 quietly.
+
+### Time-aware retrieval
+
+M4.3 lets a query express time, and measures whether that helps.
+
+```bash
+memoryos search "what changed in the chunker in August" --explain
+MEMOS_TEMPORAL_INTENT_ENABLED=false memoryos search "..."   # the control arm
+```
+
+`domain/temporal_intent.py`, rules over a regex, **not a model**. A completion per
+search would cost a round trip, make retrieval non-reproducible — the same query
+parsing differently on two runs, with nobody able to say why a result moved — and
+buy nothing, because the thing being detected is a closed set of English phrases
+that fits on one screen.
+
+**The hard part is refusal.** A month name only counts with a temporal preposition
+in front of it, because `may` is a modal verb before it is a month, `march` is a
+verb, and `august` is an adjective. Which preposition also decides the *bounds*:
+`in August` is the month, `since August` is everything from its first day onward,
+`before August` is everything up to it, `after August` starts where it ends.
+Collapsing those four would look correct on a corpus that fits inside one month
+and answer a different question on any corpus that did not.
+
+Three mechanisms, doing three different things:
+
+| intent | example | what happens |
+| --- | --- | --- |
+| **range** | `in August`, `on 8 August` | hard filter on `occurred_at` — a question about a period is not answered by a document from another one, however relevant |
+| **relative** | `recently`, `lately` | recency weight raised **for that query only**; there is no boundary to cut at, and inventing one would drop the answer whenever the guess was wrong |
+| **ordering** | `the first version`, `the latest change` | re-sorts the top k by date. The top k, never the candidate pool — sorting candidates before truncating would return the ten oldest memories in the corpus |
+
+Intent `None` takes the M3.5 path untouched, and the test asserts that against the
+feature's own off switch rather than a recorded fixture: a fixture proves only that
+results match what they matched when it was written.
+
+#### What it measured
+
+Controlled A/B, same code and corpus, parsing off versus on. The committed
+`var/baseline-hybrid.json` predates M2.4's reranking, so comparing against it would
+mix two changes — the control is `MEMOS_TEMPORAL_INTENT_ENABLED=false` on the same
+52-query set.
+
+| metric | off | on | delta | vs the 0.0122 floor |
+| --- | --- | --- | --- | --- |
+| recall@10 | 0.7726 | 0.7750 | +0.0024 | inside |
+| precision@10 | 0.4481 | 0.4500 | +0.0019 | inside |
+| MRR | 0.7739 | 0.7904 | **+0.0165** | **outside** |
+| nDCG@10 | 0.7268 | 0.7353 | +0.0085 | inside |
+
+**0 of 46 non-temporal queries changed on any metric.** That is the number this
+milestone is really about, and it is a pass/fail rather than a delta.
+
+Per temporal query, and they do not move together:
+
+| query | recall | MRR | nDCG |
+| --- | --- | --- | --- |
+| day range, conjunctive | **+0.125** | **+0.667** | **+0.333** |
+| ordering, earliest | +0.000 | **+0.857** | **+0.383** |
+| month range | 0 | 0 | 0 |
+| relative | 0 | 0 | 0 |
+| trap | 0 | 0 | 0 |
+| ordering, latest | +0.000 | **−0.667** | **−0.273** |
+
+**The month range moves by exactly zero, structurally.** The whole corpus occurred
+between 7 and 10 August 2026, so a filter for August 2026 admits all 162 current
+memories. It is a no-op by arithmetic, not by coincidence, and it is the clearest
+single statement of what a three-day corpus can show about time.
+
+**The day range is the one filter that acts**, and it acts correctly: the module
+implementing the worker carries a 10 August mtime while everything else about the
+job queue carries an 8 August one, so a question about the 8th removes a memory
+that is topically relevant and from the wrong day. That is what a range filter is
+for.
+
+**Earliest ordering worked and latest ordering regressed**, for the same reason.
+The oldest job-queue memories *are* the answer to "the first version of the job
+queue", so the date sort lifted `0003_jobs.py` and `job_queue.py` from ranks 7 and
+8 to 1 and 2. The newest memories in this corpus are `README.md` and `cli.py` — the
+two files most likely to be in any top ten and almost never the specific answer —
+so latest ordering promoted them over `domain/explanation.py` and halved the MRR.
+**The asymmetry is a corpus fact rather than a mechanism fact**, and it is the
+argument for the off switch shipping alongside the feature.
+
+**The relative query changed the ranking and improved nothing.** Recency at weight
+0.5 reordered the top ten and pulled `README.md` to first — and recall stayed at
+0.000 in both arms, because none of the six judged answers was in the candidate
+pool to begin with. Signals rank candidates and never introduce them, by design, so
+**a weight cannot rescue a query the retrievers failed.** That is the honest reading
+of the one result that looked most promising in the prediction.
+
+The global grid still says recency ≈ 0. `tune-weights --grid coarse` over all 52
+queries finds a best gain of +0.0013 nDCG, well inside the floor — so M2.3b's
+finding survives the addition of six temporal queries, and query-conditional time
+is a genuinely different mechanism from a global recency weight rather than a
+rebranding of one.
+
+#### The over-eager parse, which was mine
+
+The measurement caught the failure mode it was designed to catch. `time` was in the
+list of nouns that make `first`/`latest` temporal, so **"how does the system know a
+file changed since last time" parsed as *ordering: latest***, and the date sort
+dropped its nDCG from 0.963 to 0.868. "The last time" is idiomatic English for "the
+previous occasion" far more often than it is a request for the newest thing, and
+the same was true of every loose noun beside it — `thing`, `work`, `state`, `shape`,
+`form`. The list is now only nouns denoting a versioned artifact, and the
+non-temporal set is untouched.
+
+A query silently reinterpreted as temporal is the most confusing failure available
+here, so the interpretation is on `ScoreBreakdown`, on `SearchResult`, in the
+search log, and printed above the results:
+
+```
+read as temporal: range 2026-08-01..2026-09-01 (from 'in august')  [hard filter applied]
+```
+
+It is on `SearchResult` as well as on the breakdown for one specific case: a filter
+that excludes the whole corpus returns no hits, so there is no breakdown left to
+carry the reason, and "no results" is otherwise indistinguishable from an empty
+corpus.
+
+## Phase 4 retrospective
+
+Four milestones: a temporal query layer, a timeline view, evolution and change
+detection, and time-aware retrieval.
+
+### Did bitemporal modelling earn the M1.1 decision?
+
+**Yes, and the evidence is that three of these four milestones were query work.**
+M1.1 stored `occurred_at` beside `ingested_at` and recorded in `occurred_at_source`
+how each was derived, six milestones before anything read them. Adding the column
+in M4.0 would have been an afternoon. Recovering the values it should have held
+would have been impossible — a source moves, a file is rewritten, and the mtime
+that would have said last March says today.
+
+Two specific things would have been unrecoverable rather than merely late:
+
+**`as_of` needs `ingested_at` to be a separate, never-updated column.** "What did
+the system know last Tuesday" is answerable only because the ingestion clock was
+recorded per version and nothing overwrites it. A single `timestamp` column would
+have made past retrieval behaviour unreproducible and therefore undebuggable, and
+no amount of later schema work could have reconstructed it.
+
+**`occurred_at_source` is what makes the honest UI possible.** M4.1's whole
+contribution is that a filesystem mtime and a date an email declared render
+differently. Without the provenance column there is no way to draw that
+distinction, and a timeline of mtimes presented as a timeline of events is a chart
+that lies confidently. The CHECK constraint pairing a null `occurred_at` with
+`TimeProvenance.UNKNOWN` is what stops the null case from being quietly backfilled
+by any writer, including psql.
+
+The decision that did **not** pay off is subtler and worth recording: `occurred_at`
+was stored but nothing was stored about *how much to trust a range built from it*.
+M4.3 discovered that a month filter over this corpus is a no-op, and it discovered
+that at query time rather than at ingest time. A column recording the *granularity*
+of a date — this mtime is accurate to the second but means "some time that week" —
+would have let the range filter widen itself rather than pretending to a precision
+the source does not have.
+
+### How much is limited by filesystem mtime being the only date source?
+
+**Almost all of it.** The corpus is 162 memories, 100% `filesystem` provenance,
+spanning 2 days 18 hours, ingested in one 20-minute window. Every phase-4 result is
+shaped by that:
+
+- **M4.0**: the timeline has one bar at month grain and four at day grain. `find_gaps`
+  found three gaps, all of them 10-to-11-hour overnight silences. The capability is
+  correct and the corpus has nothing for it to find.
+- **M4.1**: the chart's most useful output is the caption above it saying the dates
+  are mtimes. Every date on screen carries a `~`.
+- **M4.2**: seven items have two versions; 155 have one. The chunk-adoption case
+  occurs zero times in the real corpus.
+- **M4.3**: one of the two range mechanisms is arithmetically inert, and the
+  relative mechanism has no dated answer to promote.
+
+The deeper limitation is not the *range* but the *semantics*. An mtime records when
+bytes were last written to this disk. On a fresh clone every file is dated today,
+so the entire temporal layer would report one instant — and nothing in the system
+would be wrong, because that is genuinely when those bytes arrived. The layer is
+measuring the corpus faithfully; the corpus is a poor witness about time.
+
+### What would change with real emails and calendar data?
+
+Four things, in rough order of how much they would change the numbers.
+
+**Provenance would stop being uniform, and the UI would start doing work.** An email
+carries a `Date:` header — `declared` provenance, accurate to the second, and a
+claim the *sender* made. A calendar event carries a start and an end, which is a
+range rather than an instant and would need a column the schema does not have. A
+corpus mixing `declared` emails with `filesystem` notes is the first one where
+M4.1's `~` marker separates things a reader must not conflate, and where a range
+filter has to decide whether a low-confidence date belongs inside the window.
+
+**`find_gaps` would find something.** Abandonment is the capability M4.0 exists for,
+and it needs months of activity to detect. A mailbox spanning years has real gaps
+with named correspondents on either side — "the last message about this project was
+in March, the next one was in November" — which is an answer no retriever can
+produce because no document contains it.
+
+**The relative mechanism would have something to promote.** It failed here because
+the candidate pool held no dated answer, not because the weight was wrong. Over a
+mailbox, "what was I working on recently" has a genuine answer set with real date
+separation, and the recency ranking would be reordering candidates that differ by
+months rather than by hours.
+
+**`out_of_order` would mean what it says.** Its number here is real and its reading
+is not: 88 of 162 memories lag by over a day, and the longest lag is 2d 17h, which
+is the age of the repository. Nothing was backfilled. Import a decade of email in an
+afternoon and that same query separates the backfilled decade from what arrives
+afterwards — which is the difference between a corpus that grew and one that was
+assembled, and the thing that distinction is *for* is knowing which timestamps to
+trust.
+
+The honest summary of Phase 4: the modelling decision was right, the query layer is
+correct, and the corpus cannot exercise it. Those are three separate statements and
+the third does not undermine the first two.
 
 ## Migrations
 
