@@ -42,6 +42,12 @@ from memoryos.application.ports import (
 )
 from memoryos.domain.fusion import DEFAULT_RRF_K, reciprocal_rank_fusion
 from memoryos.domain.signals import recency_score
+from memoryos.domain.temporal_intent import (
+    IntentKind,
+    Ordering,
+    TemporalIntent,
+    parse_temporal_intent,
+)
 from memoryos.domain.values import (
     DEFAULT_SEARCH_MODE,
     MemoryKind,
@@ -146,6 +152,14 @@ class SearchResult:
     hits: list[MemoryHit] = field(default_factory=list)
     timing: SearchTiming = field(default_factory=SearchTiming)
     mode: SearchMode = SearchMode.VECTOR
+    # M4.3, and here as well as on every `ScoreBreakdown` because of the one case
+    # that matters most: a range filter that excludes the whole corpus returns no
+    # hits, so there is no breakdown left to carry the reason. "No results"
+    # because a query was read as being about last March, when it was not, is
+    # indistinguishable from an empty corpus — unless the interpretation
+    # survives the empty result.
+    temporal_intent: str | None = None
+    temporal_filter_applied: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +247,8 @@ class SearchMemories:
         now: Callable[[], datetime] = _utcnow,
         expand: ExpandThroughGraph | None = None,
         seed_memories: int = DEFAULT_SEED_MEMORIES,
+        temporal_intent: bool = True,
+        temporal_recency_weight: float = 0.5,
     ) -> None:
         self._sessions = session_factory
         self._embedder = embedder
@@ -253,7 +269,17 @@ class SearchMemories:
         # Injected so a test can pin the clock. Recency ranks by `occurred_at`
         # order, which is invariant under a changing `now` — see `SignalTable` —
         # so this affects the reported scores rather than the ranking.
+        #
+        # M4.3 gives it a second job that is *not* invariant: the parser resolves
+        # "last month" against it, so a pinned clock is what makes a temporal
+        # query reproducible in a test and in a replay.
         self._now = now
+        # False means queries are never inspected at all, which is the control
+        # arm of M4.3's A/B and the escape hatch if the parser misfires. It is
+        # not the same as a temporal weight of zero: one skips the parse, the
+        # other parses and does nothing with the result.
+        self._temporal_intent = temporal_intent
+        self._temporal_recency_weight = temporal_recency_weight
 
     async def __call__(
         self,
@@ -270,11 +296,35 @@ class SearchMemories:
         started = time.monotonic()
         resolved = filters or SearchFilters()
 
+        # Parsed once, before anything is retrieved, because a range intent
+        # changes *what is eligible* rather than how it is ordered — and a
+        # filter applied after retrieval would score the top k of the wrong set.
+        intent = (
+            parse_temporal_intent(query, now=self._now())
+            if self._temporal_intent
+            else None
+        )
+        weights = self._weights
+        filter_applied = False
+        if intent is not None:
+            if intent.is_range:
+                resolved, filter_applied = _narrow(resolved, intent)
+            elif intent.kind is IntentKind.RELATIVE:
+                # For this query only. The global weight stays whatever M2.3b
+                # measured it to be — this is a different hypothesis, not a
+                # revision of that one.
+                weights = replace(weights, recency=self._temporal_recency_weight)
+
         embed_ms = 0
         search_started = time.monotonic()
         if mode is SearchMode.HYBRID:
             chunks, embed_ms, search_started = await self._hybrid(
-                query, k=k, filters=resolved, ef_search=ef_search, rrf_k=rrf_k
+                query,
+                k=k,
+                filters=resolved,
+                ef_search=ef_search,
+                rrf_k=rrf_k,
+                weights=weights,
             )
         elif mode is SearchMode.KEYWORD:
             # No embedding at all, which is most of why this mode is ~200x
@@ -309,7 +359,12 @@ class SearchMemories:
             chunks = await self._rerank(query, chunks)
             rerank_ms = _elapsed_ms(rerank_started)
 
+        if intent is not None:
+            chunks = _stamp_intent(chunks, intent, filter_applied=filter_applied)
+
         hits = await self._to_hits(chunks, k=k)
+        if intent is not None and intent.ordering is not None:
+            hits = _reorder(hits, intent.ordering)
 
         timing = SearchTiming(
             embed_ms=embed_ms,
@@ -324,12 +379,24 @@ class SearchMemories:
             hits=len(hits),
             mode=mode.value,
             reranked=rerank_ms > 0,
+            # Logged on every search, including the common case where it is
+            # None. A parser that started firing on ordinary queries would
+            # otherwise be invisible until somebody noticed a ranking had moved.
+            temporal_intent=None if intent is None else intent.describe(),
+            temporal_filter_applied=filter_applied,
             # Only meaningful in vector mode; there is no approximate index to
             # bypass on the keyword side.
             exact=exact and mode is SearchMode.VECTOR,
             **timing.as_dict(),
         )
-        return SearchResult(query=query, hits=hits, timing=timing, mode=mode)
+        return SearchResult(
+            query=query,
+            hits=hits,
+            timing=timing,
+            mode=mode,
+            temporal_intent=None if intent is None else intent.describe(),
+            temporal_filter_applied=filter_applied,
+        )
 
     async def _hybrid(
         self,
@@ -339,6 +406,7 @@ class SearchMemories:
         filters: SearchFilters,
         ef_search: int | None,
         rrf_k: int,
+        weights: FusionWeights | None = None,
     ) -> tuple[list[ScoredChunk], int, float]:
         """Both retrievers, concurrently, fused into one ranking.
 
@@ -379,7 +447,7 @@ class SearchMemories:
                 vector_chunks,
                 keyword_chunks,
                 signals=signals,
-                weights=self._weights,
+                weights=weights or self._weights,
                 rrf_k=rrf_k,
                 graph=expansion,
             ),
@@ -831,3 +899,109 @@ def _ranking(hit: MemoryHit) -> tuple[float, float]:
 
 def _elapsed_ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
+
+
+# --------------------------------------------------------------------------
+# M4.3: turning a parsed intent into retrieval behaviour
+#
+# All three are module-level functions over plain values rather than methods,
+# for the same reason `fuse` is: they are the parts whose correctness a test
+# should be able to check without a database, an embedder, or a clock.
+# --------------------------------------------------------------------------
+
+
+def _narrow(
+    filters: SearchFilters, intent: TemporalIntent
+) -> tuple[SearchFilters, bool]:
+    """Intersect a parsed range with whatever the caller already asked for.
+
+    **Intersect, never replace.** A caller who passed `occurred_after` has stated
+    a constraint, and a parsed phrase is an inference — widening a stated bound
+    because a query happened to say "since March" would return rows the caller
+    explicitly excluded. The tighter bound wins on both ends.
+
+    Returns whether anything was actually narrowed, which is not the same as
+    whether an intent was detected: `before August` against a caller who already
+    asked for July changes nothing, and the breakdown should say so rather than
+    claiming a filter it did not apply.
+    """
+    after = _tighter(filters.occurred_after, intent.start, keep=max)
+    before = _tighter(filters.occurred_before, intent.end, keep=min)
+    if after == filters.occurred_after and before == filters.occurred_before:
+        return filters, False
+    return replace(filters, occurred_after=after, occurred_before=before), True
+
+
+def _tighter(
+    existing: datetime | None,
+    proposed: datetime | None,
+    *,
+    keep: Callable[[datetime, datetime], datetime],
+) -> datetime | None:
+    """The more restrictive of two optional bounds. None means unbounded."""
+    if proposed is None:
+        return existing
+    if existing is None:
+        return proposed
+    return keep(existing, proposed)
+
+
+def _stamp_intent(
+    chunks: list[ScoredChunk], intent: TemporalIntent, *, filter_applied: bool
+) -> list[ScoredChunk]:
+    """Record the interpretation on every result.
+
+    Per chunk, though it is a property of the query, because `ScoreBreakdown` is
+    the only channel from the ranker to the screen and a second one would be a
+    second thing to keep in step. The redundancy is a few bytes per result and
+    the alternative is an interpretation the user cannot see.
+    """
+    described = intent.describe()
+    return [
+        replace(
+            chunk,
+            breakdown=(
+                replace(
+                    chunk.breakdown,
+                    temporal_intent=described,
+                    temporal_filter_applied=filter_applied,
+                )
+                if chunk.breakdown is not None
+                else ScoreBreakdown(
+                    fused=chunk.score,
+                    temporal_intent=described,
+                    temporal_filter_applied=filter_applied,
+                )
+            ),
+        )
+        for chunk in chunks
+    ]
+
+
+def _reorder(hits: list[MemoryHit], ordering: Ordering) -> list[MemoryHit]:
+    """Sort the *returned* hits by date, keeping relevance as the selector.
+
+    **Applied to the top k, not to the candidate pool**, and that is the whole
+    caution. "The first version of the job queue" is a question about the job
+    queue first and about order second; sorting the candidates by date before
+    truncating would return the ten oldest memories in the corpus, which answers
+    a question nobody asked.
+
+    Undated memories keep their relevance position relative to each other and
+    sort last in both directions. There is no defensible place to put an unknown
+    date in a date ordering, and putting it first would let a memory with no
+    date win a question about which came first.
+    """
+    reverse = ordering is Ordering.LATEST
+
+    def key(item: tuple[int, MemoryHit]) -> tuple[int, float, int]:
+        index, hit = item
+        occurred = hit.occurred_at
+        if not isinstance(occurred, datetime):
+            # Sorts after everything dated, in both directions, with relevance
+            # order preserved inside the undated group.
+            return (1, 0.0, index)
+        stamp = occurred.timestamp()
+        return (0, -stamp if reverse else stamp, index)
+
+    return [hit for _, hit in sorted(enumerate(hits), key=key)]

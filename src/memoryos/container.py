@@ -203,6 +203,8 @@ class Container:
             rerank_candidates=self.settings.rerank_candidates,
             expand=self.graph_expansion(),
             seed_memories=self.settings.graph_seed_memories,
+            temporal_intent=self.settings.temporal_intent_enabled,
+            temporal_recency_weight=self.settings.temporal_recency_weight,
         )
 
     def graph_expansion(self) -> ExpandThroughGraph:

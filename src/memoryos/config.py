@@ -124,6 +124,25 @@ class Settings(BaseSettings):
     # the shortlist bounds how far a candidate can jump.
     rerank_candidates: int = 25
     rerank_enabled: bool = True
+    # M4.3. Whether a query is inspected for temporal intent at all.
+    #
+    # An off switch rather than only a weight, and it earns its place twice. It
+    # is the control arm of this milestone's A/B — the same code and corpus with
+    # parsing off is the only honest baseline, since the committed
+    # `var/baseline-hybrid.json` predates M2.4's reranking — and it is the escape
+    # hatch if the parser ever fires on a query it should not: retrieval falls
+    # straight back to M3.5 rather than needing a deployment.
+    temporal_intent_enabled: bool = True
+    # How much recency counts *for a query that asked for it*.
+    #
+    # Distinct from `weight_recency`, which is the global signal M2.3b measured
+    # and switched off. That measurement said recency does not help a conceptual
+    # question about a codebase, and it is not evidence about a question that
+    # says "recently" — those are different hypotheses and this is the second
+    # one. 0.5 is a starting point, not a tuned value: `tune-weights` searches
+    # the global grid and has no way to vary a weight that only exists for the
+    # subset of queries a parser fires on.
+    temporal_recency_weight: float = 0.5
     # Which provider answers. Both implement the same `LanguageModel` port, so
     # this is the only thing that changes between them — which is what M2.6
     # claimed a port would buy and what M2.6a spent to check.
