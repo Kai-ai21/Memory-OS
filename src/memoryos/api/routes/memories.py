@@ -53,11 +53,27 @@ class ChunkOut(BaseModel):
 
 
 class VersionOut(BaseModel):
+    """One version, with both clocks and both hashes.
+
+    M4.1 draws these on a small timeline, which needs `occurred_at` as well as
+    `ingested_at` — the two are a different story per version, and a history
+    showing only when the system read something cannot say when the thing it
+    read was written.
+
+    The hashes are what "what changed" is answered from. `content_hash`
+    differing with `normalized_hash` identical is a real and common case — a
+    trailing newline, a line ending, a byte the normalizer discards — and it is
+    the difference between a version that changed the corpus and one that only
+    changed the file.
+    """
+
     id: UUID
     version: int
     is_current: bool
     content_hash: str
     normalized_hash: str | None
+    occurred_at: datetime | None
+    occurred_at_source: str
     ingested_at: datetime
     deleted_at: datetime | None
 
@@ -166,6 +182,8 @@ async def get_memory(memory_id: UUID, container: ContainerDep) -> MemoryDetailOu
                 is_current=version.is_current,
                 content_hash=version.content_hash,
                 normalized_hash=version.normalized_hash,
+                occurred_at=version.occurred_at,
+                occurred_at_source=version.occurred_at_source,
                 ingested_at=version.ingested_at,
                 deleted_at=version.deleted_at,
             )

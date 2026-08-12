@@ -113,6 +113,16 @@ export type JudgementIn =
   paths["/judgements"]["post"]["requestBody"]["content"]["application/json"];
 export type Verdict = JudgementIn["verdict"];
 export type GoldenSet = Ok<paths["/judgements/export"]["get"]>;
+export type MemoryVersion = MemoryDetail["versions"][number];
+export type Timeline = Ok<paths["/timeline"]["get"]>;
+export type Bucket = Timeline["buckets"][number];
+export type ProvenanceBand = Timeline["provenance"][number];
+export type Period = NonNullable<
+  paths["/timeline"]["get"]["parameters"]["query"]
+>["period"];
+export type MemoriesAt = Ok<paths["/memories/at"]["get"]>;
+export type MemoryAt = MemoriesAt["memories"][number];
+export type Gap = Ok<paths["/gaps"]["get"]>[number];
 
 export interface SearchArgs {
   q: string;
@@ -151,4 +161,46 @@ export const api = {
     }),
 
   goldenSet: () => request<GoldenSet>("/judgements/export"),
+
+  timeline: ({ period, from, to, source }: TimelineArgs) => {
+    const params = new URLSearchParams({ period });
+    // Omitted rather than sent empty: the API defaults the window to what the
+    // corpus covers, and a blank `from` would be a 422 instead of a default.
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    if (source) params.set("source", source);
+    return request<Timeline>(`/timeline?${params.toString()}`);
+  },
+
+  memoriesAt: ({ date, windowDays, source }: MemoriesAtArgs) => {
+    const params = new URLSearchParams({ date, window_days: String(windowDays) });
+    if (source) params.set("source", source);
+    return request<MemoriesAt>(`/memories/at?${params.toString()}`);
+  },
+
+  gaps: ({ minDays, source }: GapsArgs) => {
+    const params = new URLSearchParams({ min_days: String(minDays) });
+    if (source) params.set("source", source);
+    return request<Gap[]>(`/gaps?${params.toString()}`);
+  },
 };
+
+export interface TimelineArgs {
+  period: Period;
+  /** ISO instants. Omitted means "whatever the corpus covers". */
+  from?: string;
+  to?: string;
+  source?: string;
+}
+
+export interface MemoriesAtArgs {
+  /** ISO instant: the *start* of the window, not its centre. */
+  date: string;
+  windowDays: number;
+  source?: string;
+}
+
+export interface GapsArgs {
+  minDays: number;
+  source?: string;
+}

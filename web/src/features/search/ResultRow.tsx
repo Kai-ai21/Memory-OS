@@ -18,9 +18,10 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { api, type MatchedChunk, type MemoryHit } from "../../api/client";
+import { DateStamp } from "../../components/DateStamp";
 import { Highlighted } from "../../components/Highlighted";
 import { Tag } from "../../components/primitives";
-import { isCode, range, score as fmtScore, timestamp } from "../../lib/format";
+import { isCode, range, score as fmtScore } from "../../lib/format";
 import { JudgementButtons, type JudgementTarget } from "../judgements/JudgementButtons";
 import { ExplanationPanel } from "./Explanation";
 import type { Verdict } from "../../api/client";
@@ -102,8 +103,8 @@ export function ResultRow({
           {hit.external_key}
         </Link>
         <Tag>{hit.kind}</Tag>
-        <span className="meta hidden shrink-0 text-faint sm:inline">
-          {timestamp(hit.occurred_at)}
+        <span className="hidden shrink-0 sm:inline">
+          <DateStamp value={hit.occurred_at} provenance={hit.occurred_at_source} />
         </span>
         <JudgementButtons
           target={target}

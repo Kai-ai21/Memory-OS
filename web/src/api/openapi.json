@@ -189,6 +189,51 @@
         "title": "AnswerTimingOut",
         "type": "object"
       },
+      "BandOut": {
+        "description": "One `occurred_at_source` band of the corpus.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "earliest": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earliest"
+          },
+          "latest": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest"
+          },
+          "provenance": {
+            "title": "Provenance",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provenance",
+          "count",
+          "earliest",
+          "latest"
+        ],
+        "title": "BandOut",
+        "type": "object"
+      },
       "BreakdownOut": {
         "description": "Where the score came from, per retriever.\n\nReturned on every hit in every mode. Once two retrievers are fused into one\nnumber, that number is the only thing a client can show, and without this it\ncannot say *why* \u2014 which is both how a bad ranking gets debugged and what\nM2.5's citations will render. A null rank means that retriever did not\nreturn the chunk, which is not the same as returning it last.",
         "properties": {
@@ -344,6 +389,38 @@
           "fused"
         ],
         "title": "BreakdownOut",
+        "type": "object"
+      },
+      "BucketOut": {
+        "properties": {
+          "by_kind": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Kind",
+            "type": "object"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "count"
+        ],
+        "title": "BucketOut",
         "type": "object"
       },
       "CitationOut": {
@@ -731,6 +808,87 @@
         "title": "FindingOut",
         "type": "object"
       },
+      "GapEndOut": {
+        "description": "What was active on one side of a gap.",
+        "properties": {
+          "external_key": {
+            "title": "External Key",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "occurred_at_source": {
+            "title": "Occurred At Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "external_key",
+          "kind",
+          "occurred_at",
+          "occurred_at_source"
+        ],
+        "title": "GapEndOut",
+        "type": "object"
+      },
+      "GapOut": {
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/GapEndOut"
+          },
+          "before": {
+            "$ref": "#/components/schemas/GapEndOut"
+          },
+          "days": {
+            "title": "Days",
+            "type": "number"
+          },
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "source_name": {
+            "title": "Source Name",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "days",
+          "source_name",
+          "before",
+          "after"
+        ],
+        "title": "GapOut",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -802,6 +960,10 @@
             ],
             "title": "Occurred At"
           },
+          "occurred_at_source": {
+            "title": "Occurred At Source",
+            "type": "string"
+          },
           "score": {
             "title": "Score",
             "type": "number"
@@ -829,6 +991,7 @@
           "title",
           "kind",
           "occurred_at",
+          "occurred_at_source",
           "score",
           "matched_chunks"
         ],
@@ -955,6 +1118,111 @@
           "status"
         ],
         "title": "Liveness",
+        "type": "object"
+      },
+      "MemoriesAtOut": {
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "memories": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryAtOut"
+            },
+            "title": "Memories",
+            "type": "array"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "total",
+          "memories"
+        ],
+        "title": "MemoriesAtOut",
+        "type": "object"
+      },
+      "MemoryAtOut": {
+        "properties": {
+          "external_key": {
+            "title": "External Key",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "ingested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingested At"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "occurred_at_source": {
+            "title": "Occurred At Source",
+            "type": "string"
+          },
+          "source_name": {
+            "title": "Source Name",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "id",
+          "external_key",
+          "source_name",
+          "kind",
+          "title",
+          "occurred_at",
+          "occurred_at_source",
+          "ingested_at"
+        ],
+        "title": "MemoryAtOut",
         "type": "object"
       },
       "MemoryDetailOut": {
@@ -1208,6 +1476,16 @@
         ],
         "title": "MemoryOut",
         "type": "object"
+      },
+      "Period": {
+        "description": "The calendar grain an activity histogram is bucketed at.\n\nThe values are exactly Postgres' `date_trunc` field names, which is not a\ncoincidence and is also not an invitation to interpolate them into SQL:\n`date_trunc` takes its field as a *parameter*, so the enum is bound rather\nthan formatted. The equality matters because M4.0 truncates in two places \u2014\nPostgres groups the counts, Python generates the empty buckets between them\n\u2014 and a week that started on Monday in one and on Sunday in the other would\nproduce a histogram whose bars did not line up with its own axis.\n\nThree grains, and no `YEAR` or `HOUR`. Both are trivial to add and neither\nhas a caller; a grain nobody asked for is a branch nobody tests.",
+        "enum": [
+          "day",
+          "week",
+          "month"
+        ],
+        "title": "Period",
+        "type": "string"
       },
       "QuerySummaryOut": {
         "properties": {
@@ -1628,6 +1906,52 @@
         "title": "SyncAccepted",
         "type": "object"
       },
+      "TimelineOut": {
+        "description": "The histogram, plus what its dates are worth.\n\nThe profile is part of the same response rather than a second endpoint on\npurpose. A caller that has to make two requests to find out whether the\nchart it just drew is built on declared dates or on mtimes is a caller that\nwill draw the chart first.",
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/BucketOut"
+            },
+            "title": "Buckets",
+            "type": "array"
+          },
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "period": {
+            "$ref": "#/components/schemas/Period"
+          },
+          "provenance": {
+            "items": {
+              "$ref": "#/components/schemas/BandOut"
+            },
+            "title": "Provenance",
+            "type": "array"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "period",
+          "total",
+          "buckets",
+          "provenance"
+        ],
+        "title": "TimelineOut",
+        "type": "object"
+      },
       "TimingOut": {
         "properties": {
           "embed_ms": {
@@ -1763,6 +2087,7 @@
         "type": "object"
       },
       "VersionOut": {
+        "description": "One version, with both clocks and both hashes.\n\nM4.1 draws these on a small timeline, which needs `occurred_at` as well as\n`ingested_at` \u2014 the two are a different story per version, and a history\nshowing only when the system read something cannot say when the thing it\nread was written.\n\nThe hashes are what \"what changed\" is answered from. `content_hash`\ndiffering with `normalized_hash` identical is a real and common case \u2014 a\ntrailing newline, a line ending, a byte the normalizer discards \u2014 and it is\nthe difference between a version that changed the corpus and one that only\nchanged the file.",
         "properties": {
           "content_hash": {
             "title": "Content Hash",
@@ -1805,6 +2130,22 @@
             ],
             "title": "Normalized Hash"
           },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "occurred_at_source": {
+            "title": "Occurred At Source",
+            "type": "string"
+          },
           "version": {
             "title": "Version",
             "type": "integer"
@@ -1816,6 +2157,8 @@
           "is_current",
           "content_hash",
           "normalized_hash",
+          "occurred_at",
+          "occurred_at_source",
           "ingested_at",
           "deleted_at"
         ],
@@ -2032,6 +2375,75 @@
         ]
       }
     },
+    "/gaps": {
+      "get": {
+        "description": "Stretches with activity either side and none during, per source.\n\nPer source rather than corpus-wide: a silence in one source that another was\nbusy through is not a silence, and merging them would report a gap nobody\nexperienced.",
+        "operationId": "get_gaps_gaps_get",
+        "parameters": [
+          {
+            "description": "Shortest silence worth reporting.",
+            "in": "query",
+            "name": "min_days",
+            "required": false,
+            "schema": {
+              "default": 30.0,
+              "description": "Shortest silence worth reporting.",
+              "exclusiveMinimum": 0,
+              "title": "Min Days",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Source name.",
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Source name.",
+              "title": "Source"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GapOut"
+                  },
+                  "title": "Response Get Gaps Gaps Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Gaps",
+        "tags": [
+          "timeline"
+        ]
+      }
+    },
     "/health/live": {
       "get": {
         "operationId": "live_health_live_get",
@@ -2235,6 +2647,96 @@
         "summary": "List Memories",
         "tags": [
           "sources"
+        ]
+      }
+    },
+    "/memories/at": {
+      "get": {
+        "description": "The memories that happened in `[date, date + window_days)`.\n\n**The window runs forward from `date` rather than straddling it**, which is\nthe less obvious reading of the name and the one that makes the timeline\nexact. A bucket the user clicked has a start and a length \u2014 31 days for\nJanuary, 28 for February \u2014 and a centred window could not express either\nwithout inventing a midpoint. Half-open at the far end, matching\n`memories_in_range`, so clicking two adjacent bars never returns the same\nmemory twice.",
+        "operationId": "memories_at_memories_at_get",
+        "parameters": [
+          {
+            "description": "ISO instant. The start of the window.",
+            "in": "query",
+            "name": "date",
+            "required": true,
+            "schema": {
+              "description": "ISO instant. The start of the window.",
+              "format": "date-time",
+              "title": "Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Window length in days, forward from `date`.",
+            "in": "query",
+            "name": "window_days",
+            "required": false,
+            "schema": {
+              "default": 1.0,
+              "description": "Window length in days, forward from `date`.",
+              "exclusiveMinimum": 0,
+              "maximum": 3660,
+              "title": "Window Days",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Source name.",
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Source name.",
+              "title": "Source"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "exclusiveMinimum": 0,
+              "maximum": 1000,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoriesAtOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Memories At",
+        "tags": [
+          "timeline"
         ]
       }
     },
@@ -2645,6 +3147,105 @@
         "summary": "Get Stats",
         "tags": [
           "stats"
+        ]
+      }
+    },
+    "/timeline": {
+      "get": {
+        "description": "Activity per period, with the provenance profile it should be read against.\n\nThe window defaults to what the corpus actually covers rather than to a\nfixed span like \"the last year\". A default window that missed the data would\nrender an empty chart, and an empty chart is indistinguishable from an empty\ncorpus.",
+        "operationId": "get_timeline_timeline_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Period",
+              "default": "month"
+            }
+          },
+          {
+            "description": "ISO instant. Defaults to the earliest dated memory.",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO instant. Defaults to the earliest dated memory.",
+              "title": "From"
+            }
+          },
+          {
+            "description": "ISO instant, exclusive. Defaults past the latest.",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO instant, exclusive. Defaults past the latest.",
+              "title": "To"
+            }
+          },
+          {
+            "description": "Source name.",
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Source name.",
+              "title": "Source"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimelineOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Timeline",
+        "tags": [
+          "timeline"
         ]
       }
     }

@@ -45,6 +45,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/gaps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Gaps
+         * @description Stretches with activity either side and none during, per source.
+         *
+         *     Per source rather than corpus-wide: a silence in one source that another was
+         *     busy through is not a silence, and merging them would report a gap nobody
+         *     experienced.
+         */
+        get: operations["get_gaps_gaps_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health/live": {
         parameters: {
             query?: never;
@@ -136,6 +160,34 @@ export interface paths {
         };
         /** List Memories */
         get: operations["list_memories_memories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/memories/at": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Memories At
+         * @description The memories that happened in `[date, date + window_days)`.
+         *
+         *     **The window runs forward from `date` rather than straddling it**, which is
+         *     the less obvious reading of the name and the one that makes the timeline
+         *     exact. A bucket the user clicked has a start and a length — 31 days for
+         *     January, 28 for February — and a centred window could not express either
+         *     without inventing a midpoint. Half-open at the far end, matching
+         *     `memories_in_range`, so clicking two adjacent bars never returns the same
+         *     memory twice.
+         */
+        get: operations["memories_at_memories_at_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -248,6 +300,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Timeline
+         * @description Activity per period, with the provenance profile it should be read against.
+         *
+         *     The window defaults to what the corpus actually covers rather than to a
+         *     fixed span like "the last year". A default window that missed the data would
+         *     render an empty chart, and an empty chart is indistinguishable from an empty
+         *     corpus.
+         */
+        get: operations["get_timeline_timeline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -334,6 +411,20 @@ export interface components {
             verify_ms: number;
         };
         /**
+         * BandOut
+         * @description One `occurred_at_source` band of the corpus.
+         */
+        BandOut: {
+            /** Count */
+            count: number;
+            /** Earliest */
+            earliest: string | null;
+            /** Latest */
+            latest: string | null;
+            /** Provenance */
+            provenance: string;
+        };
+        /**
          * BreakdownOut
          * @description Where the score came from, per retriever.
          *
@@ -372,6 +463,25 @@ export interface components {
             vector_rank?: number | null;
             /** Vector Score */
             vector_score?: number | null;
+        };
+        /** BucketOut */
+        BucketOut: {
+            /** By Kind */
+            by_kind?: {
+                [key: string]: number;
+            };
+            /** Count */
+            count: number;
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
         };
         /** CitationOut */
         CitationOut: {
@@ -509,6 +619,44 @@ export interface components {
             /** Healthy */
             healthy: boolean;
         };
+        /**
+         * GapEndOut
+         * @description What was active on one side of a gap.
+         */
+        GapEndOut: {
+            /** External Key */
+            external_key: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Occurred At */
+            occurred_at: string | null;
+            /** Occurred At Source */
+            occurred_at_source: string;
+        };
+        /** GapOut */
+        GapOut: {
+            after: components["schemas"]["GapEndOut"];
+            before: components["schemas"]["GapEndOut"];
+            /** Days */
+            days: number;
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /** Source Name */
+            source_name: string;
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -532,6 +680,8 @@ export interface components {
             memory_id: string;
             /** Occurred At */
             occurred_at: string | null;
+            /** Occurred At Source */
+            occurred_at_source: string;
             /** Score */
             score: number;
             /** Source Name */
@@ -578,6 +728,45 @@ export interface components {
              * @constant
              */
             status: "ok";
+        };
+        /** MemoriesAtOut */
+        MemoriesAtOut: {
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /** Memories */
+            memories: components["schemas"]["MemoryAtOut"][];
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /** Total */
+            total: number;
+        };
+        /** MemoryAtOut */
+        MemoryAtOut: {
+            /** External Key */
+            external_key: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Ingested At */
+            ingested_at: string | null;
+            /** Kind */
+            kind: string;
+            /** Occurred At */
+            occurred_at: string | null;
+            /** Occurred At Source */
+            occurred_at_source: string;
+            /** Source Name */
+            source_name: string;
+            /** Title */
+            title: string | null;
         };
         /** MemoryDetailOut */
         MemoryDetailOut: {
@@ -670,6 +859,23 @@ export interface components {
             /** Version */
             version: number;
         };
+        /**
+         * Period
+         * @description The calendar grain an activity histogram is bucketed at.
+         *
+         *     The values are exactly Postgres' `date_trunc` field names, which is not a
+         *     coincidence and is also not an invitation to interpolate them into SQL:
+         *     `date_trunc` takes its field as a *parameter*, so the enum is bound rather
+         *     than formatted. The equality matters because M4.0 truncates in two places —
+         *     Postgres groups the counts, Python generates the empty buckets between them
+         *     — and a week that started on Monday in one and on Sunday in the other would
+         *     produce a histogram whose bars did not line up with its own axis.
+         *
+         *     Three grains, and no `YEAR` or `HOUR`. Both are trivial to add and neither
+         *     has a caller; a grain nobody asked for is a branch nobody tests.
+         * @enum {string}
+         */
+        Period: "day" | "week" | "month";
         /** QuerySummaryOut */
         QuerySummaryOut: {
             /**
@@ -868,6 +1074,34 @@ export interface components {
              */
             source_id: string;
         };
+        /**
+         * TimelineOut
+         * @description The histogram, plus what its dates are worth.
+         *
+         *     The profile is part of the same response rather than a second endpoint on
+         *     purpose. A caller that has to make two requests to find out whether the
+         *     chart it just drew is built on declared dates or on mtimes is a caller that
+         *     will draw the chart first.
+         */
+        TimelineOut: {
+            /** Buckets */
+            buckets: components["schemas"]["BucketOut"][];
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            period: components["schemas"]["Period"];
+            /** Provenance */
+            provenance: components["schemas"]["BandOut"][];
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /** Total */
+            total: number;
+        };
         /** TimingOut */
         TimingOut: {
             /** Embed Ms */
@@ -922,7 +1156,21 @@ export interface components {
             /** Supported Sentences */
             supported_sentences: number;
         };
-        /** VersionOut */
+        /**
+         * VersionOut
+         * @description One version, with both clocks and both hashes.
+         *
+         *     M4.1 draws these on a small timeline, which needs `occurred_at` as well as
+         *     `ingested_at` — the two are a different story per version, and a history
+         *     showing only when the system read something cannot say when the thing it
+         *     read was written.
+         *
+         *     The hashes are what "what changed" is answered from. `content_hash`
+         *     differing with `normalized_hash` identical is a real and common case — a
+         *     trailing newline, a line ending, a byte the normalizer discards — and it is
+         *     the difference between a version that changed the corpus and one that only
+         *     changed the file.
+         */
         VersionOut: {
             /** Content Hash */
             content_hash: string;
@@ -942,6 +1190,10 @@ export interface components {
             is_current: boolean;
             /** Normalized Hash */
             normalized_hash: string | null;
+            /** Occurred At */
+            occurred_at: string | null;
+            /** Occurred At Source */
+            occurred_at_source: string;
             /** Version */
             version: number;
         };
@@ -1065,6 +1317,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DoctorOut"];
+                };
+            };
+        };
+    };
+    get_gaps_gaps_get: {
+        parameters: {
+            query?: {
+                /** @description Shortest silence worth reporting. */
+                min_days?: number;
+                /** @description Source name. */
+                source?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GapOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1204,6 +1490,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    memories_at_memories_at_get: {
+        parameters: {
+            query: {
+                /** @description ISO instant. The start of the window. */
+                date: string;
+                /** @description Window length in days, forward from `date`. */
+                window_days?: number;
+                /** @description Source name. */
+                source?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoriesAtOut"];
                 };
             };
             /** @description Validation Error */
@@ -1425,6 +1748,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StatsOut"];
+                };
+            };
+        };
+    };
+    get_timeline_timeline_get: {
+        parameters: {
+            query?: {
+                period?: components["schemas"]["Period"];
+                /** @description ISO instant. Defaults to the earliest dated memory. */
+                from?: string | null;
+                /** @description ISO instant, exclusive. Defaults past the latest. */
+                to?: string | null;
+                /** @description Source name. */
+                source?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimelineOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
