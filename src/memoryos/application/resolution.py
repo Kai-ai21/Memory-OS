@@ -44,21 +44,12 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
-from memoryos.application.ports import (
-    Embedder,
-    EntityNode,
-    GraphEdge,
-    GraphNode,
-    GraphStore,
-    MemoryNode,
-)
+from memoryos.application.graph_sync import enqueue_sync
+from memoryos.application.ports import Embedder, JobQueue
 from memoryos.domain.canonicalize import canonicalize
 from memoryos.domain.ids import new_id
 from memoryos.domain.values import (
-    EdgeType,
     EntityType,
-    GraphLabel,
-    MemoryKind,
     MergeStatus,
     MergeStrategy,
 )
@@ -172,12 +163,18 @@ class ResolveEntities:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         embedder: Embedder,
+        queue: JobQueue | None = None,
         *,
         threshold: float = DEFAULT_THRESHOLD,
         review_floor: float = REVIEW_FLOOR,
     ) -> None:
         self._sessions = session_factory
         self._embedder = embedder
+        # A merge changes the graph, and this is where the change is announced.
+        # Optional for the same reason it is everywhere else in Phase 3: the graph
+        # is a projection, and a deployment without one still resolves entities
+        # correctly — `graph verify` is what reports the projection is behind.
+        self._queue = queue
         self._threshold = threshold
         self._review_floor = min(review_floor, threshold)
 
@@ -287,6 +284,15 @@ class ResolveEntities:
                     merged_at=func.now(),
                 )
             )
+
+        # After the commit. The sync reads Postgres, so a job queued inside the
+        # transaction could be claimed by a worker before the merge was visible
+        # and would project the state the merge was about to replace.
+        #
+        # Both ids, and the loser is the one that matters: the winner only gains
+        # mentions, but the loser has to *leave* the graph, and only a payload
+        # naming it will prune its node and the edges into it.
+        await self._queue_sync(winner, loser)
         return len(moved)
 
     async def revert(self, merge_id: UUID) -> int:
@@ -320,7 +326,17 @@ class ResolveEntities:
             )
             merge.status = MergeStatus.REVERTED.value
             merge.reverted_at = func.now()
+            winner_id, loser_id = merge.winner_id, merge.loser_id
+
+        # An unmerge is as much a graph change as a merge: the loser becomes a
+        # node again and takes back the mentions that moved.
+        await self._queue_sync(winner_id, loser_id)
         return len(mention_ids)
+
+    async def _queue_sync(self, *entity_ids: UUID) -> None:
+        if self._queue is None:
+            return
+        await enqueue_sync(self._queue, entity_ids=list(entity_ids))
 
     async def record_pending(self, candidate: MergeCandidate) -> bool:
         """Queue a candidate for review. False if it was already queued."""
@@ -667,97 +683,18 @@ async def _repoint(session: AsyncSession, *, winner: UUID, loser: UUID) -> list[
 
 
 
-async def rebuild_graph_projection(
-    session_factory: async_sessionmaker[AsyncSession], graph: GraphStore
-) -> int:
-    """Clear the graph and re-project the resolved entities and their mentions.
-
-    Cleared and rebuilt rather than patched, because a merge is not an additive
-    change: it removes a node and moves every edge that pointed at it. Patching
-    would mean the projection code knowing which nodes disappeared and which
-    edges moved — the same information the merge already recorded, re-derived in
-    a second place, with a second chance to be wrong.
-
-    This is what the graph being a *rebuildable projection* is for. It is cheap
-    because nothing here calls a model: the entities and mentions are already in
-    Postgres, and the graph is a second copy of their shape.
-    """
-    await graph.clear()
-
-    async with session_factory() as session:
-        memories = {
-            row[0]: row
-            for row in await session.execute(
-                select(
-                    models.Memory.id,
-                    models.Memory.external_key,
-                    models.Memory.kind,
-                    models.Memory.occurred_at,
-                ).where(models.Memory.is_current.is_(True))
-            )
-        }
-
-        rows = await session.execute(
-            select(
-                models.Entity.id,
-                models.Entity.name,
-                models.Entity.canonical_name,
-                models.Entity.type,
-                models.Entity.confidence,
-                models.EntityMention.memory_id,
-                models.EntityMention.chunk_id,
-            )
-            .join(
-                models.EntityMention,
-                models.EntityMention.entity_id == models.Entity.id,
-            )
-            # Merged-away entities have no mentions left, but the filter is
-            # explicit rather than implied: relying on "the join finds nothing"
-            # would make this silently wrong the moment a merge left one behind.
-            .where(models.Entity.merged_into_id.is_(None))
-        )
-        pairs = list(rows)
-
-    seen_memories: set[UUID] = set()
-    seen_entities: set[UUID] = set()
-
-    for entity_id, name, canonical, kind, confidence, memory_id, chunk_id in pairs:
-        if memory_id not in seen_memories and memory_id in memories:
-            _, external_key, memory_kind, occurred_at = memories[memory_id]
-            await graph.upsert_memory(
-                MemoryNode(
-                    memory_id=memory_id,
-                    external_key=external_key,
-                    kind=MemoryKind(memory_kind),
-                    occurred_at=occurred_at,
-                )
-            )
-            seen_memories.add(memory_id)
-
-        if entity_id not in seen_entities:
-            await graph.upsert_entity(
-                EntityNode(
-                    entity_id=entity_id,
-                    name=name,
-                    canonical_name=canonical,
-                    type=kind,
-                    confidence=confidence if confidence is not None else 0.0,
-                )
-            )
-            seen_entities.add(entity_id)
-
-        await graph.link(
-            GraphEdge(
-                type=EdgeType.MENTIONS,
-                start=GraphNode(GraphLabel.MEMORY, str(memory_id)),
-                end=GraphNode(GraphLabel.ENTITY, str(entity_id)),
-                properties={"chunk_id": str(chunk_id)},
-            )
-        )
-
-    logger.info(
-        "resolve.graph_rebuilt",
-        entities=len(seen_entities),
-        memories=len(seen_memories),
-    )
-    return len(seen_entities)
+# The graph rebuild a merge requires used to live here, and it is gone rather
+# than moved: it projected memories, entities and `MENTIONS`, and nothing else.
+#
+# That was an M3.3 defect with no symptom short of reading the graph. Resolution
+# clears the projection and rebuilds it — correct, because a merge removes a node
+# and moves every edge that pointed at it — but the rebuild it ran predated
+# `entity_relationships`, so every `RELATES_TO` edge M3.3 had extracted was
+# deleted and never re-projected. Running `resolve-entities` silently emptied the
+# relationship half of the graph, reported success, and left `doctor`'s node
+# counts unchanged, because nothing there counts edges.
+#
+# `application/graph_projection.rebuild` is the one definition now, and it is
+# shared with the sync, the divergence check and the replay. That is what makes
+# the omission structurally impossible rather than fixed: a projection that
+# forgot an edge type would fail `graph verify` against every corpus.

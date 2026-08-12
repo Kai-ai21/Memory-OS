@@ -435,8 +435,21 @@ class ScoreBreakdown:
     # the same as one it scored badly.
     rerank_score: float | None = None
     rerank_rank: int | None = None
+    # M3.5's graph expansion. `graph_rank` is where the expansion placed this
+    # chunk; `graph_path` is the entity route that reached it, seed entity first.
+    #
+    # The path is not a debugging aid. Graph expansion is the one ranking that
+    # *introduces* candidates rather than reordering them, so it is the one whose
+    # contribution a reader is least able to reconstruct — a result that shares no
+    # word with the query is inexplicable without the route, and an unexplained
+    # promotion is exactly what M2.5 built this dataclass to prevent. A chunk with
+    # a `graph_rank` and no `graph_path` would be the same failure wearing a
+    # number.
+    graph_rank: int | None = None
+    graph_score: float | None = None
+    graph_path: tuple[str, ...] | None = None
 
-    def as_dict(self) -> dict[str, float | int | None]:
+    def as_dict(self) -> dict[str, float | int | str | None]:
         return {
             "fused": self.fused,
             "vector_rank": self.vector_rank,
@@ -449,6 +462,11 @@ class ScoreBreakdown:
             "importance_score": self.importance_score,
             "rerank_score": self.rerank_score,
             "rerank_rank": self.rerank_rank,
+            "graph_rank": self.graph_rank,
+            "graph_score": self.graph_score,
+            # Rendered as the route a reader would follow, because that is what it
+            # is: `queue -> SKIP LOCKED -> worker`.
+            "graph_path": None if self.graph_path is None else " -> ".join(self.graph_path),
         }
 
 
@@ -785,6 +803,27 @@ class EntityNode:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceNode:
+    """The connector a memory came from.
+
+    Declared by M3.0's schema — label, constraint and `FROM_SOURCE` edge type —
+    and written by nothing until M3.4. That gap was not harmless: `link` merges
+    its endpoints, so a `FROM_SOURCE` edge written without this would have
+    created a `Source` node carrying an id and no name, which is the one failure
+    the port's own docstring warns about.
+
+    Projected because it is what makes the graph's memories filterable the way
+    every other read of the corpus is. `(source_name, external_key)` is the
+    durable identity of an item everywhere else in this system; without the
+    source, the graph knows only half of it.
+    """
+
+    source_id: UUID
+    name: str
+    kind: str
+
+
+@dataclass(frozen=True, slots=True)
 class GraphNode:
     """A node by label and identity, with whatever properties it carries.
 
@@ -813,6 +852,21 @@ class GraphEdge:
     start: GraphNode
     end: GraphNode
     properties: dict[str, Any] = field(default_factory=dict)
+    # Property names that are part of the relationship's *identity*, and therefore
+    # belong inside the `MERGE` pattern rather than in the `SET` after it.
+    #
+    # Empty for `MENTIONS` and `FROM_SOURCE`, where the endpoints are the whole
+    # identity. Not empty for `RELATES_TO`, and that is not a refinement: Neo4j
+    # merges one relationship per (type, start, end), so two predicates between one
+    # pair — "sqlalchemy uses postgres" and "sqlalchemy depends_on postgres" — were
+    # collapsing into a single edge whose predicate was whichever one was written
+    # last. Both claims are in the corpus, the projection reported 25 edges, the
+    # graph held 24, and which of the two survived depended on row order.
+    #
+    # Only names in `domain.values.EDGE_IDENTITY_PROPERTIES` are accepted, because
+    # these are interpolated into Cypher: a property name cannot be a bound
+    # parameter any more than a label can.
+    identity: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -833,6 +887,33 @@ class GraphPath:
     def length(self) -> int:
         """Hops. A path to an immediate neighbour has length 1."""
         return len(self.edges)
+
+
+@dataclass(frozen=True, slots=True)
+class GraphReach:
+    """One memory the graph reached from a seed entity, and the route that reached it.
+
+    `route` is the entity names along the path, seed first, and it is not
+    decoration: it is what `ScoreBreakdown.graph_path` carries, and the reason a
+    graph contribution can be argued with rather than merely observed. A result
+    promoted because it shares an entity with something you already found is
+    explicable; one promoted by "the graph said so" is not.
+
+    `hops` is the *graph* path length, not the entity-hop depth. Two entities
+    connected by a `RELATES_TO` edge are one hop apart; two co-mentioned in the
+    same memory are two, because the path runs through the memory. Both are one
+    entity hop, and the distinction is kept here rather than flattened because a
+    typed relationship is a stronger claim than a co-mention and the ranking is
+    entitled to say so.
+    """
+
+    memory_id: UUID
+    # Which chunk of that memory named the entity. An ordinal, not an id, because
+    # that is what the projection stores — see `graph_projection._mention_edges`.
+    chunk_ordinal: int
+    entity_id: UUID
+    hops: int
+    route: tuple[str, ...]
 
 
 class GraphStore(Protocol):
@@ -866,7 +947,63 @@ class GraphStore(Protocol):
 
     async def upsert_entity(self, node: EntityNode) -> None: ...
 
+    async def upsert_source(self, node: SourceNode) -> None: ...
+
     async def link(self, edge: GraphEdge) -> None: ...
+
+    async def prune_memories(self, memory_ids: Sequence[UUID]) -> int:
+        """Detach-delete these `Memory` nodes. Returns how many were there.
+
+        **The one place a node-level delete is legitimate, and it is legitimate
+        because of what calls it.** A use case that kept the graph current by
+        deleting the parts it changed would be maintaining a second source of
+        truth by hand — the thing this port's docstring forbids. What calls this
+        is the projection sync, whose entire job is to make a *neighbourhood* of
+        the graph equal to what Postgres says it should be, and which does it the
+        same way the full rebuild does: delete, then re-project. Without a scoped
+        delete, "incremental" would mean "additive", and a mention that Postgres
+        no longer has would survive in the graph until the next full rebuild.
+
+        Detaching is what makes the re-projection a rebuild rather than a merge:
+        every `MENTIONS` and `FROM_SOURCE` edge this memory had goes with it, so
+        an edge that should no longer exist cannot survive by not being
+        mentioned.
+        """
+        ...
+
+    async def prune_entities(self, entity_ids: Sequence[UUID]) -> int:
+        """Detach-delete these `Entity` nodes. Returns how many were there.
+
+        The counterpart for resolution: a merged-away entity has to *leave* the
+        graph, and there is no upsert that expresses "no longer exists". Callers
+        must re-sync every memory that mentioned one, because detaching takes
+        those `MENTIONS` edges with it — `memories_mentioning` exists so that set
+        can be found before the delete rather than guessed at afterwards.
+        """
+        ...
+
+    async def mention_edges(
+        self,
+        *,
+        memory_ids: Sequence[UUID] = (),
+        entity_ids: Sequence[UUID] = (),
+    ) -> list[tuple[UUID, UUID]]:
+        """`(memory_id, entity_id)` for every `MENTIONS` edge touching either set.
+
+        Read from the graph rather than from Postgres deliberately, and the
+        difference is the whole point of the call: the sync needs to know what the
+        *graph* currently claims, because the rows that produced those claims may
+        already have moved or gone.
+
+        Both directions, because the sync needs both and each covers a case the
+        other cannot see. An entity that has just lost its last mention is
+        unreachable from Postgres — nothing there associates it with any memory —
+        but the graph still has the edge, and without it the entity's node survives
+        every scoped sync as an orphan. After a merge it is the mirror image: the
+        loser is unreachable from Postgres, and only the graph can say which
+        memories have to be re-projected once its node is pruned.
+        """
+        ...
 
     async def neighbours(
         self, entity_id: UUID, *, depth: int = 2, limit: int = 50
@@ -883,8 +1020,63 @@ class GraphStore(Protocol):
         """
         ...
 
+    async def reach(
+        self,
+        seed_entity_ids: Sequence[UUID],
+        *,
+        depth: int = 2,
+        exclude_entity_ids: Sequence[UUID] = (),
+        limit: int = 200,
+    ) -> list[GraphReach]:
+        """Memories reachable from these entities, shortest route first.
+
+        **This is the read M3.5 exists to make, and the one that justifies a graph
+        database rather than more Postgres tables.** It is a variable-depth
+        traversal whose bound is a parameter: `depth=1` is a join, `depth=2` is a
+        join of a join, and the recursive CTE that expresses the family degrades in
+        both cost and readability with every level. Here it is `[*1..4]`.
+
+        `depth` counts *entity* hops, and the query bounds graph hops at twice that
+        — an entity reaches another either directly, through a `RELATES_TO` edge, or
+        through a memory that mentions both. Depth 2 is the default because depth 3
+        on a connected graph reaches most of the corpus, which is not a ranking.
+
+        `exclude_entity_ids` is hub suppression, and it is applied *inside* the
+        traversal rather than to its results. An entity mentioned in a third of the
+        corpus does not merely add noise at the end: it is a bridge every path can
+        cross, so at depth 2 it connects everything to everything. Excluding hubs
+        afterwards would leave the paths that ran through them.
+
+        Undirected, for the reason `neighbours` is: `MENTIONS` points from a memory
+        to an entity, so a direction-respecting walk from an entity finds nothing.
+
+        `limit` bounds rows, and the ordering is what makes the bound meaningful:
+        shortest route first, then by id so a rerun agrees.
+        """
+        ...
+
     async def clear(self) -> None:
         """Empty the projection, leaving the schema in place."""
+        ...
+
+    async def all_nodes(self) -> list[GraphNode]:
+        """Every projected node, with its properties. For divergence detection.
+
+        Reads the whole graph, and a sampled version of this would not be worth
+        having: the question it answers is "does the projection differ from
+        Postgres anywhere", and a check that looks at some of the nodes answers a
+        different question. `SchemaVersion` is excluded, because it describes the
+        schema rather than the projection.
+        """
+        ...
+
+    async def all_edges(self) -> list[GraphEdge]:
+        """Every projected relationship, endpoints named by identity.
+
+        The endpoints carry label and key only. Their properties are `all_nodes`'
+        business, and duplicating them per edge would make an edge diff report a
+        node's changed property once per relationship it happens to have.
+        """
         ...
 
 

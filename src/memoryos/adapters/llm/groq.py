@@ -22,11 +22,12 @@ not to have information the SDK is handing over.
 """
 
 import asyncio
+import re
 from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from memoryos.adapters.llm.errors import MissingApiKey
+from memoryos.adapters.llm.errors import MissingApiKey, RateLimited
 from memoryos.application.ports import LanguageModel
 from memoryos.domain.jobs import PermanentError, TransientError
 
@@ -34,6 +35,11 @@ if TYPE_CHECKING:  # pragma: no cover
     from groq import AsyncGroq
 
 logger = structlog.get_logger(__name__)
+
+# "Please try again in 23.145s" — the wait Groq states in the body of a 429 when
+# the limit is tokens per minute. Matched rather than assumed, and a miss simply
+# falls back to exponential backoff; see `_retry_after`.
+_RETRY_AFTER_IN_MESSAGE = re.compile(r"try again in ([0-9]+(?:\.[0-9]+)?)\s*s")
 
 __all__ = ["DEFAULT_MODEL", "GroqLanguageModel", "MissingApiKey"]
 
@@ -150,8 +156,11 @@ def _classify(exc: Exception) -> Exception:
 
     if isinstance(exc, groq.RateLimitError):
         # The expected steady state on a free tier, not an exception. Backoff is
-        # exactly the right response.
-        return TransientError(f"language model rate limited: {exc}")
+        # exactly the right response — and the server says how much of it, which
+        # is worth carrying rather than guessing. See `errors.RateLimited`.
+        return RateLimited(
+            f"language model rate limited: {exc}", retry_after=_retry_after(exc)
+        )
     if isinstance(exc, groq.APITimeoutError | groq.APIConnectionError):
         return TransientError(f"language model unreachable: {exc}")
     if isinstance(exc, groq.InternalServerError):
@@ -180,6 +189,39 @@ def _classify(exc: Exception) -> Exception:
     # has classified burns the attempt budget and hides the error behind three
     # more of them.
     return PermanentError(f"language model failed: {exc}")
+
+
+def _retry_after(exc: Exception) -> float | None:
+    """How long the server said to wait, in seconds, or None if it did not.
+
+    Two places to look and neither is guaranteed. The `retry-after` header is the
+    HTTP convention; Groq also states it in the error body ("Please try again in
+    23.145s"), and on a token-per-minute limit that number is the one that
+    matters, because it counts down as the window slides rather than naming a
+    fixed cooldown.
+
+    Anything unparseable returns None, which puts the caller back on exponential
+    backoff. A wrong number here would be worse than no number: too short and it
+    burns the attempt budget against a window that has not moved, too long and a
+    corpus run stalls on a limit that lifted a minute ago.
+    """
+    response = getattr(exc, "response", None)
+    header = getattr(getattr(response, "headers", None), "get", lambda _: None)(
+        "retry-after"
+    )
+    if header is not None:
+        try:
+            return max(0.0, float(header))
+        except (TypeError, ValueError):
+            pass
+
+    match = _RETRY_AFTER_IN_MESSAGE.search(str(exc))
+    if match is None:
+        return None
+    try:
+        return max(0.0, float(match.group(1)))
+    except ValueError:
+        return None
 
 
 def _text_of(response: Any) -> str | None:

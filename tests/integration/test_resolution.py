@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
+from memoryos.application.ports import JobQueue
 from memoryos.application.resolution import (
     MergeCandidate,
     ResolveEntities,
@@ -86,8 +87,10 @@ async def a_chunk(pipeline: Pipeline) -> tuple[UUID, UUID]:
     return row[0], row[1]
 
 
-def resolver(pipeline: Pipeline, **kwargs: float) -> ResolveEntities:
-    return ResolveEntities(pipeline.sessions, FakeEmbedder(), **kwargs)
+def resolver(
+    pipeline: Pipeline, queue: JobQueue | None = None, **kwargs: float
+) -> ResolveEntities:
+    return ResolveEntities(pipeline.sessions, FakeEmbedder(), queue, **kwargs)
 
 
 async def mentions_of(

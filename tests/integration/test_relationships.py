@@ -10,11 +10,12 @@ only establish that the fake preserves it.
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
 from memoryos.adapters.extraction.llm import LlmEntityExtractor
+from memoryos.application import graph_projection
 from memoryos.application.ports import EntityNode, EntityRef, GraphEdge, GraphNode
 from memoryos.application.relationships import ExtractRelationships
 from memoryos.domain.ids import new_id
@@ -202,14 +203,119 @@ async def test_the_same_relationship_in_two_chunks_is_two_rows_and_one_edge(
 
     assert await relationship_count(pipeline.sessions) == 2
 
-    extract = ExtractRelationships(
-        pipeline.sessions, FakeEntityExtractor(), graph.store, version="rel-test@1"
+    projection = await graph_projection.read(
+        pipeline.sessions, graph_projection.Scope(memory_ids=frozenset({memory_id}))
     )
-    edges = await extract._edges_for(memory_id)
+    edges = [
+        edge for edge in projection.edges if edge.type is graph_projection.ENTITY_EDGE_TYPE
+    ]
 
     assert len(edges) == 1, "two assertions of one pair are one edge"
     assert edges[0].properties["assertion_count"] == 2
     assert edges[0].properties["predicate"] == Predicate.USES.value
+
+
+async def test_a_relationship_on_a_merged_away_entity_projects_onto_the_winner(
+    pipeline: Pipeline,
+) -> None:
+    """The M3.3 defect: an edge to an entity resolution had already removed.
+
+    A relationship row keeps naming whichever entity the extractor saw, so after a
+    merge its endpoint is an entity that takes no further part in the graph. M3.3
+    projected the edge anyway — and because `link` merges its endpoints, that
+    *created* the node, carrying an id and no name. Nothing failed, nothing
+    logged, and every traversal through the pair walked into a node with no name.
+
+    Invisible to a count check: the edge existed, its properties were right, and
+    the node was there. Only its `name` was missing.
+    """
+    memory_id, chunk_id, entity_ids = await seed(
+        pipeline, names=("postgres", "sqlalchemy", "postgresql")
+    )
+    subject, obj, duplicate = entity_ids
+
+    async with pipeline.sessions.begin() as session:
+        session.add(
+            models.EntityRelationship(
+                id=new_id(),
+                subject_id=duplicate,
+                object_id=obj,
+                predicate=Predicate.USES.value,
+                confidence=0.9,
+                memory_id=memory_id,
+                chunk_id=chunk_id,
+                extractor_version="rel-test@1",
+            )
+        )
+        # `postgresql` is merged into `postgres`, which is what M3.2 does to this
+        # exact pair, and its mention moves with it.
+        await session.execute(
+            update(models.Entity)
+            .where(models.Entity.id == duplicate)
+            .values(merged_into_id=subject)
+        )
+        await session.execute(
+            update(models.EntityMention)
+            .where(models.EntityMention.entity_id == duplicate)
+            .values(entity_id=subject)
+        )
+
+    projection = await graph_projection.read(pipeline.sessions)
+    edges = [
+        edge for edge in projection.edges if edge.type is graph_projection.ENTITY_EDGE_TYPE
+    ]
+    projected = {str(node.entity_id) for node in projection.entities}
+
+    assert len(edges) == 1
+    assert edges[0].start.key == str(subject), "the endpoint follows the merge"
+    assert str(duplicate) not in projected, "a merged-away entity is not a node"
+    assert edges[0].start.key in projected, "every endpoint is a projected entity"
+
+
+async def test_a_relationship_between_two_names_of_one_thing_is_dropped(
+    pipeline: Pipeline,
+) -> None:
+    """Both endpoints resolving to the same entity is not a claim.
+
+    "postgresql uses postgres" was a real assertion about two names. Once the
+    merge says they are one thing, projecting it would put a self-loop in the
+    graph — a path from an entity to itself that every traversal has to walk and
+    no reader can interpret.
+    """
+    memory_id, chunk_id, entity_ids = await seed(
+        pipeline, names=("postgres", "postgresql")
+    )
+    winner, loser = entity_ids
+
+    async with pipeline.sessions.begin() as session:
+        session.add(
+            models.EntityRelationship(
+                id=new_id(),
+                subject_id=loser,
+                object_id=winner,
+                predicate=Predicate.USES.value,
+                confidence=0.9,
+                memory_id=memory_id,
+                chunk_id=chunk_id,
+                extractor_version="rel-test@1",
+            )
+        )
+        await session.execute(
+            update(models.Entity)
+            .where(models.Entity.id == loser)
+            .values(merged_into_id=winner)
+        )
+        await session.execute(
+            update(models.EntityMention)
+            .where(models.EntityMention.entity_id == loser)
+            .values(entity_id=winner)
+        )
+
+    projection = await graph_projection.read(pipeline.sessions)
+
+    assert not [
+        edge for edge in projection.edges if edge.type is graph_projection.ENTITY_EDGE_TYPE
+    ], "a self-loop is not a relationship"
 
 
 # --------------------------------------------------------------------------
@@ -313,3 +419,61 @@ def _entity_node(entity_id: UUID, name: str) -> EntityNode:
         type=EntityType.CONCEPT.value,
         confidence=0.9,
     )
+
+
+async def test_a_relationship_on_an_entity_with_no_mentions_is_not_projected(
+    pipeline: Pipeline,
+) -> None:
+    """The projection has to be closed under its own edges.
+
+    `entity_relationships` rows survive the deletion of their entities' mentions —
+    the foreign keys cascade from chunks and memories, not from mentions — so a
+    re-extraction that stops finding an entity leaves rows pointing at one the
+    projection no longer writes a node for. Because `link` merges its endpoints,
+    each of those rows then *created* an `Entity` node carrying an id and nothing
+    else: the M3.3 defect again, through a different door.
+
+    Found by `graph verify` on the live corpus reporting four nameless nodes, which
+    is the check doing precisely what it was built for.
+    """
+    memory_id, chunk_id, entity_ids = await seed(pipeline)
+    subject, obj = entity_ids
+    async with pipeline.sessions.begin() as session:
+        session.add(
+            models.EntityRelationship(
+                id=new_id(),
+                subject_id=subject,
+                object_id=obj,
+                predicate=Predicate.USES.value,
+                confidence=0.9,
+                memory_id=memory_id,
+                chunk_id=chunk_id,
+                extractor_version="rel-test@1",
+            )
+        )
+
+    before = await graph_projection.read(pipeline.sessions)
+    assert [
+        edge for edge in before.edges if edge.type is graph_projection.ENTITY_EDGE_TYPE
+    ], "the edge is projected while both endpoints have mentions"
+
+    # The object keeps its row and loses its last mention, which is what a
+    # re-extraction that no longer finds it leaves behind.
+    async with pipeline.sessions.begin() as session:
+        await session.execute(
+            delete(models.EntityMention).where(models.EntityMention.entity_id == obj)
+        )
+
+    after = await graph_projection.read(pipeline.sessions)
+    projected = {str(node.entity_id) for node in after.entities}
+
+    assert not [
+        edge for edge in after.edges if edge.type is graph_projection.ENTITY_EDGE_TYPE
+    ], "an edge whose endpoint has no node must not be projected"
+    assert str(obj) not in projected
+    # And every edge that *is* projected names endpoints the projection covers,
+    # which is the invariant rather than this one case.
+    for edge in after.edges:
+        if edge.type is graph_projection.ENTITY_EDGE_TYPE:
+            assert edge.start.key in projected
+            assert edge.end.key in projected

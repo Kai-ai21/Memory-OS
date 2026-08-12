@@ -27,7 +27,7 @@ caller value ever reaches a query string.
 """
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import UUID
 
@@ -46,9 +46,11 @@ from memoryos.application.ports import (
     GraphEdge,
     GraphNode,
     GraphPath,
+    GraphReach,
     MemoryNode,
+    SourceNode,
 )
-from memoryos.domain.values import EdgeType, GraphLabel
+from memoryos.domain.values import EDGE_IDENTITY_PROPERTIES, EdgeType, GraphLabel
 
 logger = structlog.get_logger(__name__)
 
@@ -64,6 +66,7 @@ MAX_DEPTH = 6
 # not part of the projection.
 _LABELS_BY_NAME: dict[str, GraphLabel] = {label.value: label for label in GraphLabel}
 _EDGES_BY_NAME: dict[str, EdgeType] = {edge.value: edge for edge in EdgeType}
+
 
 # The driver defaults to 30 seconds to open a connection and 60 to take one from
 # the pool, which are reasonable for a batch job and wrong for the readiness
@@ -207,6 +210,19 @@ class Neo4jGraphStore:
             database_=self._database,
         )
 
+    async def upsert_source(self, node: SourceNode) -> None:
+        await self.ensure_schema()
+        await self._driver.execute_query(
+            "MERGE (s:Source {source_id: $source_id}) "
+            "SET s.name = $name, s.kind = $kind",
+            {
+                "source_id": str(node.source_id),
+                "name": node.name,
+                "kind": node.kind,
+            },
+            database_=self._database,
+        )
+
     async def link(self, edge: GraphEdge) -> None:
         """Relate two nodes, creating either endpoint if it is not there yet.
 
@@ -227,6 +243,12 @@ class Neo4jGraphStore:
                 "start_key": edge.start.key,
                 "end_key": edge.end.key,
                 "properties": dict(edge.properties),
+                # Bound under a prefixed name, so an identity property called
+                # `properties` could not shadow the map above.
+                **{
+                    f"identity_{name}": edge.properties.get(name)
+                    for name in _checked_identity(edge)
+                },
             },
             database_=self._database,
         )
@@ -235,25 +257,39 @@ class Neo4jGraphStore:
     def _link_statement(edge: GraphEdge) -> str:
         """Assemble the `MERGE`, whose labels and relationship type cannot be bound.
 
-        Cypher parameters can carry values but not structure: `MERGE (n:$label)`
-        and `-[:$type]->` are both syntax errors before Neo4j 5.26 and remain a
-        different feature after it. So these three fragments are formatted in.
+        Cypher parameters can carry values but not structure: `MERGE (n:$label)`,
+        `-[:$type]->` and `{$name: $value}` are all syntax errors before Neo4j 5.26
+        and remain a different feature after it. So those fragments are formatted
+        in.
 
         That is safe here for a reason worth stating rather than assuming: every
         interpolated fragment is the `.value` of a `GraphLabel` or `EdgeType`
-        member — checked, at runtime, immediately below — so the set of
-        statements this function can produce is finite and enumerable. No caller
-        input reaches the string. Caller input is `$start_key`, `$end_key` and
-        `$properties`, all of which are bound.
+        member, or a name from `EDGE_IDENTITY_PROPERTIES` — each checked, at
+        runtime, immediately below — so the set of statements this function can
+        produce is finite and enumerable. No caller input reaches the string.
+        Caller input is `$start_key`, `$end_key`, `$properties` and the
+        `$identity_*` bindings, all of which are bound.
+
+        The identity properties go *inside* the relationship pattern. See
+        `ports.GraphEdge.identity` for what that fixes.
         """
         start_label = _checked_label(edge.start.label)
         end_label = _checked_label(edge.end.label)
+        names = _checked_identity(edge)
+        # Omitted entirely rather than emitted as an empty map: `-[r:T {}]->` is
+        # accepted by the parser and there is no reason to make a reader of the
+        # query log wonder whether it means something.
+        identity = (
+            " {" + ", ".join(f"{name}: $identity_{name}" for name in names) + "}"
+            if names
+            else ""
+        )
         return (
             f"MERGE (a:{start_label} "
             f"{{{identity_property(edge.start.label)}: $start_key}}) "
             f"MERGE (b:{end_label} "
             f"{{{identity_property(edge.end.label)}: $end_key}}) "
-            f"MERGE (a)-[r:{_checked_edge(edge.type)}]->(b) "
+            f"MERGE (a)-[r:{_checked_edge(edge.type)}{identity}]->(b) "
             f"SET r += $properties"
         )
 
@@ -278,9 +314,96 @@ class Neo4jGraphStore:
         )
         logger.info("graph.cleared", uri=self._uri)
 
+    async def prune_memories(self, memory_ids: Sequence[UUID]) -> int:
+        """See the port. One statement for the whole batch, not one per id."""
+        return await self._prune(GraphLabel.MEMORY, memory_ids)
+
+    async def prune_entities(self, entity_ids: Sequence[UUID]) -> int:
+        return await self._prune(GraphLabel.ENTITY, entity_ids)
+
+    async def _prune(self, label: GraphLabel, ids: Sequence[UUID]) -> int:
+        if not ids:
+            # An empty `IN []` is a legal query that matches nothing, so this is
+            # a round trip saved rather than a correctness guard.
+            return 0
+        await self.ensure_schema()
+        checked = _checked_label(label)
+        key = identity_property(label)
+        result = await self._driver.execute_query(
+            # Counted before the delete: after `DETACH DELETE` there is nothing
+            # left to count, and the caller needs to know whether the graph
+            # actually held what it was asked to remove.
+            #
+            # `FOREACH` rather than a `CALL` subquery, which is what this was and
+            # which the server deprecates without a variable scope clause — a
+            # clause that does not exist before 5.23. `FOREACH` has been the
+            # spelling for a delete over a collected list throughout.
+            f"MATCH (n:{checked}) WHERE n.{key} IN $ids "
+            f"WITH collect(n) AS found, count(n) AS removed "
+            f"FOREACH (node IN found | DETACH DELETE node) "
+            f"RETURN removed",
+            {"ids": [str(value) for value in ids]},
+            database_=self._database,
+        )
+        removed = int(result.records[0]["removed"]) if result.records else 0
+        logger.debug("graph.pruned", label=checked, asked=len(ids), removed=removed)
+        return removed
+
     # ------------------------------------------------------------------
     # Reads
     # ------------------------------------------------------------------
+
+    async def mention_edges(
+        self,
+        *,
+        memory_ids: Sequence[UUID] = (),
+        entity_ids: Sequence[UUID] = (),
+    ) -> list[tuple[UUID, UUID]]:
+        if not memory_ids and not entity_ids:
+            return []
+        await self.ensure_schema()
+        result = await self._driver.execute_query(
+            "MATCH (m:Memory)-[:MENTIONS]->(e:Entity) "
+            "WHERE m.memory_id IN $memories OR e.entity_id IN $entities "
+            "RETURN DISTINCT m.memory_id AS memory_id, e.entity_id AS entity_id",
+            {
+                "memories": [str(value) for value in memory_ids],
+                "entities": [str(value) for value in entity_ids],
+            },
+            database_=self._database,
+        )
+        return [
+            (UUID(record["memory_id"]), UUID(record["entity_id"]))
+            for record in result.records
+        ]
+
+    async def all_nodes(self) -> list[GraphNode]:
+        await self.ensure_schema()
+        result = await self._driver.execute_query(
+            f"MATCH (n) WHERE NOT n:{VERSION_LABEL} RETURN n",
+            database_=self._database,
+        )
+        return [_node_of(record["n"]) for record in result.records]
+
+    async def all_edges(self) -> list[GraphEdge]:
+        await self.ensure_schema()
+        result = await self._driver.execute_query(
+            f"MATCH (a)-[r]->(b) "
+            f"WHERE NOT a:{VERSION_LABEL} AND NOT b:{VERSION_LABEL} "
+            f"RETURN a, r, b",
+            database_=self._database,
+        )
+        return [
+            GraphEdge(
+                type=_edge_of(record["r"]),
+                # Identity only, deliberately: see the port. `_node_of` would
+                # attach every property of both endpoints to every edge.
+                start=_identity_of(record["a"]),
+                end=_identity_of(record["b"]),
+                properties=_properties_of(record["r"]),
+            )
+            for record in result.records
+        ]
 
     async def neighbours(
         self, entity_id: UUID, *, depth: int = 2, limit: int = 50
@@ -303,6 +426,112 @@ class Neo4jGraphStore:
             database_=self._database,
         )
         return [_path_of(record["path"]) for record in result.records]
+
+    async def reach(
+        self,
+        seed_entity_ids: Sequence[UUID],
+        *,
+        depth: int = 2,
+        exclude_entity_ids: Sequence[UUID] = (),
+        limit: int = 200,
+    ) -> list[GraphReach]:
+        """See the port. One variable-length traversal, hubs excluded inside it."""
+        if not seed_entity_ids or limit <= 0:
+            return []
+        # Entity hops to graph hops. An entity reaches another in one graph hop
+        # through `RELATES_TO` or two through a memory that mentions both, so the
+        # bound is twice the requested depth — and `_checked_depth` is applied to
+        # the graph bound, because that is what the planner will actually walk.
+        bounded = _checked_depth(_checked_entity_depth(depth) * 2)
+
+        # Two queries, and the first one is not an optimisation.
+        #
+        # **Cypher cannot express "a path from an entity back to itself" here, and
+        # that is the most valuable expansion there is.** Neo4j's relationship
+        # uniqueness rule forbids reusing a relationship within one path, so
+        # `(seed)-[MENTIONS]-(m)-[MENTIONS]-(seed)` does not match: the two hops
+        # would be the same edge. The route back only exists through a *different*
+        # memory, which is a longer and weaker connection. So "another memory
+        # mentions the same thing retrieval just found" — a direct co-mention, and
+        # the strongest signal the graph has — is unreachable by traversal and is
+        # matched directly below.
+        #
+        # Found by a test comparing this against the in-memory store's
+        # breadth-first walk, which happily revisits its start.
+        direct = await self._driver.execute_query(
+            "MATCH (m:Memory)-[mention:MENTIONS]->(seed:Entity) "
+            "WHERE seed.entity_id IN $seeds "
+            "RETURN m.memory_id AS memory_id, "
+            "       mention.chunk_ordinal AS chunk_ordinal, "
+            "       seed.entity_id AS entity_id, "
+            # Two, matching what the graph distance would be if the path existed:
+            # entity to memory to entity. Reported the same way so that `_score`
+            # weights a co-mention against a traversed hop on one scale.
+            "       2 AS hops, "
+            "       [seed.name] AS route "
+            "ORDER BY memory_id, entity_id "
+            "LIMIT $limit",
+            {
+                "seeds": [str(value) for value in seed_entity_ids],
+                "limit": limit,
+            },
+            database_=self._database,
+        )
+
+        result = await self._driver.execute_query(
+            # Only the depth bound is formatted in; everything else is a bound
+            # parameter. Cypher will not accept a parameter inside `[*1..n]`
+            # because the planner needs the bound at plan time.
+            #
+            # `MENTIONS|RELATES_TO` rather than an unrestricted walk: `FROM_SOURCE`
+            # would make every memory of one source two hops from every other,
+            # which is a connection nobody wrote down.
+            "MATCH path = (seed:Entity)"
+            f"-[:MENTIONS|RELATES_TO*1..{bounded}]-(target:Entity) "
+            "WHERE seed.entity_id IN $seeds "
+            # The seed itself is handled by the query above, where it can be
+            # matched at all. Excluded here so a longer route back to it does not
+            # produce a second, worse-ranked copy of the same connection.
+            "  AND target.entity_id <> seed.entity_id "
+            # Hub suppression, applied to every node the path crosses rather than
+            # to the endpoint alone: a hub in the middle is a bridge, and at this
+            # depth a bridge connects everything to everything. The null guard is
+            # load-bearing — `Memory` nodes carry no `entity_id`, and `null IN $x`
+            # is null, which would make `all(...)` null and drop every path.
+            "  AND all(node IN nodes(path) WHERE "
+            "        node.entity_id IS NULL OR NOT node.entity_id IN $exclude) "
+            "MATCH (m:Memory)-[mention:MENTIONS]->(target) "
+            "RETURN m.memory_id AS memory_id, "
+            "       mention.chunk_ordinal AS chunk_ordinal, "
+            "       target.entity_id AS entity_id, "
+            "       length(path) AS hops, "
+            "       [node IN nodes(path) WHERE node:Entity | node.name] AS route "
+            # Shortest first, which is what makes `limit` a bound on the *best*
+            # routes rather than on an arbitrary set of them. Ties broken by id so
+            # two runs of one query return the same rows in the same order.
+            "ORDER BY hops, memory_id, entity_id "
+            "LIMIT $limit",
+            {
+                "seeds": [str(value) for value in seed_entity_ids],
+                "exclude": [str(value) for value in exclude_entity_ids],
+                "limit": limit,
+            },
+            database_=self._database,
+        )
+        reached = [
+            GraphReach(
+                memory_id=UUID(record["memory_id"]),
+                chunk_ordinal=int(record["chunk_ordinal"] or 0),
+                entity_id=UUID(record["entity_id"]),
+                hops=int(record["hops"]),
+                route=_route_of(record["route"]),
+            )
+            for record in [*direct.records, *result.records]
+        ]
+        # Sorted across both queries, so `limit` keeps the shortest routes overall
+        # rather than the first query's rows followed by the second's.
+        reached.sort(key=lambda row: (row.hops, str(row.memory_id), str(row.entity_id)))
+        return reached[:limit]
 
     async def counts_by_label(self) -> dict[str, int]:
         """Node counts per label, for `doctor`.
@@ -347,6 +576,32 @@ def _checked_edge(edge: EdgeType) -> str:
     return edge.value
 
 
+def _checked_identity(edge: GraphEdge) -> tuple[str, ...]:
+    """The identity property names, having confirmed each is one this schema knows.
+
+    The same guarantee `_checked_label` makes, for the same reason: these names are
+    interpolated into Cypher because a property name cannot be bound, so the set of
+    statements this adapter can emit has to stay finite and enumerable. An
+    allowlist rather than a character check, because "looks like an identifier" is
+    a weaker claim than "is one of two known names".
+    """
+    for name in edge.identity:
+        if name not in EDGE_IDENTITY_PROPERTIES:
+            raise UnknownGraphLabel(
+                f"{name!r} is not an edge identity property; the projection may "
+                f"only merge on {sorted(EDGE_IDENTITY_PROPERTIES)}"
+            )
+        if name not in edge.properties:
+            raise UnknownGraphLabel(
+                f"edge {edge.type.value} declares {name!r} as part of its identity "
+                f"but does not carry it. Merging on a null would collapse every "
+                f"edge that omitted it into one."
+            )
+    # Sorted, so two edges built with the same names in a different order produce
+    # the same statement and share the driver's query plan cache.
+    return tuple(sorted(edge.identity))
+
+
 def _checked_depth(depth: int) -> int:
     if not isinstance(depth, int) or isinstance(depth, bool):
         raise TypeError(f"depth must be an int, got {depth!r}")
@@ -355,6 +610,43 @@ def _checked_depth(depth: int) -> int:
             f"depth must be between 1 and {MAX_DEPTH}, got {depth}. An undirected "
             f"variable-length traversal fans out with the branching factor, so a "
             f"deeper bound is not a longer query, it is potentially the whole graph."
+        )
+    return depth
+
+
+def _route_of(names: list[object]) -> tuple[str, ...]:
+    """The entity names along a path, without a name repeated back to back.
+
+    A route that returns to the entity it started from — the co-mention case — reads
+    `SKIP LOCKED -> SKIP LOCKED` verbatim, which tells a reader nothing about why
+    the result is there. Collapsed to one name, it says exactly what happened:
+    another memory mentions this.
+    """
+    route: list[str] = []
+    for name in names:
+        text = str(name)
+        if not route or route[-1] != text:
+            route.append(text)
+    return tuple(route)
+
+
+def _checked_entity_depth(depth: int) -> int:
+    """The entity-hop depth, bounded before it is doubled into a graph bound.
+
+    Separate from `_checked_depth` because the two count different things and the
+    error a caller needs to read is about the one they passed. `MAX_DEPTH // 2` is
+    the ceiling that falls out of the mapping rather than a second limit to keep in
+    step with the first.
+    """
+    if not isinstance(depth, int) or isinstance(depth, bool):
+        raise TypeError(f"depth must be an int, got {depth!r}")
+    if not 1 <= depth <= MAX_DEPTH // 2:
+        raise ValueError(
+            f"entity depth must be between 1 and {MAX_DEPTH // 2}, got {depth}. Each "
+            f"entity hop is up to two graph hops — an entity reaches another through "
+            f"a relationship or through a memory that mentions both — so the graph "
+            f"bound is twice this and {MAX_DEPTH} is the ceiling that makes a "
+            f"variable-length match affordable."
         )
     return depth
 
@@ -374,6 +666,13 @@ def _node_of(node: Node) -> GraphNode:
         key=str(key) if key is not None else "",
         properties=_properties_of(node),
     )
+
+
+def _identity_of(node: Node) -> GraphNode:
+    """The node's label and key, without reading its properties."""
+    label = _sole_label(node)
+    key = node.get(identity_property(label))
+    return GraphNode(label=label, key=str(key) if key is not None else "")
 
 
 def _sole_label(node: Node) -> GraphLabel:

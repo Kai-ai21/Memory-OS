@@ -157,6 +157,12 @@ def _explanation(
             breakdown.importance_score,
             weights.importance,
         )
+    if breakdown.graph_rank is not None:
+        ranks["graph"] = (
+            breakdown.graph_rank,
+            breakdown.graph_score,
+            weights.graph,
+        )
 
     return build_explanation(
         final_rank=rank,
@@ -165,6 +171,11 @@ def _explanation(
         rrf_k=rrf_k,
         rerank_score=breakdown.rerank_score,
         previous_rank=previous_rank,
+        # The route, so the sentence can name the connection rather than only its
+        # strength. Without it a graph-introduced result — one that may share no
+        # word with the query — is explained as "weak graph match", which is a
+        # number wearing a word. See `explanation._why`.
+        graph_path=breakdown.graph_path,
     )
 
 

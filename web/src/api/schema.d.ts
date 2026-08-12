@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Answer */
+        post: operations["answer_answer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/doctor": {
         parameters: {
             query?: never;
@@ -236,6 +253,87 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * AnswerIn
+         * @description Everything a search takes, plus the generation budget.
+         *
+         *     Inherited rather than redeclared: an answer is a search with a model on the
+         *     end, and two definitions of "how do I filter" is how they drift apart.
+         */
+        AnswerIn: {
+            /** After */
+            after?: string | null;
+            /** Before */
+            before?: string | null;
+            /** Ef Search */
+            ef_search?: number | null;
+            /**
+             * Exact
+             * @default false
+             */
+            exact: boolean;
+            /**
+             * Explain
+             * @default true
+             */
+            explain: boolean;
+            /**
+             * Include Deleted
+             * @default false
+             */
+            include_deleted: boolean;
+            /**
+             * K
+             * @default 10
+             */
+            k: number;
+            kind?: components["schemas"]["MemoryKind"] | null;
+            /**
+             * Max Tokens
+             * @default 1024
+             */
+            max_tokens: number;
+            /** @default hybrid */
+            mode: components["schemas"]["SearchMode"];
+            /** Q */
+            q: string;
+            /**
+             * Rerank
+             * @default true
+             */
+            rerank: boolean;
+            /** Source */
+            source?: string[] | null;
+        };
+        /** AnswerOut */
+        AnswerOut: {
+            /** Answer */
+            answer: string;
+            /** Citations */
+            citations?: components["schemas"]["CitationOut"][];
+            context: components["schemas"]["ContextOut"];
+            /** Marked Answer */
+            marked_answer: string;
+            /** Model Id */
+            model_id: string;
+            /** Question */
+            question: string;
+            timing: components["schemas"]["AnswerTimingOut"];
+            verification: components["schemas"]["VerificationOut"];
+        };
+        /** AnswerTimingOut */
+        AnswerTimingOut: {
+            /** Assemble Ms */
+            assemble_ms: number;
+            /** Generate Ms */
+            generate_ms: number;
+            /** Retrieve Ms */
+            retrieve_ms: number;
+            /** Total Ms */
+            total_ms: number;
+            /** Verify Ms */
+            verify_ms: number;
+        };
+        /**
          * BreakdownOut
          * @description Where the score came from, per retriever.
          *
@@ -248,6 +346,12 @@ export interface components {
         BreakdownOut: {
             /** Fused */
             fused: number;
+            /** Graph Path */
+            graph_path?: string | null;
+            /** Graph Rank */
+            graph_rank?: number | null;
+            /** Graph Score */
+            graph_score?: number | null;
             /** Importance Rank */
             importance_rank?: number | null;
             /** Importance Score */
@@ -297,6 +401,17 @@ export interface components {
             source_name: string;
             /** Version */
             version: number;
+        };
+        /** ContextOut */
+        ContextOut: {
+            /** Dropped */
+            dropped: number;
+            /** Passages */
+            passages: number;
+            /** Token Budget */
+            token_budget: number;
+            /** Tokens Used */
+            tokens_used: number;
         };
         /** ContributionOut */
         ContributionOut: {
@@ -374,6 +489,8 @@ export interface components {
             final_rank: number;
             /** Fused Score */
             fused_score: number;
+            /** Graph Path */
+            graph_path?: string | null;
             /** Rerank Score */
             rerank_score?: number | null;
             /** Why */
@@ -571,10 +688,26 @@ export interface components {
             /** Total */
             total: number;
         };
-        /** Readiness */
+        /**
+         * Readiness
+         * @description What this instance can currently do.
+         *
+         *     `status` and the HTTP code answer two different questions, and conflating
+         *     them is what makes a graph outage into an availability incident. The status
+         *     code answers "should traffic come here?"; the body answers "what works?".
+         *
+         *     So Postgres unreachable is a 503 — nothing works without it — while Neo4j
+         *     unreachable is a 200 with `status: degraded`. The graph is a projection that
+         *     only M3.1 onwards reads, and returning 503 for it would have an orchestrator
+         *     remove an instance that can still serve every Phase 1 and Phase 2 request:
+         *     ingestion, search, and answering would all go down to protect a feature none
+         *     of them use.
+         */
         Readiness: {
             /** Database */
             database: boolean;
+            /** Graph */
+            graph: boolean;
             /** Pgvector Version */
             pgvector_version: string | null;
             /**
@@ -646,6 +779,17 @@ export interface components {
             /** Query */
             query: string;
             timing: components["schemas"]["TimingOut"];
+        };
+        /** SentenceOut */
+        SentenceOut: {
+            /** Citations */
+            citations: number[];
+            /** Factual */
+            factual: boolean;
+            /** Text */
+            text: string;
+            /** Unsupported */
+            unsupported: boolean;
         };
         /**
          * SourceKind
@@ -759,6 +903,25 @@ export interface components {
          * @enum {string}
          */
         Verdict: "relevant" | "not_relevant" | "missing";
+        /** VerificationOut */
+        VerificationOut: {
+            /** Citation Rate */
+            citation_rate: number;
+            /** Cited Indices */
+            cited_indices: number[];
+            /** Factual Sentences */
+            factual_sentences: number;
+            /** Grounded */
+            grounded: boolean;
+            /** Hallucinated Indices */
+            hallucinated_indices: number[];
+            /** Is Refusal */
+            is_refusal: boolean;
+            /** Sentences */
+            sentences?: components["schemas"]["SentenceOut"][];
+            /** Supported Sentences */
+            supported_sentences: number;
+        };
         /** VersionOut */
         VersionOut: {
             /** Content Hash */
@@ -853,6 +1016,39 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    answer_answer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnswerIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnswerOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_doctor_doctor_get: {
         parameters: {
             query?: never;

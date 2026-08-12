@@ -23,6 +23,7 @@ from memoryos.adapters.chunking.structural import StructuralChunker
 from memoryos.adapters.db import models
 from memoryos.adapters.db.embedding_cache import PostgresEmbeddingCache
 from memoryos.adapters.parsers.registry import build_default_registry as build_parsers
+from memoryos.application import graph_projection, graph_verify
 from memoryos.application.embed import EmbedMemory
 from memoryos.application.normalize import NormalizeMemory
 from memoryos.application.replay import (
@@ -48,7 +49,7 @@ from tests.integration.conftest import (
 )
 from tests.support.fakes import (
     FakeEmbedder,
-    RecordingGraphStore,
+    InMemoryGraphStore,
     UnreachableGraphStore,
 )
 
@@ -513,7 +514,7 @@ async def test_a_scoped_replay_only_clears_the_jobs_it_invalidates(
 
     async with sessions() as session:
         surviving = {
-            row[0]["source"]
+            row[0].get("source")
             for row in await session.execute(select(models.Job.payload))
         }
     assert surviving == {"other"}, surviving
@@ -899,11 +900,11 @@ async def test_a_failed_shadow_replay_leaves_the_live_corpus_alone(
 
 
 def replay_with_graph(
-    harness: Harness, graph: RecordingGraphStore
+    harness: Harness, graph: InMemoryGraphStore
 ) -> ReplayCorpus:
     """The harness's replay, rebuilt with a graph attached.
 
-    A `RecordingGraphStore` rather than a real Neo4j, and the reason is in its
+    An `InMemoryGraphStore` rather than a real Neo4j, and the reason is in its
     docstring: what is under test is which scopes decide to clear the graph,
     which is control flow in `ReplayCorpus`. A real store would answer the same
     question by deleting every node in the one database Community Edition
@@ -934,10 +935,73 @@ async def test_a_full_replay_clears_the_graph(harness: Harness) -> None:
     refers to a row that no longer exists. Leaving them would not fail anything
     — it would leave a graph whose nodes all look real and none of which join to
     anything, which is the quietest possible way for a projection to be wrong.
+
+    Exactly one clear, and that is worth asserting rather than assuming. The
+    rebuild that follows could have used `graph_projection.rebuild`, which clears
+    on its own; the window of unavailability would then have spanned the entire
+    table rebuild instead of ending with it.
     """
-    graph = RecordingGraphStore()
+    graph = InMemoryGraphStore()
     await replay_with_graph(harness, graph)()
     assert graph.clears == 1
+
+
+async def test_a_full_replay_rebuilds_the_graph_from_the_corpus_it_rebuilt(
+    harness: Harness,
+) -> None:
+    """M3.0 cleared and stopped. Empty is not the same as correct.
+
+    A projection nobody has built is indistinguishable, to `graph verify`, from one
+    that has diverged — so a graph left empty after every replay makes the
+    divergence check useless for as long as it takes somebody to notice.
+
+    What is rebuilt is *not* what was there before, and the assertion says so:
+    every memory and its source, and no entities, because `entities`,
+    `entity_mentions` and `entity_relationships` are truncated by a full replay and
+    deliberately not rebuilt. The projection matches Postgres, which is the only
+    guarantee the graph has ever made.
+    """
+    graph = InMemoryGraphStore()
+    report = await replay_with_graph(harness, graph)()
+
+    expected = await graph_projection.read(harness.sessions)
+    actual, foreign = await graph_verify.read_graph(graph)
+
+    assert not foreign
+    assert graph_verify.compare(expected, actual).identical, (
+        graph_verify.compare(expected, actual).render()
+    )
+    assert report.graph_nodes == expected.nodes
+    assert report.graph_edges == len(expected.edges)
+    # Five files in the harness corpus, one source, and no extraction has run.
+    assert len(actual.memories) == report.memories
+    assert not actual.entities
+
+
+async def test_replaying_twice_rebuilds_the_same_graph(harness: Harness) -> None:
+    """The graph half of "a rebuild converges rather than accumulates".
+
+    Every write is a `MERGE`, so a second projection over the same corpus cannot
+    add nodes — but the *ids* change on every replay, and a `MERGE` on a new id
+    creates rather than converging. The clear is what makes the second run equal
+    the first, and this is what would catch its removal.
+    """
+    graph = InMemoryGraphStore()
+    replay = replay_with_graph(harness, graph)
+
+    await replay()
+    first = graph_projection.content_hash((await graph_verify.read_graph(graph))[0])
+    counts = len(await graph.all_nodes())
+
+    await replay()
+    second_projection = (await graph_verify.read_graph(graph))[0]
+
+    assert len(await graph.all_nodes()) == counts, "no accumulation across replays"
+    # The hashes differ, because every id was minted again — which is exactly why
+    # `verify-replay` compares natural keys. What must not differ is the shape.
+    assert first != graph_projection.content_hash(second_projection) or counts == 0
+    expected = await graph_projection.read(harness.sessions)
+    assert graph_verify.compare(expected, second_projection).identical
 
 
 @pytest.mark.parametrize(
@@ -964,7 +1028,7 @@ async def test_a_partial_replay_leaves_the_graph_alone(
     is what M3.1 has to solve properly, by making the projection narrowable by
     source rather than by making a partial replay destructive.
     """
-    graph = RecordingGraphStore()
+    graph = InMemoryGraphStore()
     await replay_with_graph(harness, graph)(scope)
     assert graph.clears == 0
 

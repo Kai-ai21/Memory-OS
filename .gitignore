@@ -33,6 +33,12 @@ var/*
 # Questions the corpus cannot answer. Hand-written, not regenerable, and the
 # guardrail's test set — losing it would remove the only check on fabrication.
 !var/refusal-queries.json
+# M3.5's control. The committed hybrid baseline predates M2.4's reranking, so a
+# comparison against it mixes two changes; this is the same code and corpus with
+# graph expansion switched off, which is the only thing an M3.5 delta can honestly
+# be measured against. Committed for the reason the others are: a baseline that
+# lives on one machine is not a baseline.
+!var/baseline-graph-off.json
 
 # Web
 web/node_modules/

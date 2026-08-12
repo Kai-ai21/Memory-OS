@@ -32,12 +32,15 @@ from memoryos.adapters.reranking.cross_encoder import CrossEncoderReranker
 from memoryos.application.answering import AnswerQuestion
 from memoryos.application.embed import EmbedMemory
 from memoryos.application.extraction import ExtractEntities
+from memoryos.application.graph_expand import ExpandThroughGraph
+from memoryos.application.graph_sync import SyncGraph
 from memoryos.application.jobs.handlers import build_default_registry
 from memoryos.application.jobs.registry import HandlerRegistry
 from memoryos.application.normalize import NormalizeMemory
 from memoryos.application.ports import Chunker, Embedder, LanguageModel
 from memoryos.application.relationships import ExtractRelationships
 from memoryos.application.replay import ReplayCorpus
+from memoryos.application.resolution import DEFAULT_THRESHOLD, ResolveEntities
 from memoryos.application.search import FusionWeights, SearchMemories
 from memoryos.application.sync import SyncSource
 from memoryos.config import Settings
@@ -118,6 +121,10 @@ class Container:
             batch_size=self.settings.embedding_batch_size,
             extractor=self.optional_extractor(),
             graph=self.graph,
+            # The queue is wired into the registry as a *collaborator*, not only
+            # as the thing the worker drains: extraction and relationship
+            # extraction enqueue a `SYNC_GRAPH` job rather than writing to Neo4j.
+            queue=self.queue,
         )
 
     def optional_extractor(self) -> LlmEntityExtractor | None:
@@ -151,13 +158,31 @@ class Container:
 
     def relationships(self) -> ExtractRelationships:
         return ExtractRelationships(
-            self.database.session_factory, self.extractor(), self.graph
+            self.database.session_factory, self.extractor(), self.queue
         )
 
     def extract(self) -> ExtractEntities:
         return ExtractEntities(
-            self.database.session_factory, self.extractor(), self.graph
+            self.database.session_factory, self.extractor(), self.queue
         )
+
+    def resolve(self, *, threshold: float = DEFAULT_THRESHOLD) -> ResolveEntities:
+        """Entity resolution, with the queue that announces what it merged.
+
+        Built here rather than in the CLI so that the enqueue cannot be forgotten
+        by one caller: a merge that nobody announced leaves the graph asserting an
+        entity Postgres has stopped having, and the only thing that would notice
+        is `graph verify`.
+        """
+        return ResolveEntities(
+            self.database.session_factory,
+            self.embedder,
+            self.queue,
+            threshold=threshold,
+        )
+
+    def graph_sync(self) -> SyncGraph:
+        return SyncGraph(self.database.session_factory, self.graph)
 
     def sync(self) -> SyncSource:
         return SyncSource(self.database.session_factory, self.connector, self.blobs)
@@ -176,6 +201,23 @@ class Container:
             weights or self.weights(),
             self.reranker,
             rerank_candidates=self.settings.rerank_candidates,
+            expand=self.graph_expansion(),
+            seed_memories=self.settings.graph_seed_memories,
+        )
+
+    def graph_expansion(self) -> ExpandThroughGraph:
+        """M3.5's expansion, wired to the same graph store everything else uses.
+
+        Always constructed, never connected here — the same reasoning as
+        `Container.build`'s graph store. An unreachable Neo4j makes the expansion
+        return nothing, which is a hybrid search, rather than making search fail.
+        """
+        return ExpandThroughGraph(
+            self.database.session_factory,
+            self.graph,
+            depth=self.settings.graph_depth,
+            hub_ratio=self.settings.graph_hub_ratio,
+            seed_memories=self.settings.graph_seed_memories,
         )
 
     def answer(self) -> AnswerQuestion:
@@ -209,6 +251,7 @@ class Container:
             keyword=self.settings.weight_keyword,
             recency=self.settings.weight_recency,
             importance=self.settings.weight_importance,
+            graph=self.settings.weight_graph,
         )
 
     def embed(self) -> EmbedMemory:

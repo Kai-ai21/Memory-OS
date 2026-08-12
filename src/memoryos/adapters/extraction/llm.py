@@ -28,6 +28,7 @@ that is not found there, which is dropped by the same rule that catches
 hallucinated names.
 """
 
+import asyncio
 import json
 import re
 from collections.abc import Sequence
@@ -45,10 +46,16 @@ from memoryos.application.ports import (
     ExtractedRelationship,
     LanguageModel,
 )
-from memoryos.domain.jobs import PermanentError
+from memoryos.domain.backoff import wait_for
+from memoryos.domain.jobs import PermanentError, TransientError
 from memoryos.domain.values import EntityType, MemoryKind, Predicate
 
 logger = structlog.get_logger(__name__)
+
+# Retries for one batch before the memory is given up on. The caller retries too,
+# per memory; this is the inner loop that keeps a rate limit from re-sending
+# batches that already succeeded. See `_with_backoff`.
+_BATCH_MAX_ATTEMPTS = 6
 
 # Bump when the prompt changes in any way that could change what comes back.
 # Part of `version`, so a prompt improvement becomes a query — find the mentions
@@ -220,8 +227,47 @@ class LlmEntityExtractor(EntityExtractor):
         results: list[list[ExtractedEntity]] = []
         for start in range(0, len(texts), self._batch_size):
             batch = texts[start : start + self._batch_size]
-            results.extend(await self._extract_one_batch(batch, kind))
+            results.extend(await self._with_backoff(batch, kind))
         return results
+
+    async def _with_backoff(
+        self, batch: list[str], kind: MemoryKind
+    ) -> list[list[ExtractedEntity]]:
+        """One batch, waiting out a rate limit rather than losing the memory.
+
+        **Retried here, at batch granularity, and that is not a refinement.** The
+        caller's retry is per *memory*, so a memory of fifty chunks that is rate
+        limited on its seventh batch re-sends the six that already succeeded —
+        spending the quota that caused the limit on work already done, which makes
+        the next limit arrive sooner and the one after that sooner still. On a
+        token-per-minute tier that is the difference between finishing a corpus and
+        stalling partway through it: measured on this corpus, a 1,169-chunk
+        extraction made three requests in twelve minutes.
+
+        M3.3 learned this and fixed it for relationships — `_with_backoff` there
+        says the same thing about chunks. Entity extraction kept the memory-level
+        retry, and the fix is the same one.
+
+        `PermanentError` is not caught, here or there. Unparseable JSON has already
+        had its own retry, and a fifth attempt at a model that cannot produce JSON
+        is four wasted requests.
+        """
+        for attempt in range(_BATCH_MAX_ATTEMPTS):
+            try:
+                return await self._extract_one_batch(batch, kind)
+            except TransientError as exc:
+                if attempt == _BATCH_MAX_ATTEMPTS - 1:
+                    raise
+                # The provider's own number when it gave one. A token-per-minute
+                # window slides, and Groq says how far.
+                delay = wait_for(exc, attempt)
+                logger.info(
+                    "extract.rate_limited",
+                    waiting_seconds=round(delay),
+                    chunks=len(batch),
+                )
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
 
     @property
     def relationship_version(self) -> str:

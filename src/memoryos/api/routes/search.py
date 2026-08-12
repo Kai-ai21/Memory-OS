@@ -51,6 +51,14 @@ class BreakdownOut(BaseModel):
     # shortlist, or reranking was off. Not the same as scoring badly.
     rerank_score: float | None = None
     rerank_rank: int | None = None
+    # M3.5's graph expansion. `graph_path` is the entity route that reached this
+    # chunk, rendered as `job queue -> SKIP LOCKED`, and it is the reason the
+    # client can show *why* a result no retriever found is in the list. A rank
+    # without a route would be the graph asserting something unfalsifiable, which
+    # is exactly what M2.5 built this object to prevent.
+    graph_rank: int | None = None
+    graph_score: float | None = None
+    graph_path: str | None = None
 
 
 class ExcerptOut(BaseModel):
@@ -103,6 +111,10 @@ class ExplanationOut(BaseModel):
     fused_score: float
     contributions: list[ContributionOut]
     rerank_score: float | None = None
+    # The entity route, when the graph is what put this result here. Carried
+    # alongside `why`, which already names it, so a client can render the path as
+    # something clickable rather than parsing it back out of a sentence.
+    graph_path: str | None = None
     # Assembled from the numbers above, never generated. Deterministic, free,
     # and available on every result.
     why: str

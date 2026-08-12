@@ -22,6 +22,14 @@ from dataclasses import dataclass
 _STRONG = 3
 _MODERATE = 10
 
+# The graph ranking's name in `ranks`, matched when assembling the sentence so the
+# route can be appended to its clause. A constant because two places compare it.
+_GRAPH = "graph"
+
+# The retrievers. A result found by neither of them was introduced by something
+# else, which for now can only be the graph.
+_RETRIEVERS = frozenset({"semantic", "keyword"})
+
 
 @dataclass(frozen=True, slots=True)
 class SignalContribution:
@@ -50,6 +58,11 @@ class RankExplanation:
     contributions: list[SignalContribution]
     rerank_score: float | None
     why: str
+    # The entity route that reached this result, when the graph is what put it
+    # here. M3.5's explainability guardrail: expansion is the one ranking that
+    # introduces a result rather than reordering one, so it is the one whose
+    # contribution a reader cannot reconstruct from the text in front of them.
+    graph_path: tuple[str, ...] | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -59,6 +72,9 @@ class RankExplanation:
                 None if self.rerank_score is None else round(self.rerank_score, 4)
             ),
             "why": self.why,
+            "graph_path": (
+                None if self.graph_path is None else " -> ".join(self.graph_path)
+            ),
             "contributions": [
                 {
                     "name": item.name,
@@ -81,6 +97,7 @@ def build_explanation(
     rrf_k: int,
     rerank_score: float | None = None,
     previous_rank: int | None = None,
+    graph_path: tuple[str, ...] | None = None,
 ) -> RankExplanation:
     """Reconstruct the fusion arithmetic for one result.
 
@@ -126,7 +143,8 @@ def build_explanation(
         fused_score=fused_score,
         contributions=resolved,
         rerank_score=rerank_score,
-        why=_why(final_rank, resolved, previous_rank),
+        graph_path=graph_path,
+        why=_why(final_rank, resolved, previous_rank, graph_path),
     )
 
 
@@ -134,6 +152,7 @@ def _why(
     final_rank: int,
     contributions: list[SignalContribution],
     previous_rank: int | None,
+    graph_path: tuple[str, ...] | None = None,
 ) -> str:
     """One plain sentence, assembled from the numbers.
 
@@ -141,12 +160,32 @@ def _why(
     most. The reranking clause names the *movement* rather than the score,
     because a cross-encoder logit means nothing to a reader while "up from 5th"
     means exactly what it says.
+
+    The graph clause names the *route*, for a reason the others do not need: a
+    result no retriever found shares no word with the query, so "weak graph match"
+    tells a reader that something connected it and not what. `via queue -> SKIP
+    LOCKED` is checkable; a rank is not.
     """
     if not contributions:
         return f"Ranked {_ordinal(final_rank)}: no ranking signal found this result."
 
-    parts = [item.describe() for item in contributions]
+    parts = [
+        item.describe()
+        + (
+            f" via {' -> '.join(graph_path)}"
+            if item.name == _GRAPH and graph_path
+            else ""
+        )
+        for item in contributions
+    ]
     sentence = f"Ranked {_ordinal(final_rank)}: {', '.join(parts)}"
+
+    if _introduced_by_the_graph(contributions):
+        # Stated outright rather than left to be inferred from the absence of the
+        # other clauses. "Neither retriever found this" is the single most
+        # important fact about such a result, and a reader scanning shares would
+        # have to notice that two names are missing to learn it.
+        sentence += ", found by the graph alone"
 
     if previous_rank is not None and previous_rank != final_rank:
         direction = "up" if previous_rank > final_rank else "down"
@@ -155,6 +194,11 @@ def _why(
         sentence += ", unchanged by reranking"
 
     return sentence + "."
+
+
+def _introduced_by_the_graph(contributions: list[SignalContribution]) -> bool:
+    names = {item.name for item in contributions}
+    return _GRAPH in names and not (names & _RETRIEVERS)
 
 
 def _strength(rank: int) -> str:

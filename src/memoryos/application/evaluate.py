@@ -52,6 +52,14 @@ class RetrievedRow:
     score: float
     matched_ordinals: list[int]
     relevant: bool
+    # Whether the graph reached this result and neither retriever did. The
+    # distinction M3.5 is measured by: a flat mean can mean the expansion did not
+    # help, or that it never contributed a candidate at all, and only a per-result
+    # count tells the two apart.
+    graph_only: bool = False
+    # The entity route, when there is one. Printed by `--verbose`, because a
+    # promoted result that shares no word with the query is otherwise unreadable.
+    graph_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +117,23 @@ class EvaluationRun:
             )
         return summaries
 
+    @property
+    def graph_contribution(self) -> tuple[int, int]:
+        """Queries where the graph reached anything, and results it alone found.
+
+        The number to read before any mean. Expansion can only reach memories that
+        have been extracted, so on a partly-extracted corpus a flat delta says
+        nothing about whether the graph helps — it says the graph was not in the
+        run. These two counts are what distinguish the cases.
+        """
+        queries = sum(
+            1 for run in self.runs if any(row.graph_path for row in run.rows)
+        )
+        introduced = sum(
+            1 for run in self.runs for row in run.rows if row.graph_only
+        )
+        return queries, introduced
+
     def worst(self, count: int) -> list[QueryRun]:
         """Lowest MRR first, ties broken by nDCG then by text, so a rerun agrees."""
         return sorted(
@@ -133,6 +158,8 @@ class EvaluationRun:
                 for summary in self.summaries()
             },
             "eval_exclude": list(self.golden.exclude),
+            "graph_queries_touched": self.graph_contribution[0],
+            "graph_results_introduced": self.graph_contribution[1],
             "results": [
                 {**run.result.as_dict(), "excluded": dict(run.excluded)}
                 for run in self.runs
@@ -250,6 +277,12 @@ def _rows(query: GoldenQuery, hits: Sequence[MemoryHit]) -> list[RetrievedRow]:
     for rank, hit in enumerate(hits, start=1):
         ordinals = sorted(chunk.ordinal for chunk in hit.matched_chunks)
         key = query.project(hit.source_name, hit.external_key, ordinals)
+        breakdowns = [
+            chunk.breakdown for chunk in hit.matched_chunks if chunk.breakdown is not None
+        ]
+        graph = next(
+            (item for item in breakdowns if item.graph_rank is not None), None
+        )
         rows.append(
             RetrievedRow(
                 rank=rank,
@@ -258,6 +291,19 @@ def _rows(query: GoldenQuery, hits: Sequence[MemoryHit]) -> list[RetrievedRow]:
                 score=hit.score,
                 matched_ordinals=ordinals,
                 relevant=key in relevant,
+                # "The graph and nothing else." A result both a retriever and the
+                # graph found is not evidence about expansion — the retriever
+                # would have returned it anyway.
+                graph_only=bool(graph)
+                and all(
+                    item.vector_rank is None and item.keyword_rank is None
+                    for item in breakdowns
+                ),
+                graph_path=(
+                    None
+                    if graph is None or not graph.graph_path
+                    else " -> ".join(graph.graph_path)
+                ),
             )
         )
     return rows
@@ -322,6 +368,19 @@ def format_report(run: EvaluationRun, *, worst: int = 3) -> str:
             f"{summary.minimum:>8.3f}"
         )
 
+    touched, introduced = run.graph_contribution
+    lines += [
+        "",
+        f"graph expansion: reached results in {touched}/{len(run.runs)} queries, "
+        f"{introduced} of which no retriever found",
+    ]
+    if touched == 0:
+        lines.append(
+            "  the graph contributed nothing to this run. On a partly-extracted "
+            "corpus that is a statement about coverage, not about expansion — "
+            "check `memoryos entity-stats` before reading the means below."
+        )
+
     if run.runs:
         lines += ["", f"worst {min(worst, len(run.runs))} queries by MRR:"]
         for query_run in run.worst(worst):
@@ -349,9 +408,13 @@ def format_verbose(run: EvaluationRun) -> str:
         for row in query_run.rows:
             mark = "*" if row.relevant else " "
             chunks = ",".join(str(ordinal) for ordinal in row.matched_ordinals)
+            # `g` marks a result the graph introduced on its own. Two characters,
+            # and they are what makes a per-query reading of M3.5 possible at all.
+            source = "g" if row.graph_only else (" " if row.graph_path is None else "+")
             lines.append(
-                f"  {mark} {row.rank:>2}. {row.score:.4f}  {row.external_key}  "
+                f"  {mark}{source} {row.rank:>2}. {row.score:.4f}  {row.external_key}  "
                 f"[chunks {chunks}]"
+                + (f"  via {row.graph_path}" if row.graph_path else "")
             )
         for missed in sorted(result.missed):
             lines.append(f"    missed: {missed}")

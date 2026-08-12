@@ -75,6 +75,20 @@ export function ExplanationPanel({ explanation, citations, code }: Props) {
                   </td>
                 </tr>
               ) : null}
+              {/* The entity route, when the graph is what put this result here.
+                  Shown as its own row rather than folded into the share table,
+                  because it is the only contribution a reader cannot check against
+                  the text in front of them: a result the retrievers never found
+                  shares no word with the query, and the route is the whole
+                  argument for it being here. */}
+              {explanation.graph_path ? (
+                <tr>
+                  <td className="meta w-24 py-0.5 text-muted">graph route</td>
+                  <td className="meta py-0.5 text-ink" colSpan={3} data-testid="graph-path">
+                    {explanation.graph_path}
+                  </td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
 

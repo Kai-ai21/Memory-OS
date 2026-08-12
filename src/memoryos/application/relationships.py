@@ -8,9 +8,11 @@ than letting it name entities is what makes an edge to a non-existent entity
 structurally impossible rather than merely unlikely — an edge to a fabricated
 node looks exactly like a real one until somebody follows it.
 
-Transaction boundary as everywhere else in Phase 3: Postgres commits, then the
-projection follows. A crash between them leaves a correct corpus and a graph
-that is behind, which the next run repairs because every graph write is a MERGE.
+Transaction boundary as everywhere else in Phase 3: Postgres commits, then a
+`SYNC_GRAPH` job is queued. Nothing here writes to Neo4j — see
+`application/graph_sync.py` — so a crash between the two leaves a correct corpus
+and a graph that is behind, which the next sync repairs because every graph write
+is a MERGE.
 """
 
 import asyncio
@@ -21,23 +23,22 @@ from enum import StrEnum, auto
 from uuid import UUID
 
 import structlog
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
+from memoryos.application.graph_sync import enqueue_sync
 from memoryos.application.ports import (
     EntityExtractor,
     EntityRef,
     ExtractedRelationship,
-    GraphEdge,
-    GraphNode,
-    GraphStore,
+    JobQueue,
 )
-from memoryos.domain.backoff import compute_backoff
+from memoryos.domain.backoff import wait_for
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import PermanentError, TransientError
-from memoryos.domain.values import EdgeType, EntityType, GraphLabel
+from memoryos.domain.values import EntityType
 
 logger = structlog.get_logger(__name__)
 
@@ -58,15 +59,15 @@ class RelationshipReport:
     outcome: RelationshipOutcome
     chunks_considered: int = 0
     relationships: int = 0
-    projected: int = 0
+    sync_enqueued: bool = False
     duration_ms: int = 0
 
-    def as_dict(self) -> dict[str, str | int]:
+    def as_dict(self) -> dict[str, str | int | bool]:
         return {
             "outcome": self.outcome.value,
             "chunks_considered": self.chunks_considered,
             "relationships": self.relationships,
-            "projected": self.projected,
+            "sync_enqueued": self.sync_enqueued,
             "duration_ms": self.duration_ms,
         }
 
@@ -76,13 +77,13 @@ class ExtractRelationships:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         extractor: EntityExtractor,
-        graph: GraphStore | None = None,
+        queue: JobQueue | None = None,
         *,
         version: str | None = None,
     ) -> None:
         self._sessions = session_factory
         self._extractor = extractor
-        self._graph = graph
+        self._queue = queue
         # The relationship extractor's own version, distinct from the entity
         # one so the two prompts can be improved independently.
         fallback = getattr(extractor, "relationship_version", None)
@@ -128,7 +129,7 @@ class ExtractRelationships:
 
         report = await self._store(memory_id, found)
         report.chunks_considered = len(eligible)
-        report.projected = await self._project(memory_id)
+        report.sync_enqueued = await self._queue_sync(memory_id)
         log.info("relationships.stored", **report.as_dict())
         return _finish(report, started)
 
@@ -150,10 +151,11 @@ class ExtractRelationships:
         for attempt in range(_CHUNK_MAX_ATTEMPTS):
             try:
                 return await self._extractor.extract_relationships(text, refs)
-            except TransientError:
+            except TransientError as exc:
                 if attempt == _CHUNK_MAX_ATTEMPTS - 1:
                     raise
-                delay = compute_backoff(attempt)
+                # The provider's own number when it gave one; see `wait_for`.
+                delay = wait_for(exc, attempt)
                 logger.info("relationships.rate_limited", waiting_seconds=round(delay))
                 await asyncio.sleep(delay)
         raise AssertionError("unreachable")
@@ -271,92 +273,21 @@ class ExtractRelationships:
                 .values(relationship_extractor_version=self._version)
             )
 
-    async def _project(self, memory_id: UUID) -> int:
-        """Mirror this memory's relationships into Neo4j as typed edges.
+    async def _queue_sync(self, memory_id: UUID) -> bool:
+        """Ask for this memory's neighbourhood of the graph to be re-projected.
 
-        Read back from Postgres rather than reusing the in-memory claims,
-        because `assertion_count` is a property of the whole corpus rather than
-        of this memory: the same pair may have been asserted by chunks belonging
-        to memories extracted weeks apart, and an edge weighted by only what
-        this run saw would under-report every repeated claim.
+        The job names the memory rather than the edges it just wrote, and the
+        difference is not cosmetic. `assertion_count` is a property of the whole
+        corpus rather than of this memory — the same pair may have been asserted by
+        chunks belonging to memories extracted weeks apart — so an edge built from
+        what this run saw would under-report every repeated claim. Naming the
+        memory and letting the projection do the arithmetic is what keeps the count
+        corpus-wide.
         """
-        if self._graph is None:
-            return 0
-        try:
-            edges = await self._edges_for(memory_id)
-            for edge in edges:
-                await self._graph.link(edge)
-        except Exception as exc:
-            logger.warning(
-                "relationships.projection_failed",
-                memory_id=str(memory_id),
-                error=str(exc),
-            )
-            return 0
-        return len(edges)
-
-    async def _edges_for(self, memory_id: UUID) -> list[GraphEdge]:
-        """Corpus-wide edge weights for the pairs this memory touched."""
-        pairs = (
-            select(
-                models.EntityRelationship.subject_id,
-                models.EntityRelationship.object_id,
-                models.EntityRelationship.predicate,
-            )
-            .where(models.EntityRelationship.memory_id == memory_id)
-            .distinct()
-            .subquery()
-        )
-        stmt = (
-            select(
-                models.EntityRelationship.subject_id,
-                models.EntityRelationship.object_id,
-                models.EntityRelationship.predicate,
-                func.count().label("assertions"),
-                func.max(models.EntityRelationship.confidence).label("confidence"),
-            )
-            .join(
-                pairs,
-                (models.EntityRelationship.subject_id == pairs.c.subject_id)
-                & (models.EntityRelationship.object_id == pairs.c.object_id)
-                & (models.EntityRelationship.predicate == pairs.c.predicate),
-            )
-            .group_by(
-                models.EntityRelationship.subject_id,
-                models.EntityRelationship.object_id,
-                models.EntityRelationship.predicate,
-            )
-        )
-        async with self._sessions() as session:
-            rows = list(await session.execute(stmt))
-
-        return [
-            GraphEdge(
-                type=ENTITY_EDGE_TYPE,
-                start=GraphNode(GraphLabel.ENTITY, str(subject_id)),
-                end=GraphNode(GraphLabel.ENTITY, str(object_id)),
-                properties={
-                    "predicate": predicate,
-                    "assertion_count": assertions,
-                    "confidence": float(confidence) if confidence is not None else 0.0,
-                },
-            )
-            for subject_id, object_id, predicate, assertions, confidence in rows
-        ]
-
-
-# Every entity-to-entity claim becomes a `RELATES_TO` edge carrying its
-# predicate as a property, rather than one Cypher relationship type per
-# predicate.
-#
-# M3.0 declared three relationship types and traversals are written against
-# them; promoting seven predicates to seven types would mean every existing
-# pattern has to enumerate them, and `[:RELATES_TO {predicate: 'uses'}]` filters
-# exactly as precisely. `MENTIONS` deliberately stays what M3.1 made it —
-# memory to entity — and is not reused for a `mentions` predicate between two
-# entities, because one edge type carrying two different meanings is a
-# traversal that cannot tell them apart.
-ENTITY_EDGE_TYPE = EdgeType.RELATES_TO
+        if self._queue is None:
+            return False
+        await enqueue_sync(self._queue, memory_ids=[memory_id])
+        return True
 
 
 def _finish(report: RelationshipReport, started: float) -> RelationshipReport:

@@ -10,8 +10,9 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 M2.1 (keyword search), M2.2 (hybrid retrieval), M2.3a (measurement reliability),
 M2.3b (ranking signals, measured and switched off), M2.4 (cross-encoder reranking),
 M2.5 (citations and explainability) and M2.6 (grounded answers). **Phase 2 complete.**
-**Phase 3 in progress**: M3.0 (Neo4j and the graph schema) — infrastructure only, no extraction
-and no retrieval changes yet. See [Graph](#graph).
+**Phase 3 in progress**: M3.0 (Neo4j and the graph schema), M3.1 (entity extraction),
+M3.2 (entity resolution), M3.3 (typed relationships) and M3.4 (projection sync, rebuild and
+divergence detection). See [Graph](#graph).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -878,8 +879,9 @@ parallel definition.
 
 ## Graph
 
-M3.0 adds Neo4j alongside Postgres. Infrastructure only — the schema, the port and the adapter
-exist; nothing extracts entities yet, so the graph is empty until M3.1.
+M3.0 adds Neo4j alongside Postgres. Infrastructure only at that milestone — the schema, the port
+and the adapter — with M3.1 to M3.3 filling it and M3.4 deciding who is allowed to write to it.
+See [Projection sync](#projection-sync).
 
 **Why a graph rather than more Postgres tables.** Fixed one- and two-hop relationships are
 genuinely fine in SQL and frequently faster; a join table with the right index beats a graph
@@ -902,11 +904,13 @@ designed the derived state to be disposable. `DERIVED_PROJECTIONS` in `applicati
 classifies the graph the way `DERIVED_TABLES` classifies the tables — a separate set, because
 everything reading that tuple puts its contents inside a `TRUNCATE`.
 
-**A full replay clears the graph; a scoped one does not.** After a whole-corpus rebuild every
-memory id is new, so every node the graph held refers to a row that no longer exists. A scoped
-replay is the opposite case: `clear()` empties the entire projection, so calling it to rebuild one
-source would discard every other source's nodes. Narrowing the projection by source is M3.1's
-problem. `verify-replay` never touches the graph at all, because it is a read-only comparison.
+**A full replay clears the graph and rebuilds it; a scoped one does neither.** After a
+whole-corpus rebuild every memory id is new, so every node the graph held refers to a row that no
+longer exists. A scoped replay is the opposite case: `clear()` empties the entire projection, so
+calling it to rebuild one source would discard every other source's nodes. `verify-replay` never
+touches the graph at all, because it is a read-only comparison — what it compares instead is the
+projection each side of the rebuild *implies*, read from Postgres. See
+[Projection sync](#projection-sync).
 
 **There is no Alembic for Neo4j.** The constraints and indexes live in `adapters/graph/schema.py`,
 every statement carries `IF NOT EXISTS`, and the whole set is applied on first use rather than by a
@@ -936,6 +940,13 @@ the tests their own database to truncate; Neo4j Community Edition supports exact
 database, so a test run and a developer's graph share it. Tests therefore isolate by identity —
 every id comes from `GraphFixture.new_id`, which records it, and teardown deletes those nodes and
 nothing else.
+
+Which leaves the assertions that are about the *whole* graph — a rebuild, a clear, a divergence
+check — with nowhere to run. Those use `InMemoryGraphStore`, a `GraphStore` with `MERGE` semantics
+and no database, because what they test is arithmetic over two projections and a database does not
+make it more true. The one claim a fake cannot make is that Cypher reads back exactly what it was
+given, so that is asserted against a real Neo4j, scoped to minted ids, in
+`test_the_projection_reads_back_exactly_as_written`. Every in-memory assertion rests on it.
 
 ## Entity extraction
 
@@ -1105,6 +1116,316 @@ gain — `[:RELATES_TO {predicate: 'uses'}]` filters just as precisely.
 Only chunks naming two or more entities are sent to the model. A chunk with one
 entity has nothing to relate, and on a rate-limited tier a request spent being
 told so is the difference between finishing a corpus and stopping partway.
+
+## Projection sync
+
+Postgres is the system of record; Neo4j is a projection. M3.4 makes that
+operational rather than aspirational: **nothing writes to Neo4j from a use case.**
+
+```bash
+memoryos graph rebuild --dry-run   # what would be projected, touching nothing
+memoryos graph rebuild             # clear and re-project everything from Postgres
+memoryos graph verify              # compare the two; exits non-zero on divergence
+memoryos graph sync --memory <id>  # re-project one neighbourhood, inline
+```
+
+Ingestion, extraction and resolution enqueue a `SYNC_GRAPH` job naming what
+changed; `application/graph_sync.py` is the only writer. M3.1 and M3.3 projected
+inline, which is a use case writing to two stores — the graph becomes a second
+source of truth in everything but name, however carefully the write is ordered.
+
+The queued version also fixes the failure handling. An inline projection had to
+catch its own errors and report a degraded graph, because the rows were already
+committed and taking the job down would turn a projection outage into a failed
+extraction. A queued sync has no such conflict: it raises, the worker retries it
+with backoff, and a Neo4j that was down for a minute is a pause rather than a
+divergence nobody records.
+
+**One definition of the projection.** `application/graph_projection.py` reads
+Postgres into data; `write` puts that data into a store, `content_hash` hashes it,
+and `graph verify` compares the two. A projector that wrote as it read could only
+be verified against itself. Three writers with three ideas of what the graph
+should hold is what M3.3 shipped, and two of them were wrong — see the commit
+that removed them.
+
+```
+(:Source)<-[:FROM_SOURCE]-(:Memory)-[:MENTIONS]->(:Entity)-[:RELATES_TO]->(:Entity)
+```
+
+Every current, undeleted memory is projected, not only the ones extraction has
+reached. The old rule made the graph's memory count a fact about extraction
+progress and left a divergence check unable to tell a missing node from an
+unextracted one. That is also why ingestion enqueues a sync: without it the only
+thing announcing a memory to the graph was extraction, so a deployment with no API
+key projected nothing and `graph verify` reported permanent divergence.
+
+### Delete, then project. Never patch.
+
+A scoped sync is a rebuild of a neighbourhood and works exactly as the full
+rebuild does: prune the scope, then write what Postgres says that scope should be.
+An additive sync converges on the graph *containing* everything Postgres implies
+and never removes what it has stopped implying — a mention dropped by a
+re-extraction, a merged-away entity, an edge whose row is gone. None of those is
+visible in a node count.
+
+That makes idempotence structural rather than tested for. What the test actually
+checks is the **scope expansion**, which is the only difficult part. Pruning is
+detaching, so removing an entity takes every `MENTIONS` edge into it, including
+edges from memories the payload never named. So a payload is widened until it is
+closed under one step of the mention relation, against *both* stores:
+
+- a memory in scope brings the entities it mentions;
+- an entity in scope brings every memory that mentions it — according to Postgres,
+  which knows what is true now, **and** according to the graph, which knows what
+  it currently claims.
+
+The graph's opinion is not redundant, and two cases show why. An entity that has
+just lost its last mention is unreachable from Postgres, but its node is still
+there with an edge from a memory in scope; without the graph's answer it survives
+every scoped sync as an orphan. A merged-away loser is the mirror image.
+
+Expansion through a hub is expensive and visible: on this corpus, syncing the one
+memory that mentions `sqlalchemy` and `postgres` widens to 18 memories and 185
+entities. Above 200 memories the sync escalates to a full rebuild and says so,
+because pruning most of the graph a node at a time is strictly more work than one
+`DETACH DELETE`.
+
+### There is no shadow swap, and it is not for want of trying
+
+The Postgres equivalent builds the replacement in a second schema and moves the
+tables in one transaction, so the corpus is never unavailable. Neo4j Community
+Edition offers nowhere to build a replacement — measured on 5.26.29:
+
+```
+CREATE DATABASE memosshadow            -> Unsupported administration command
+CREATE ALIAS memosalias FOR DATABASE   -> Unsupported administration command
+CREATE COMPOSITE DATABASE memoscomposite -> Unsupported administration command
+```
+
+Refused by *edition*, not by permissions: `SHOW DATABASES` returns exactly
+`neo4j` and `system`. Nor can it be faked inside the one database with a parallel
+set of labels, because Cypher has no operation that renames a label or a
+relationship type — the "swap" would be a write over every node and edge, which is
+the rebuild again with an extra copy of the data.
+
+**So the rebuild accepts documented downtime**, and reports it: the graph is empty
+between the clear and the last write, which is 1.7s for 450 nodes and 577 edges on
+this corpus. It grows with the corpus, which is the honest argument for the
+incremental sync existing at all — a rebuild after every change would work today
+and would not at ten times the size.
+
+### Divergence detection
+
+`graph verify` compares counts *and* a content hash of every node and edge, per
+type, and exits non-zero on any difference. The rules differ from
+`verify-replay`'s in one way worth stating, because it looks like an
+inconsistency: this compares on **primary keys**, where the replay check compares
+on natural keys. A rebuild mints new ids, so an id comparison there fails on every
+honest replay; here the graph *copies* Postgres' ids by construction, so an
+`Entity` node whose `entity_id` names no entity is a real divergence.
+
+Content and not counts, for the reason M1.6.1 established: counts match while a
+node carries a stale name. Proven by corrupting one — measured on the live corpus,
+`SET e.name = 'SQLAlchemy CORRUPTED'` on two nodes:
+
+```
+[ok  ] Memory               162       162   79cf00e96740
+[FAIL] Entity               287       287   c5b65b1ef6c2 != 3f25b5167011
+         differs: 019ff00d-... (SQLAlchemy CORRUPTED (technology)): ('sqlalchemy', ...) -> ('SQLAlchemy CORRUPTED', ...)
+```
+
+Both counts unchanged, exit code 1. Nothing is repaired: `graph rebuild` is the
+repair, and keeping them separate leaves somebody able to answer how often the
+projection actually diverges.
+
+A node carrying a label the projection does not define is counted separately from
+a stale one, because it is a different kind of wrong — a stale `Entity` is a
+projection that is behind, a foreign label is a writer nobody knows about.
+
+### The predicate is part of an edge's identity
+
+Found by `graph rebuild --dry-run` reporting 25 `RELATES_TO` where the graph held
+24. Neo4j merges one relationship per `(type, start, end)`, so "sqlalchemy uses
+postgres" and "sqlalchemy depends_on postgres" — both real claims — collapsed into
+a single edge whose predicate was whichever the projection wrote last, and which
+one survived depended on row order. Nothing failed.
+
+`GraphEdge.identity` names the properties that belong inside the `MERGE` pattern
+rather than in the `SET` after it. `domain.values.EDGE_IDENTITY_PROPERTIES` is the
+closed set they may come from, because a property name is interpolated into Cypher
+for the same reason a label is: it cannot be a bound parameter.
+
+### A replay clears the graph and rebuilds it
+
+M3.0 cleared and stopped, and empty is not the same as correct — a projection
+nobody has built is indistinguishable, to `graph verify`, from one that has
+diverged. A full replay now clears before the tables are rebuilt (so the graph
+never holds ids Postgres has deleted) and projects after.
+
+What it projects is **not what was there before**, and that is the honest outcome
+rather than a gap. `entities`, `entity_mentions` and `entity_relationships` are
+derived tables a replay truncates and deliberately does not rebuild — an LLM call
+per chunk, against offsets that no longer point anywhere — so the projection after
+a full replay holds every memory and its source and no entities at all. Re-run
+`extract-entities`, `resolve-entities` and `extract-relationships` afterwards.
+
+`verify-replay`'s snapshot gains `graph_memory_nodes`, compared on natural keys
+like every other row in it. The entity half is *reported* and not diffed, for
+exactly the reason `Snapshot` has never held an entity row: a diff of a section
+that is empty by design on one side is a check that fails every time and teaches
+nobody anything.
+
+## Graph-augmented retrieval
+
+M3.5 adds a fifth ranking to M2.3's weighted RRF:
+
+```
+rankings = [vector, keyword, recency, importance, graph]
+```
+
+```bash
+MEMOS_WEIGHT_GRAPH=1.0 memoryos search "what shares an entity with the parser registry" --explain
+memoryos evaluate --k 10 --compare var/baseline-hybrid.json
+memoryos tune-weights --grid coarse
+```
+
+**What it is for.** Vector retrieval finds text that means the same thing; keyword
+retrieval finds text that says the same thing. Both are similarity relations over
+one document at a time, and both are blind to the same class of answer: the memory
+that shares no vocabulary and no paraphrase with the query and is relevant because
+it is *about the same things*.
+
+**Why it might not work.** An entity mentioned in fifty memories connects all
+fifty, so expanding along it produces fifty weakly-related candidates and calls
+them evidence. Two guards decide which happens.
+
+### Hub suppression, which is IDF applied to graph nodes
+
+An entity appearing in more than `MEMOS_GRAPH_HUB_RATIO` of the reachable memories
+(default 10%) is excluded from the traversal, and everything below the threshold is
+weighted by `log(1 + N/df)`. So a shared mention of `SKIP LOCKED` counts for far
+more than a shared mention of `postgres` on a corpus about Postgres.
+
+Two details earn their place. The exclusion is applied to **every node a path
+crosses**, not to its endpoints: a hub excluded only as a destination is still a
+bridge, and at depth 2 a bridge connects everything that mentions it to everything
+else that does. And the denominator is the number of memories the graph can
+*reach* — memories with at least one mention — not the size of the corpus, because
+an entity in 20 of 34 extracted memories is a hub of everything the graph knows.
+
+The threshold is floored at 2. Without the floor, `ceil(3 × 0.10) = 1` makes every
+entity a hub on a small corpus, expansion reaches nothing, and the graph looks
+useless when what was wrong was the arithmetic.
+
+### Depth, in entity hops
+
+`MEMOS_GRAPH_DEPTH` counts *entity* hops and defaults to 2; the Cypher bound is
+twice that, because an entity reaches another either directly through a
+`RELATES_TO` edge or through a memory that mentions both. Depth 3 on a graph this
+connected reaches most of the corpus, and a ranking that contains everything is
+not a ranking.
+
+### The one ranking that introduces candidates
+
+M2.3's recency and importance signals only reorder what the retrievers found — a
+document can be promoted for being recent but cannot appear for it. Graph
+expansion has to introduce rows, because the memory that shares no vocabulary with
+the query is by construction not in either retriever's list. That is the point, and
+it is also the risk, and it is why `MEMOS_WEIGHT_GRAPH` defaults to **0.5** rather
+than 1.0: a graph-only candidate contributes 0.5/61 against a retriever's 1/61, so
+a chunk both retrievers rank first still outranks anything the graph found alone.
+
+At weight 0 the expansion does not run and its candidates never reach the fusion —
+not merely a zero-weighted term, because a chunk fused at score zero would sort
+below everything and change the result. That is what makes "graph weight 0
+reproduces M2.3 exactly" true by construction.
+
+`ScoreBreakdown` gains `graph_rank`, `graph_score` and `graph_path`, and the path
+is not a debugging aid. Expansion is the ranking whose contribution a reader is
+least able to reconstruct — a promoted result may share no word with the query — so
+`search --explain` prints the route:
+
+```
+from: keyword #3 (0.0891)  graph #2 via job queue -> SKIP LOCKED
+```
+
+### What it measured, and why the weight ships at zero
+
+The milestone specified `MEMOS_WEIGHT_GRAPH=0.5`. It ships at **0.0**, because two
+measurements overrode it. Both are controlled A/Bs — same code, same corpus, same
+46-query golden set, graph off versus on — because the committed
+`var/baseline-hybrid.json` predates M2.4's reranking and comparing against it would
+mix two changes.
+
+| configuration | queries the graph reached | results it alone found | recall@10 | precision@10 | MRR | nDCG@10 |
+| ------------- | ------------------------- | ---------------------- | --------- | ------------ | --- | ------- |
+| graph off (control) | — | — | 0.809 | 0.472 | 0.814 | 0.768 |
+| weight 0.5, hubs 10% | 0/46 | 0 | +0.000 | +0.000 | +0.000 | +0.000 |
+| weight 1.0, hubs 10% | 9/46 | 14 | −0.007 | −0.007 | +0.000 | −0.007 |
+| weight 1.0, hubs 30% | 18/46 | 33 | **−0.029** | −0.020 | +0.004 | **−0.019** |
+| weight 1.0, no suppression | 17/46 | 33 | −0.031 | −0.022 | +0.004 | −0.021 |
+
+Against the resolution floor of **0.0122** measured in M2.3a: every gain is inside
+it, and the recall and nDCG *losses* at weight 1.0 are outside it. That is the
+uncomfortable version of the result — not "no evidence of help" but evidence of
+harm, at the only weights where the ranking does anything.
+
+**At 0.5 the ranking is arithmetically inert, and that is not a corpus fact.** RRF's
+curve is flat by design: a graph-only candidate at rank 1 contributes 0.5/61 =
+0.0082, while a vector-only candidate at rank 30 contributes 1/90 = 0.0111 — and
+the vector leg returns fifty of them. Placing a graph-only candidate above vector
+rank *r* needs weight > 61/(60+r), so above rank 10 it needs 0.87. Any weight low
+enough to be safe is too low to introduce anything, and the safety argument for
+0.5 was therefore an argument for a ranking that cannot act. **An introducing
+ranking and a rank-flattening fusion are in tension, and this is where that shows
+up.** Expansion contributed candidates for 18 of 46 queries and not one of them
+reached the top ten at 0.5.
+
+Per query at weight 1.0, 13 of 46 moved — 9 worse, 4 better. The four largest
+losses are all recall: a question about two workers and one job (−0.281 nDCG,
+−0.429 recall), one about what was worked on around the time of the chunking work
+(−0.243, −0.333), one about a long-running job holding its claim (−0.177, −0.250),
+and one about cleaning text before splitting it (−0.113, −0.250). In each case the
+expansion placed a connected-but-wrong memory above a relevant one.
+
+The largest gain is the query about what the parser registry touches: **+0.064
+nDCG, +0.083 recall**, and it is the graph working exactly as designed.
+`parsers/pdf.py` entered at rank 5, correctly relevant, found by **neither
+retriever** — reached through `ParsedDocument -> PdfReader`, an entity it shares
+with the registry. That is an answer no index could have produced. It is also one
+query out of forty-six.
+
+The queries themselves are not quoted here, and that is not squeamishness:
+`tests/unit/test_golden_hygiene.py` fails the build when a golden query appears
+verbatim in a tracked file, because a file holding the query becomes a lexical
+match for it and the benchmark starts measuring its own footprint. It caught this
+section.
+
+**The confound, stated plainly.** Entity extraction has reached 21 of 162 memories
+(13%). Groq's free tier caps `llama-3.3-70b-versatile` at 100,000 tokens per *day*
+and this corpus needs roughly 730,000 to extract; `llama-3.1-8b-instant` is bound
+at 6,000 tokens per minute, over-extracts at 6.1 mentions per chunk against the
+70b's 4.7, and truncated its JSON on 12% of memories; `openai/gpt-oss-20b` spends
+its entire completion budget on reasoning tokens and returns no text at all. So the
+graph can see a fifth of the corpus, and three of the five queries written for it
+saw no expansion because their answers are in the unextracted four fifths. **A
+larger graph could change the sign of these numbers. It could not change the
+arithmetic above.**
+
+### Neo4j cannot walk from an entity back to itself
+
+Found by a test comparing the Cypher against the in-memory store's breadth-first
+walk. The most valuable expansion there is — *another memory mentions the same
+thing retrieval just found* — is a path `(seed)-[:MENTIONS]-(m)-[:MENTIONS]-(seed)`,
+and Neo4j's relationship-uniqueness rule forbids reusing one relationship inside a
+path, so it does not match. The route back only exists through a *different*
+memory, which is a longer and weaker connection.
+
+So direct co-mention is matched by its own query rather than by the traversal, and
+reported at two hops — the graph distance the path would have had — so that one
+scale weights a co-mention against a traversed hop. A `target <> seed` filter that
+looked like it was removing a degenerate self-path was in fact removing every
+direct co-mention in the corpus.
 
 ## Migrations
 

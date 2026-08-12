@@ -9,6 +9,7 @@ from memoryos.adapters.blobs.filesystem import BlobNotFound
 from memoryos.adapters.parsers.registry import build_default_registry as build_parser_registry
 from memoryos.application.embed import EmbedMemory
 from memoryos.application.extraction import ExtractEntities
+from memoryos.application.graph_sync import SyncGraph
 from memoryos.application.jobs.registry import Handler, HandlerRegistry, JobContext
 from memoryos.application.normalize import NormalizeMemory
 from memoryos.application.ports import (
@@ -19,6 +20,7 @@ from memoryos.application.ports import (
     EmbeddingCache,
     EntityExtractor,
     GraphStore,
+    JobQueue,
 )
 from memoryos.application.sync import SyncSource
 from memoryos.domain.jobs import JobType, PermanentError, TransientError
@@ -50,7 +52,7 @@ def make_embed_handler(
 def make_extract_handler(
     session_factory: async_sessionmaker[AsyncSession],
     extractor: EntityExtractor,
-    graph: GraphStore | None = None,
+    queue: JobQueue | None = None,
 ) -> Handler:
     """Build the `EXTRACT_ENTITIES` handler.
 
@@ -58,9 +60,12 @@ def make_extract_handler(
     a rate limit is `TransientError` and reaches the worker's existing backoff
     unchanged, which is exactly what M2.6 built that taxonomy for, and what makes
     a free tier's quota a pause rather than a dead-lettered corpus.
+
+    The queue is passed rather than the graph: extraction queues a `SYNC_GRAPH`
+    job and writes nothing to Neo4j itself.
     """
 
-    extract = ExtractEntities(session_factory, extractor, graph)
+    extract = ExtractEntities(session_factory, extractor, queue)
 
     async def handle_extract_entities(ctx: JobContext) -> None:
         raw_id = ctx.job.payload.get("memory_id")
@@ -71,6 +76,29 @@ def make_extract_handler(
         logger.info("extract.job_finished", job_id=str(ctx.job.id), **report.as_dict())
 
     return handle_extract_entities
+
+
+def make_graph_sync_handler(
+    session_factory: async_sessionmaker[AsyncSession], graph: GraphStore
+) -> Handler:
+    """Build the `SYNC_GRAPH` handler.
+
+    Nothing is caught. Every other stage in this pipeline treats an unreachable
+    graph as degradation and logs past it, because their own work is already
+    committed and correct — and that is exactly why the sync must not. It has no
+    other work: if it cannot reach the graph, it has done nothing, and reporting
+    success would leave a projection permanently behind with no record that it is.
+    A raise reaches the worker's backoff, and the retry is what makes a Neo4j
+    that was down for a minute a pause rather than a divergence.
+    """
+
+    sync = SyncGraph(session_factory, graph)
+
+    async def handle_sync_graph(ctx: JobContext) -> None:
+        report = await sync(ctx.job.payload)
+        logger.info("graph.sync_job_finished", job_id=str(ctx.job.id), **report.as_dict())
+
+    return handle_sync_graph
 
 
 def make_normalize_handler(
@@ -156,6 +184,7 @@ def build_default_registry(
     batch_size: int = 32,
     extractor: EntityExtractor | None = None,
     graph: GraphStore | None = None,
+    queue: JobQueue | None = None,
 ) -> HandlerRegistry:
     """The registry a worker runs with.
 
@@ -183,7 +212,13 @@ def build_default_registry(
     if session_factory is not None and extractor is not None:
         registry.register(
             JobType.EXTRACT_ENTITIES,
-            make_extract_handler(session_factory, extractor, graph),
+            make_extract_handler(session_factory, extractor, queue),
+        )
+
+    if session_factory is not None and graph is not None:
+        registry.register(
+            JobType.SYNC_GRAPH,
+            make_graph_sync_handler(session_factory, graph),
         )
 
     if session_factory is not None and connector is not None and blob_store is not None:

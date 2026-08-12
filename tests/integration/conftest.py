@@ -217,16 +217,19 @@ class Harness:
                     delete(models.Job).where(models.Job.job_type == job_type.value)
                 )
 
-        # M3.1: embedding now queues an extraction job per memory. The harness
-        # has no extractor — these tests are about replay, not entities — so the
-        # jobs are dropped rather than run. Dropped here rather than suppressed
-        # at the source, so the harness still exercises the real
-        # `EmbedMemory`, followup enqueue included, and leaves the queue empty
-        # the way a drained worker would.
+        # M3.1: embedding queues an extraction job per memory, and M3.4 has
+        # `SyncSource` queue a graph sync per memory. The harness has neither an
+        # extractor nor a graph — these tests are about replay, not entities — so
+        # both are dropped rather than run. Dropped here rather than suppressed at
+        # the source, so the harness still exercises the real `SyncSource` and
+        # `EmbedMemory`, followup enqueues included, and leaves the queue empty the
+        # way a drained worker would.
         async with self.sessions.begin() as session:
             await session.execute(
                 delete(models.Job).where(
-                    models.Job.job_type == JobType.EXTRACT_ENTITIES.value
+                    models.Job.job_type.in_(
+                        [JobType.EXTRACT_ENTITIES.value, JobType.SYNC_GRAPH.value]
+                    )
                 )
             )
 

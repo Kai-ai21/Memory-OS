@@ -1,10 +1,21 @@
-"""Extract entities for a memory, store them, and project them to the graph.
+"""Extract entities for a memory, store them, and queue the graph to catch up.
 
-The transaction boundary is the design. Postgres commits first and the Neo4j
-projection follows, so a crash between the two leaves a corpus that is correct
-and a graph that is behind — which the next extraction repairs, because both
-writes are idempotent. The other order leaves a graph asserting entities that no
-query can join to, and nothing that would ever notice.
+**This use case does not write to Neo4j.** It commits to Postgres and enqueues a
+`SYNC_GRAPH` job naming the memory that changed. M3.1 projected inline, and that
+was a use case writing to two stores — which makes the graph a second source of
+truth in everything but name, however carefully the write is ordered.
+
+The ordering that mattered survives: Postgres commits, and only then is anything
+queued. A crash between them leaves a corpus that is correct and a graph that is
+behind, which the next sync repairs because every graph write is a `MERGE`. The
+other order leaves a graph asserting entities no query can join to.
+
+What the enqueue buys beyond the principle is failure handling. An inline
+projection had to catch its own errors and report a degraded graph, because the
+rows were already committed and taking the job down would have turned a
+projection outage into a failed extraction. A queued sync has no such conflict: it
+raises, the worker retries it with backoff, and a Neo4j that was down for a minute
+is a pause rather than a divergence nobody records.
 
 Idempotency follows M1.4 and M1.5 exactly: a memory whose mentions already carry
 the current `extractor_version` is skipped without a model call. That is what
@@ -24,19 +35,16 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
+from memoryos.application.graph_sync import enqueue_sync
 from memoryos.application.ports import (
     EntityExtractor,
-    EntityNode,
     ExtractedEntity,
-    GraphEdge,
-    GraphNode,
-    GraphStore,
-    MemoryNode,
+    JobQueue,
 )
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import PermanentError
 from memoryos.domain.normalization import canonical_entity_name
-from memoryos.domain.values import EdgeType, GraphLabel, MemoryKind
+from memoryos.domain.values import MemoryKind
 
 logger = structlog.get_logger(__name__)
 
@@ -59,7 +67,10 @@ class ExtractReport:
     # returning; a non-zero count means an extractor broke the port's contract,
     # which is worth seeing rather than silently correcting.
     unverified: int = 0
-    projected: bool = False
+    # Whether a projection update was queued. Not whether the graph is current:
+    # that is the sync job's business, and conflating the two is what made the
+    # inline projection's `projected=True` mean "we tried".
+    sync_enqueued: bool = False
     duration_ms: int = 0
 
     def as_dict(self) -> dict[str, str | int | bool]:
@@ -69,7 +80,7 @@ class ExtractReport:
             "entities": self.entities,
             "mentions": self.mentions,
             "unverified": self.unverified,
-            "projected": self.projected,
+            "sync_enqueued": self.sync_enqueued,
             "duration_ms": self.duration_ms,
         }
 
@@ -79,14 +90,15 @@ class ExtractEntities:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         extractor: EntityExtractor,
-        graph: GraphStore | None = None,
+        queue: JobQueue | None = None,
     ) -> None:
         self._sessions = session_factory
         self._extractor = extractor
         # Optional, because the graph is a projection and Phase 1 and 2 work
-        # without it. A missing graph means the rows are written and nothing is
-        # projected, which `doctor` reports as a node count behind the table.
-        self._graph = graph
+        # without it. No queue means the rows are written and nothing is
+        # projected, which `graph verify` reports as a divergence and
+        # `graph rebuild` fixes.
+        self._queue = queue
 
     async def __call__(self, memory_id: UUID) -> ExtractReport:
         started = time.monotonic()
@@ -115,9 +127,9 @@ class ExtractEntities:
 
         report = await self._store(memory_id, chunks, found, version)
         # After the commit, never inside it. See the module docstring.
-        report.projected = await self._project(memory, chunks, found)
-        # Logged after projection rather than before, so `projected` in the log
-        # is the outcome rather than the field's default. Logging first reported
+        report.sync_enqueued = await self._queue_sync(memory_id)
+        # Logged after the enqueue rather than before, so the field in the log is
+        # the outcome rather than its default. Logging first reported
         # `projected=False` on every successful run.
         log.info("extract.stored", **report.as_dict())
         return _finish(report, started)
@@ -299,82 +311,25 @@ class ExtractEntities:
         # upwards after every sync.
         return await _follow_merge(session, merged_into), False
 
-    async def _project(
-        self,
-        memory: models.Memory,
-        chunks: list[tuple[UUID, str]],
-        found: list[list[ExtractedEntity]],
-    ) -> bool:
-        """Mirror what was just committed into Neo4j.
+    async def _queue_sync(self, memory_id: UUID) -> bool:
+        """Ask for this memory's neighbourhood of the graph to be re-projected.
 
-        Read back from Postgres rather than reusing the in-memory candidates,
-        because the entity ids are assigned there and the graph must key on the
-        same ones — a projection with its own ids would be a second identity
-        space that nothing could join across.
+        The job names the memory rather than the entities, and the sync widens it
+        to the entities Postgres says the memory mentions. That is the difference
+        between a payload describing a *change* and one describing a projection:
+        the in-memory candidates here are not the whole answer — an entity this
+        memory mentions may have been merged since, and only Postgres knows.
 
-        Failures are caught and reported, not raised. The rows are already
-        committed and correct; taking the job down because a projection is
-        unavailable would turn a degraded graph into a failed extraction, and
-        the next run repairs the graph anyway because every write is a `MERGE`.
+        A `False` return means no queue is wired, not that anything failed. The
+        enqueue itself is not caught: it is one insert into the same database that
+        has just committed, so a failure here is a database problem rather than a
+        graph problem, and swallowing it would leave the projection behind with
+        nothing recording that it is.
         """
-        if self._graph is None or not any(found):
+        if self._queue is None:
             return False
-
-        try:
-            await self._graph.upsert_memory(
-                MemoryNode(
-                    memory_id=memory.id,
-                    external_key=memory.external_key,
-                    kind=MemoryKind(memory.kind),
-                    occurred_at=memory.occurred_at,
-                )
-            )
-            for entity, chunk_id in await self._committed(memory.id):
-                await self._graph.upsert_entity(entity)
-                await self._graph.link(
-                    GraphEdge(
-                        type=EdgeType.MENTIONS,
-                        start=GraphNode(GraphLabel.MEMORY, str(memory.id)),
-                        end=GraphNode(GraphLabel.ENTITY, str(entity.entity_id)),
-                        properties={"chunk_id": str(chunk_id)},
-                    )
-                )
-        except Exception as exc:
-            logger.warning(
-                "extract.projection_failed", memory_id=str(memory.id), error=str(exc)
-            )
-            return False
+        await enqueue_sync(self._queue, memory_ids=[memory_id])
         return True
-
-    async def _committed(self, memory_id: UUID) -> list[tuple[EntityNode, UUID]]:
-        """The entities this memory now mentions, as the database has them."""
-        stmt = (
-            select(
-                models.Entity.id,
-                models.Entity.name,
-                models.Entity.canonical_name,
-                models.Entity.type,
-                models.Entity.confidence,
-                models.EntityMention.chunk_id,
-            )
-            .join(models.EntityMention, models.EntityMention.entity_id == models.Entity.id)
-            .where(models.EntityMention.memory_id == memory_id)
-        )
-        async with self._sessions() as session:
-            rows = await session.execute(stmt)
-            return [
-                (
-                    EntityNode(
-                        entity_id=row[0],
-                        name=row[1],
-                        canonical_name=row[2],
-                        type=row[3],
-                        confidence=row[4] if row[4] is not None else 0.0,
-                    ),
-                    row[5],
-                )
-                for row in rows
-            ]
 
 
 async def _follow_merge(session: AsyncSession, entity_id: UUID, depth: int = 8) -> UUID:
