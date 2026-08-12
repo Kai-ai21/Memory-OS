@@ -1462,6 +1462,9 @@ in a doc nobody opens.
 occurred_at provenance
   filesystem     162  100.0%  2026-08-07 .. 2026-08-10
   unknown          0    0.0%  -
+
+backfill lag over 1d: 88 of 162 memories
+  longest 2d 17h  src/memoryos/logging.py
 ```
 
 | | |
@@ -1471,14 +1474,23 @@ occurred_at provenance
 | `occurred_at` span | 2026-08-07 22:28 to 2026-08-10 16:35 — **2 days 18 hours** |
 | distinct days | 4, none empty: 14, 50, 33, 65 |
 | `ingested_at` span | 2026-08-10 16:15 to 16:35 — **one 20-minute window** |
+| backfill lag over 1 day | 88 of 162, longest 2d 17h |
 
 **The honest reading: there is almost no temporal signal here, and what exists is the weakest
 kind.** Every date is an mtime, which is `filesystem` provenance for a reason — it records when
 a file was last written on this disk, not when the work happened. The corpus is this repository,
 written by one person over one week and read once, so the mtimes cluster into the three days
 that work happened and the ingestion timestamps into the twenty minutes it took to read them.
-Nothing here was backfilled, nothing was declared by a source, and no month has a neighbour to
-be compared against.
+Nothing was declared by a source, and no month has a neighbour to be compared against.
+
+The backfill line is the same fact from the other side, and it is a case where the number is
+real and the interpretation is not. 88 of 162 memories have `occurred_at` more than a day
+behind `ingested_at`, which in a corpus of emails or commits would mean most of it was imported
+from somewhere older. Here the longest lag is **2 days 17 hours**, which is the age of the
+repository. Nothing was backfilled; the whole corpus was simply read at once, a few days after
+it was written. `out_of_order` is measuring correctly and there is nothing here to find — which
+is why the threshold is the parameter, and why the *size* of the lag matters more than the count
+above it.
 
 So the layer is exercised rather than demonstrated. Every function returns correct answers about
 a corpus that has very little to say, and the tests supply the shapes the corpus does not have —

@@ -1260,6 +1260,36 @@ def _print_provenance(bands: list[temporal.ProvenanceBand], total: int) -> None:
         print(f"  {band.provenance.value:11} {band.count:6}  {share}  {span}")
 
 
+async def _print_backfill(
+    sessions: async_sessionmaker[AsyncSession],
+    total: int,
+    *,
+    source_id: UUID | None,
+    threshold: timedelta = timedelta(days=1),
+) -> None:
+    """How far the corpus's world-time trails its ingestion-time.
+
+    Printed with the provenance rather than behind its own command, because it
+    answers the other half of the same question. Provenance says how the dates
+    were derived; this says whether the system watched the content happen or was
+    pointed at a pile of it afterwards — and a corpus that was assembled rather
+    than accumulated has a timeline meaning something different from one that
+    grew.
+    """
+    lagging = await temporal.out_of_order(sessions, threshold, source_id=source_id)
+    share = f" of {total}" if total else ""
+    print(
+        f"\nbackfill lag over {threshold.days}d: {len(lagging)}{share} memories"
+    )
+    if lagging:
+        # Ordered by lag descending, so the head is the largest.
+        worst = lagging[0]
+        assert worst.ingested_at is not None and worst.occurred_at is not None
+        span = worst.ingested_at - worst.occurred_at
+        hours = span.seconds // 3600
+        print(f"  longest {span.days}d {hours}h  {worst.external_key}")
+
+
 def _histogram(buckets: list[temporal.Bucket], *, width: int = 46) -> None:
     """A bar per period, scaled to the largest.
 
@@ -1293,6 +1323,7 @@ async def run_timeline(
         bands = await temporal.provenance_profile(sessions, source_id=source_id)
         total = sum(band.count for band in bands)
         _print_provenance(bands, total)
+        await _print_backfill(sessions, total, source_id=source_id)
 
         observed = temporal.observed_bounds(bands)
         if observed is None:

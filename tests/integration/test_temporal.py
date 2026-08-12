@@ -296,3 +296,56 @@ async def test_find_gaps_reports_the_long_silence_and_not_the_short_one(
     # worth reporting, not the shortest one it exceeds.
     exact = await temporal.find_gaps(sessions, scope, min_gap=timedelta(days=39))
     assert len(exact) == 1
+
+
+async def test_out_of_order_measures_the_lag_and_only_in_one_direction(
+    sessions: async_sessionmaker[AsyncSession], corpus: Source
+) -> None:
+    """A fifth test, for the fifth function, which the milestone did not list.
+
+    It has a caller — `timeline` prints the backfill summary above every
+    histogram — and a function with a caller and no test is the arrangement this
+    project keeps paying for.
+
+    The direction is the claim worth pinning. An absolute difference would lump
+    backfilled content in with a source whose clock runs fast, and the two are
+    not the same phenomenon: one says the corpus was assembled, the other says a
+    timestamp is wrong. `future.md` below occurred *after* it was ingested and is
+    excluded at every threshold.
+    """
+    ingested = datetime(2026, 6, 1, tzinfo=UTC)
+    await write(
+        sessions,
+        corpus,
+        "backfilled.md",
+        occurred_at=datetime(2019, 3, 4, tzinfo=UTC),
+        ingested_at=ingested,
+    )
+    await write(
+        sessions,
+        corpus,
+        "recent.md",
+        occurred_at=datetime(2026, 5, 30, tzinfo=UTC),
+        ingested_at=ingested,
+    )
+    await write(
+        sessions,
+        corpus,
+        "future.md",
+        occurred_at=datetime(2026, 9, 1, tzinfo=UTC),
+        ingested_at=ingested,
+    )
+    await write(sessions, corpus, "undated.md", occurred_at=None, ingested_at=ingested)
+
+    # Ordered by lag, longest first, so the head is the most backfilled thing.
+    everything = await temporal.out_of_order(sessions, timedelta(0))
+    assert [memory.external_key for memory in everything] == [
+        "backfilled.md",
+        "recent.md",
+    ]
+
+    assert [
+        memory.external_key
+        for memory in await temporal.out_of_order(sessions, timedelta(days=365))
+    ] == ["backfilled.md"]
+    assert await temporal.out_of_order(sessions, timedelta(days=3000)) == []
