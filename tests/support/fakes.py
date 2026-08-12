@@ -21,12 +21,21 @@ from memoryos.application.ports import (
     ExtractedEntity,
     ExtractedRelationship,
     GraphEdge,
+    GraphNode,
     GraphPath,
     LanguageModel,
     MemoryNode,
     Reranker,
+    SourceNode,
 )
-from memoryos.domain.values import EntityType, MemoryKind, Predicate
+from memoryos.domain.values import (
+    IDENTITY_PROPERTY,
+    EdgeType,
+    EntityType,
+    GraphLabel,
+    MemoryKind,
+    Predicate,
+)
 
 FAKE_MODEL_ID = "fake/deterministic@1"
 
@@ -205,43 +214,158 @@ class FakeLanguageModel(LanguageModel):
         return self.calls[-1][1]
 
 
-class RecordingGraphStore:
-    """A `GraphStore` that records what was asked of it and stores nothing.
+class InMemoryGraphStore:
+    """A `GraphStore` with `MERGE` semantics and no database behind it.
 
-    Deliberately used where a real Neo4j would also work. What the replay tests
-    need to establish is *which scopes clear the graph* — a decision made
-    entirely in `ReplayCorpus`, and one that a real store would answer with a
-    `DETACH DELETE` over the whole database. Neo4j Community Edition has one
-    user database, so that assertion would be run against whatever graph the
-    developer happens to have, to prove something about control flow that never
-    needed a database to be proved.
+    Deliberately used where a real Neo4j would also work, and the reason is the
+    one M3.0 wrote into `tests/integration/conftest.py`: Community Edition has
+    exactly one user database, so anything asserting about the *whole* graph — a
+    clear, a rebuild, a divergence check — would assert it against whatever graph
+    the developer happens to have.
+
+    Two kinds of test use this rather than Neo4j:
+
+    * **Control flow.** Which replay scopes clear the graph is a decision made
+      entirely in `ReplayCorpus`, and a real store would answer it with a
+      `DETACH DELETE` over that one database.
+    * **Divergence detection.** `graph_verify` compares two projections and is
+      pure once they are in hand. Corrupting a node and requiring a non-zero exit
+      needs a whole graph whose every node is the test's own.
+
+    What it deliberately does *not* stand in for is Cypher. The adapter's
+    fidelity — that `write` puts in exactly what `all_nodes` and `all_edges` read
+    back — is checked against a real Neo4j in `test_graph.py`, because a fake
+    that agreed with itself would prove only that.
+
+    Keys are `(label, key)` and writes overwrite, which is what `MERGE` does. A
+    list of writes would let a double-projection look like twice the graph.
     """
 
     def __init__(self) -> None:
         self.clears = 0
-        self.memories: list[MemoryNode] = []
-        self.entities: list[EntityNode] = []
-        self.edges: list[GraphEdge] = []
+        self._nodes: dict[tuple[GraphLabel, str], GraphNode] = {}
+        # Keyed by (type, start, end): Neo4j's `MERGE (a)-[r:T]->(b)` is one
+        # relationship per triple, and `SET r +=` overwrites its properties.
+        self._edges: dict[tuple[EdgeType, str, str], GraphEdge] = {}
+
+    # -- writes --------------------------------------------------------
 
     async def upsert_memory(self, node: MemoryNode) -> None:
-        self.memories.append(node)
+        self._nodes[(GraphLabel.MEMORY, str(node.memory_id))] = GraphNode(
+            label=GraphLabel.MEMORY,
+            key=str(node.memory_id),
+            properties={
+                "memory_id": str(node.memory_id),
+                "external_key": node.external_key,
+                "kind": node.kind.value,
+                "occurred_at": node.occurred_at,
+            },
+        )
 
     async def upsert_entity(self, node: EntityNode) -> None:
-        self.entities.append(node)
+        self._nodes[(GraphLabel.ENTITY, str(node.entity_id))] = GraphNode(
+            label=GraphLabel.ENTITY,
+            key=str(node.entity_id),
+            properties={
+                "entity_id": str(node.entity_id),
+                "name": node.name,
+                "canonical_name": node.canonical_name,
+                "type": node.type,
+                "confidence": node.confidence,
+            },
+        )
+
+    async def upsert_source(self, node: SourceNode) -> None:
+        self._nodes[(GraphLabel.SOURCE, str(node.source_id))] = GraphNode(
+            label=GraphLabel.SOURCE,
+            key=str(node.source_id),
+            properties={
+                "source_id": str(node.source_id),
+                "name": node.name,
+                "kind": node.kind,
+            },
+        )
 
     async def link(self, edge: GraphEdge) -> None:
-        self.edges.append(edge)
+        # Endpoints are merged, exactly as the adapter does, so an edge written
+        # before its node's own upsert leaves a node carrying only its identity.
+        # Reproduced rather than tidied away: it is the behaviour the ordering in
+        # `graph_projection.write` exists to avoid, and a fake that created
+        # complete nodes would make that ordering untestable.
+        for node in (edge.start, edge.end):
+            self._nodes.setdefault(
+                (node.label, node.key),
+                GraphNode(
+                    label=node.label,
+                    key=node.key,
+                    properties={IDENTITY_PROPERTY[node.label]: node.key},
+                ),
+            )
+        self._edges[(edge.type, edge.start.key, edge.end.key)] = edge
+
+    async def prune_memories(self, memory_ids: Sequence[UUID]) -> int:
+        return self._prune(GraphLabel.MEMORY, memory_ids)
+
+    async def prune_entities(self, entity_ids: Sequence[UUID]) -> int:
+        return self._prune(GraphLabel.ENTITY, entity_ids)
+
+    def _prune(self, label: GraphLabel, ids: Sequence[UUID]) -> int:
+        keys = {str(value) for value in ids}
+        removed = 0
+        for key in keys:
+            if self._nodes.pop((label, key), None) is not None:
+                removed += 1
+        # Detached, so every edge touching a removed node goes with it.
+        for edge_key in list(self._edges):
+            _, start, end = edge_key
+            if start in keys or end in keys:
+                del self._edges[edge_key]
+        return removed
+
+    async def clear(self) -> None:
+        self.clears += 1
+        self._nodes.clear()
+        self._edges.clear()
+
+    # -- reads ---------------------------------------------------------
+
+    async def memories_mentioning(
+        self, entity_ids: Sequence[UUID]
+    ) -> list[tuple[UUID, UUID]]:
+        wanted = {str(value) for value in entity_ids}
+        return [
+            (UUID(start), UUID(end))
+            for edge_type, start, end in self._edges
+            if edge_type is EdgeType.MENTIONS and end in wanted
+        ]
+
+    async def all_nodes(self) -> list[GraphNode]:
+        return list(self._nodes.values())
+
+    async def all_edges(self) -> list[GraphEdge]:
+        return list(self._edges.values())
 
     async def neighbours(
         self, entity_id: UUID, *, depth: int = 2, limit: int = 50
     ) -> list[GraphPath]:
         return []
 
-    async def clear(self) -> None:
-        self.clears += 1
+    # -- for assertions ------------------------------------------------
+
+    @property
+    def memories(self) -> list[GraphNode]:
+        return [node for node in self._nodes.values() if node.label is GraphLabel.MEMORY]
+
+    @property
+    def entities(self) -> list[GraphNode]:
+        return [node for node in self._nodes.values() if node.label is GraphLabel.ENTITY]
+
+    @property
+    def edges(self) -> list[GraphEdge]:
+        return list(self._edges.values())
 
 
-class UnreachableGraphStore(RecordingGraphStore):
+class UnreachableGraphStore(InMemoryGraphStore):
     """A graph that raises on `clear`, for the case a replay must not swallow."""
 
     async def clear(self) -> None:

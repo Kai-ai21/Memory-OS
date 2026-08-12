@@ -21,23 +21,22 @@ from enum import StrEnum, auto
 from uuid import UUID
 
 import structlog
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
+from memoryos.application import graph_projection
 from memoryos.application.ports import (
     EntityExtractor,
     EntityRef,
     ExtractedRelationship,
-    GraphEdge,
-    GraphNode,
     GraphStore,
 )
 from memoryos.domain.backoff import compute_backoff
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import PermanentError, TransientError
-from memoryos.domain.values import EdgeType, EntityType, GraphLabel
+from memoryos.domain.values import EntityType
 
 logger = structlog.get_logger(__name__)
 
@@ -272,20 +271,33 @@ class ExtractRelationships:
             )
 
     async def _project(self, memory_id: UUID) -> int:
-        """Mirror this memory's relationships into Neo4j as typed edges.
+        """Mirror this memory's neighbourhood of the graph onto what was committed.
 
-        Read back from Postgres rather than reusing the in-memory claims,
-        because `assertion_count` is a property of the whole corpus rather than
-        of this memory: the same pair may have been asserted by chunks belonging
-        to memories extracted weeks apart, and an edge weighted by only what
-        this run saw would under-report every repeated claim.
+        Read back from Postgres rather than reusing the in-memory claims, and
+        through the shared projection rather than a query of its own. Two reasons,
+        and M3.3 got the first right and the second wrong.
+
+        `assertion_count` is a property of the whole corpus rather than of this
+        memory: the same pair may have been asserted by chunks belonging to
+        memories extracted weeks apart, and an edge weighted by only what this run
+        saw would under-report every repeated claim. That much was already true
+        here.
+
+        What was not is that the endpoints have to be resolved through
+        `entities.merged_into_id`. A relationship row keeps naming whichever entity
+        the extractor saw, so after any merge this projected an edge to an entity
+        that no longer takes part in the graph — and because `link` merges its
+        endpoints, it *created* that node, carrying an id and no name. See
+        `graph_projection`, which now owns that rule for every writer.
         """
         if self._graph is None:
             return 0
         try:
-            edges = await self._edges_for(memory_id)
-            for edge in edges:
-                await self._graph.link(edge)
+            projection = await graph_projection.read(
+                self._sessions,
+                graph_projection.Scope(memory_ids=frozenset({memory_id})),
+            )
+            await graph_projection.write(self._graph, projection)
         except Exception as exc:
             logger.warning(
                 "relationships.projection_failed",
@@ -293,70 +305,11 @@ class ExtractRelationships:
                 error=str(exc),
             )
             return 0
-        return len(edges)
-
-    async def _edges_for(self, memory_id: UUID) -> list[GraphEdge]:
-        """Corpus-wide edge weights for the pairs this memory touched."""
-        pairs = (
-            select(
-                models.EntityRelationship.subject_id,
-                models.EntityRelationship.object_id,
-                models.EntityRelationship.predicate,
-            )
-            .where(models.EntityRelationship.memory_id == memory_id)
-            .distinct()
-            .subquery()
+        return sum(
+            1
+            for edge in projection.edges
+            if edge.type is graph_projection.ENTITY_EDGE_TYPE
         )
-        stmt = (
-            select(
-                models.EntityRelationship.subject_id,
-                models.EntityRelationship.object_id,
-                models.EntityRelationship.predicate,
-                func.count().label("assertions"),
-                func.max(models.EntityRelationship.confidence).label("confidence"),
-            )
-            .join(
-                pairs,
-                (models.EntityRelationship.subject_id == pairs.c.subject_id)
-                & (models.EntityRelationship.object_id == pairs.c.object_id)
-                & (models.EntityRelationship.predicate == pairs.c.predicate),
-            )
-            .group_by(
-                models.EntityRelationship.subject_id,
-                models.EntityRelationship.object_id,
-                models.EntityRelationship.predicate,
-            )
-        )
-        async with self._sessions() as session:
-            rows = list(await session.execute(stmt))
-
-        return [
-            GraphEdge(
-                type=ENTITY_EDGE_TYPE,
-                start=GraphNode(GraphLabel.ENTITY, str(subject_id)),
-                end=GraphNode(GraphLabel.ENTITY, str(object_id)),
-                properties={
-                    "predicate": predicate,
-                    "assertion_count": assertions,
-                    "confidence": float(confidence) if confidence is not None else 0.0,
-                },
-            )
-            for subject_id, object_id, predicate, assertions, confidence in rows
-        ]
-
-
-# Every entity-to-entity claim becomes a `RELATES_TO` edge carrying its
-# predicate as a property, rather than one Cypher relationship type per
-# predicate.
-#
-# M3.0 declared three relationship types and traversals are written against
-# them; promoting seven predicates to seven types would mean every existing
-# pattern has to enumerate them, and `[:RELATES_TO {predicate: 'uses'}]` filters
-# exactly as precisely. `MENTIONS` deliberately stays what M3.1 made it —
-# memory to entity — and is not reused for a `mentions` predicate between two
-# entities, because one edge type carrying two different meanings is a
-# traversal that cannot tell them apart.
-ENTITY_EDGE_TYPE = EdgeType.RELATES_TO
 
 
 def _finish(report: RelationshipReport, started: float) -> RelationshipReport:

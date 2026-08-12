@@ -27,7 +27,7 @@ caller value ever reaches a query string.
 """
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import UUID
 
@@ -47,6 +47,7 @@ from memoryos.application.ports import (
     GraphNode,
     GraphPath,
     MemoryNode,
+    SourceNode,
 )
 from memoryos.domain.values import EdgeType, GraphLabel
 
@@ -207,6 +208,19 @@ class Neo4jGraphStore:
             database_=self._database,
         )
 
+    async def upsert_source(self, node: SourceNode) -> None:
+        await self.ensure_schema()
+        await self._driver.execute_query(
+            "MERGE (s:Source {source_id: $source_id}) "
+            "SET s.name = $name, s.kind = $kind",
+            {
+                "source_id": str(node.source_id),
+                "name": node.name,
+                "kind": node.kind,
+            },
+            database_=self._database,
+        )
+
     async def link(self, edge: GraphEdge) -> None:
         """Relate two nodes, creating either endpoint if it is not there yet.
 
@@ -278,9 +292,85 @@ class Neo4jGraphStore:
         )
         logger.info("graph.cleared", uri=self._uri)
 
+    async def prune_memories(self, memory_ids: Sequence[UUID]) -> int:
+        """See the port. One statement for the whole batch, not one per id."""
+        return await self._prune(GraphLabel.MEMORY, memory_ids)
+
+    async def prune_entities(self, entity_ids: Sequence[UUID]) -> int:
+        return await self._prune(GraphLabel.ENTITY, entity_ids)
+
+    async def _prune(self, label: GraphLabel, ids: Sequence[UUID]) -> int:
+        if not ids:
+            # An empty `IN []` is a legal query that matches nothing, so this is
+            # a round trip saved rather than a correctness guard.
+            return 0
+        await self.ensure_schema()
+        checked = _checked_label(label)
+        key = identity_property(label)
+        result = await self._driver.execute_query(
+            # `count` before the delete: after `DETACH DELETE` there is nothing
+            # left to count, and the caller needs to know whether the graph
+            # actually held what it was asked to remove.
+            f"MATCH (n:{checked}) WHERE n.{key} IN $ids "
+            f"WITH collect(n) AS found "
+            f"CALL {{ WITH found UNWIND found AS n DETACH DELETE n }} "
+            f"RETURN size(found) AS removed",
+            {"ids": [str(value) for value in ids]},
+            database_=self._database,
+        )
+        removed = int(result.records[0]["removed"]) if result.records else 0
+        logger.debug("graph.pruned", label=checked, asked=len(ids), removed=removed)
+        return removed
+
     # ------------------------------------------------------------------
     # Reads
     # ------------------------------------------------------------------
+
+    async def memories_mentioning(
+        self, entity_ids: Sequence[UUID]
+    ) -> list[tuple[UUID, UUID]]:
+        if not entity_ids:
+            return []
+        await self.ensure_schema()
+        result = await self._driver.execute_query(
+            "MATCH (m:Memory)-[:MENTIONS]->(e:Entity) "
+            "WHERE e.entity_id IN $ids "
+            "RETURN DISTINCT m.memory_id AS memory_id, e.entity_id AS entity_id",
+            {"ids": [str(value) for value in entity_ids]},
+            database_=self._database,
+        )
+        return [
+            (UUID(record["memory_id"]), UUID(record["entity_id"]))
+            for record in result.records
+        ]
+
+    async def all_nodes(self) -> list[GraphNode]:
+        await self.ensure_schema()
+        result = await self._driver.execute_query(
+            f"MATCH (n) WHERE NOT n:{VERSION_LABEL} RETURN n",
+            database_=self._database,
+        )
+        return [_node_of(record["n"]) for record in result.records]
+
+    async def all_edges(self) -> list[GraphEdge]:
+        await self.ensure_schema()
+        result = await self._driver.execute_query(
+            f"MATCH (a)-[r]->(b) "
+            f"WHERE NOT a:{VERSION_LABEL} AND NOT b:{VERSION_LABEL} "
+            f"RETURN a, r, b",
+            database_=self._database,
+        )
+        return [
+            GraphEdge(
+                type=_edge_of(record["r"]),
+                # Identity only, deliberately: see the port. `_node_of` would
+                # attach every property of both endpoints to every edge.
+                start=_identity_of(record["a"]),
+                end=_identity_of(record["b"]),
+                properties=_properties_of(record["r"]),
+            )
+            for record in result.records
+        ]
 
     async def neighbours(
         self, entity_id: UUID, *, depth: int = 2, limit: int = 50
@@ -374,6 +464,13 @@ def _node_of(node: Node) -> GraphNode:
         key=str(key) if key is not None else "",
         properties=_properties_of(node),
     )
+
+
+def _identity_of(node: Node) -> GraphNode:
+    """The node's label and key, without reading its properties."""
+    label = _sole_label(node)
+    key = node.get(identity_property(label))
+    return GraphNode(label=label, key=str(key) if key is not None else "")
 
 
 def _sole_label(node: Node) -> GraphLabel:

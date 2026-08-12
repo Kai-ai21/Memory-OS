@@ -24,19 +24,16 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
+from memoryos.application import graph_projection
 from memoryos.application.ports import (
     EntityExtractor,
-    EntityNode,
     ExtractedEntity,
-    GraphEdge,
-    GraphNode,
     GraphStore,
-    MemoryNode,
 )
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import PermanentError
 from memoryos.domain.normalization import canonical_entity_name
-from memoryos.domain.values import EdgeType, GraphLabel, MemoryKind
+from memoryos.domain.values import MemoryKind
 
 logger = structlog.get_logger(__name__)
 
@@ -115,7 +112,7 @@ class ExtractEntities:
 
         report = await self._store(memory_id, chunks, found, version)
         # After the commit, never inside it. See the module docstring.
-        report.projected = await self._project(memory, chunks, found)
+        report.projected = await self._project(memory_id)
         # Logged after projection rather than before, so `projected` in the log
         # is the outcome rather than the field's default. Logging first reported
         # `projected=False` on every successful run.
@@ -299,82 +296,37 @@ class ExtractEntities:
         # upwards after every sync.
         return await _follow_merge(session, merged_into), False
 
-    async def _project(
-        self,
-        memory: models.Memory,
-        chunks: list[tuple[UUID, str]],
-        found: list[list[ExtractedEntity]],
-    ) -> bool:
-        """Mirror what was just committed into Neo4j.
+    async def _project(self, memory_id: UUID) -> bool:
+        """Mirror this memory's neighbourhood of the graph onto what was committed.
 
         Read back from Postgres rather than reusing the in-memory candidates,
         because the entity ids are assigned there and the graph must key on the
         same ones — a projection with its own ids would be a second identity
-        space that nothing could join across.
+        space that nothing could join across. That read is
+        `graph_projection.read`, the same function the full rebuild and the
+        divergence check use, narrowed to one memory: two definitions of what a
+        memory's neighbourhood looks like would drift, and the drift would only
+        surface as a `graph verify` failure nobody could attribute.
 
         Failures are caught and reported, not raised. The rows are already
         committed and correct; taking the job down because a projection is
         unavailable would turn a degraded graph into a failed extraction, and
         the next run repairs the graph anyway because every write is a `MERGE`.
         """
-        if self._graph is None or not any(found):
+        if self._graph is None:
             return False
 
         try:
-            await self._graph.upsert_memory(
-                MemoryNode(
-                    memory_id=memory.id,
-                    external_key=memory.external_key,
-                    kind=MemoryKind(memory.kind),
-                    occurred_at=memory.occurred_at,
-                )
+            projection = await graph_projection.read(
+                self._sessions, graph_projection.Scope(memory_ids=frozenset({memory_id}))
             )
-            for entity, chunk_id in await self._committed(memory.id):
-                await self._graph.upsert_entity(entity)
-                await self._graph.link(
-                    GraphEdge(
-                        type=EdgeType.MENTIONS,
-                        start=GraphNode(GraphLabel.MEMORY, str(memory.id)),
-                        end=GraphNode(GraphLabel.ENTITY, str(entity.entity_id)),
-                        properties={"chunk_id": str(chunk_id)},
-                    )
-                )
+            await graph_projection.write(self._graph, projection)
         except Exception as exc:
             logger.warning(
-                "extract.projection_failed", memory_id=str(memory.id), error=str(exc)
+                "extract.projection_failed", memory_id=str(memory_id), error=str(exc)
             )
             return False
         return True
-
-    async def _committed(self, memory_id: UUID) -> list[tuple[EntityNode, UUID]]:
-        """The entities this memory now mentions, as the database has them."""
-        stmt = (
-            select(
-                models.Entity.id,
-                models.Entity.name,
-                models.Entity.canonical_name,
-                models.Entity.type,
-                models.Entity.confidence,
-                models.EntityMention.chunk_id,
-            )
-            .join(models.EntityMention, models.EntityMention.entity_id == models.Entity.id)
-            .where(models.EntityMention.memory_id == memory_id)
-        )
-        async with self._sessions() as session:
-            rows = await session.execute(stmt)
-            return [
-                (
-                    EntityNode(
-                        entity_id=row[0],
-                        name=row[1],
-                        canonical_name=row[2],
-                        type=row[3],
-                        confidence=row[4] if row[4] is not None else 0.0,
-                    ),
-                    row[5],
-                )
-                for row in rows
-            ]
 
 
 async def _follow_merge(session: AsyncSession, entity_id: UUID, depth: int = 8) -> UUID:

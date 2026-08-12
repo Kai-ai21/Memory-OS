@@ -48,7 +48,7 @@ from tests.integration.conftest import (
 )
 from tests.support.fakes import (
     FakeEmbedder,
-    RecordingGraphStore,
+    InMemoryGraphStore,
     UnreachableGraphStore,
 )
 
@@ -899,11 +899,11 @@ async def test_a_failed_shadow_replay_leaves_the_live_corpus_alone(
 
 
 def replay_with_graph(
-    harness: Harness, graph: RecordingGraphStore
+    harness: Harness, graph: InMemoryGraphStore
 ) -> ReplayCorpus:
     """The harness's replay, rebuilt with a graph attached.
 
-    A `RecordingGraphStore` rather than a real Neo4j, and the reason is in its
+    An `InMemoryGraphStore` rather than a real Neo4j, and the reason is in its
     docstring: what is under test is which scopes decide to clear the graph,
     which is control flow in `ReplayCorpus`. A real store would answer the same
     question by deleting every node in the one database Community Edition
@@ -935,7 +935,7 @@ async def test_a_full_replay_clears_the_graph(harness: Harness) -> None:
     — it would leave a graph whose nodes all look real and none of which join to
     anything, which is the quietest possible way for a projection to be wrong.
     """
-    graph = RecordingGraphStore()
+    graph = InMemoryGraphStore()
     await replay_with_graph(harness, graph)()
     assert graph.clears == 1
 
@@ -964,7 +964,7 @@ async def test_a_partial_replay_leaves_the_graph_alone(
     is what M3.1 has to solve properly, by making the projection narrowable by
     source rather than by making a partial replay destructive.
     """
-    graph = RecordingGraphStore()
+    graph = InMemoryGraphStore()
     await replay_with_graph(harness, graph)(scope)
     assert graph.clears == 0
 

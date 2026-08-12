@@ -785,6 +785,27 @@ class EntityNode:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceNode:
+    """The connector a memory came from.
+
+    Declared by M3.0's schema — label, constraint and `FROM_SOURCE` edge type —
+    and written by nothing until M3.4. That gap was not harmless: `link` merges
+    its endpoints, so a `FROM_SOURCE` edge written without this would have
+    created a `Source` node carrying an id and no name, which is the one failure
+    the port's own docstring warns about.
+
+    Projected because it is what makes the graph's memories filterable the way
+    every other read of the corpus is. `(source_name, external_key)` is the
+    durable identity of an item everywhere else in this system; without the
+    source, the graph knows only half of it.
+    """
+
+    source_id: UUID
+    name: str
+    kind: str
+
+
+@dataclass(frozen=True, slots=True)
 class GraphNode:
     """A node by label and identity, with whatever properties it carries.
 
@@ -866,7 +887,54 @@ class GraphStore(Protocol):
 
     async def upsert_entity(self, node: EntityNode) -> None: ...
 
+    async def upsert_source(self, node: SourceNode) -> None: ...
+
     async def link(self, edge: GraphEdge) -> None: ...
+
+    async def prune_memories(self, memory_ids: Sequence[UUID]) -> int:
+        """Detach-delete these `Memory` nodes. Returns how many were there.
+
+        **The one place a node-level delete is legitimate, and it is legitimate
+        because of what calls it.** A use case that kept the graph current by
+        deleting the parts it changed would be maintaining a second source of
+        truth by hand — the thing this port's docstring forbids. What calls this
+        is the projection sync, whose entire job is to make a *neighbourhood* of
+        the graph equal to what Postgres says it should be, and which does it the
+        same way the full rebuild does: delete, then re-project. Without a scoped
+        delete, "incremental" would mean "additive", and a mention that Postgres
+        no longer has would survive in the graph until the next full rebuild.
+
+        Detaching is what makes the re-projection a rebuild rather than a merge:
+        every `MENTIONS` and `FROM_SOURCE` edge this memory had goes with it, so
+        an edge that should no longer exist cannot survive by not being
+        mentioned.
+        """
+        ...
+
+    async def prune_entities(self, entity_ids: Sequence[UUID]) -> int:
+        """Detach-delete these `Entity` nodes. Returns how many were there.
+
+        The counterpart for resolution: a merged-away entity has to *leave* the
+        graph, and there is no upsert that expresses "no longer exists". Callers
+        must re-sync every memory that mentioned one, because detaching takes
+        those `MENTIONS` edges with it — `memories_mentioning` exists so that set
+        can be found before the delete rather than guessed at afterwards.
+        """
+        ...
+
+    async def memories_mentioning(
+        self, entity_ids: Sequence[UUID]
+    ) -> list[tuple[UUID, UUID]]:
+        """`(memory_id, entity_id)` for every `MENTIONS` edge into these entities.
+
+        Read from the graph rather than from Postgres deliberately, and the
+        difference is the whole point of the call: the sync needs to know what
+        the *graph* currently claims, because the rows that produced those claims
+        may already have moved. After a merge, Postgres no longer associates the
+        loser with any memory; the graph still does, and those are exactly the
+        edges that have to be found and removed.
+        """
+        ...
 
     async def neighbours(
         self, entity_id: UUID, *, depth: int = 2, limit: int = 50
@@ -885,6 +953,26 @@ class GraphStore(Protocol):
 
     async def clear(self) -> None:
         """Empty the projection, leaving the schema in place."""
+        ...
+
+    async def all_nodes(self) -> list[GraphNode]:
+        """Every projected node, with its properties. For divergence detection.
+
+        Reads the whole graph, and a sampled version of this would not be worth
+        having: the question it answers is "does the projection differ from
+        Postgres anywhere", and a check that looks at some of the nodes answers a
+        different question. `SchemaVersion` is excluded, because it describes the
+        schema rather than the projection.
+        """
+        ...
+
+    async def all_edges(self) -> list[GraphEdge]:
+        """Every projected relationship, endpoints named by identity.
+
+        The endpoints carry label and key only. Their properties are `all_nodes`'
+        business, and duplicating them per edge would make an edge diff report a
+        node's changed property once per relationship it happens to have.
+        """
         ...
 
 

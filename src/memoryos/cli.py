@@ -24,6 +24,7 @@ from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.extraction.llm import ExtractionStats
 from memoryos.adapters.graph.schema import SCHEMA_VERSION
 from memoryos.adapters.llm.errors import MissingApiKey
+from memoryos.application import graph_projection
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
 from memoryos.application.backfill import (
     enqueue_embedding,
@@ -58,7 +59,6 @@ from memoryos.application.resolution import (
     DEFAULT_THRESHOLD,
     MergeCandidate,
     ResolveEntities,
-    rebuild_graph_projection,
 )
 from memoryos.application.tuning import (
     COARSE,
@@ -969,10 +969,10 @@ async def run_resolve_entities(
         # rebuilt rather than patched: a merge removes nodes and moves edges,
         # and an incremental update would have to know which. Clearing and
         # re-projecting is what "rebuildable projection" is for.
-        projected = await rebuild_graph_projection(
+        projection = await graph_projection.rebuild(
             container.database.session_factory, container.graph
         )
-        print(f"  graph rebuilt: {projected} entities projected")
+        print(f"  graph rebuilt: {projection.nodes} nodes, {len(projection.edges)} edges")
     finally:
         await container.dispose()
     return 0
