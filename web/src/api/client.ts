@@ -123,6 +123,11 @@ export type Period = NonNullable<
 export type MemoriesAt = Ok<paths["/memories/at"]["get"]>;
 export type MemoryAt = MemoriesAt["memories"][number];
 export type Gap = Ok<paths["/gaps"]["get"]>[number];
+export type Evolution = Ok<paths["/memories/{memory_id}/evolution"]["get"]>;
+export type EvolutionVersion = Evolution["versions"][number];
+export type VersionDiff = Evolution["diffs"][number];
+export type DiffSpan = VersionDiff["spans"][number];
+export type ChangeSummary = NonNullable<VersionDiff["summary"]>;
 
 export interface SearchArgs {
   q: string;
@@ -178,6 +183,19 @@ export const api = {
     return request<MemoriesAt>(`/memories/at?${params.toString()}`);
   },
 
+  evolution: ({ id, from, to, summarize }: EvolutionArgs) => {
+    const params = new URLSearchParams();
+    // Both or neither: the API rejects one alone rather than guessing the other,
+    // and sending an empty `from` would be that guess made client-side.
+    if (from && to) {
+      params.set("from", from);
+      params.set("to", to);
+    }
+    if (summarize) params.set("summarize", "true");
+    const query = params.toString();
+    return request<Evolution>(`/memories/${id}/evolution${query ? `?${query}` : ""}`);
+  },
+
   gaps: ({ minDays, source }: GapsArgs) => {
     const params = new URLSearchParams({ min_days: String(minDays) });
     if (source) params.set("source", source);
@@ -203,4 +221,13 @@ export interface MemoriesAtArgs {
 export interface GapsArgs {
   minDays: number;
   source?: string;
+}
+
+export interface EvolutionArgs {
+  id: string;
+  /** A specific pair to diff. Both or neither. */
+  from?: string;
+  to?: string;
+  /** Generate missing summaries. Costs a model call per diff, so opt-in. */
+  summarize?: boolean;
 }

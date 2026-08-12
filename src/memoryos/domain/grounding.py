@@ -244,3 +244,152 @@ def _is_refusal(answer: str, *, cites_nothing: bool) -> bool:
     sentence unsupported would punish exactly the behaviour being asked for.
     """
     return cites_nothing and _REFUSAL_PATTERN.search(answer) is not None
+
+
+# --------------------------------------------------------------------------
+# M4.2: grounding a change summary, where there are no passage numbers
+#
+# The check above rests on the model citing indices, which works because the
+# context is a numbered list. A change summary has one piece of evidence — the
+# diff — so there is nothing to number and citation markers would be noise.
+#
+# What remains checkable is *vocabulary*. A summary of a diff should name things
+# the diff contains: the function that moved, the column that was added, the file
+# that was imported. A summary that names something absent from the diff either
+# read the rest of the file, which it was never given, or invented it. That is
+# the same failure as citing passage [7] when six were supplied, and it is
+# detectable the same way — mechanically, without a second model.
+#
+# **Context lines are the attack surface, and they get their own verdict.** A
+# unified diff carries unchanged lines so the change can be located, and a model
+# reading them will sometimes describe them as though they had changed. Observed,
+# on the first summary this system generated: two import lines that appear only
+# as context were reported as having been reordered, and a whole-diff vocabulary
+# check passed it, because the names really are in the diff.
+#
+# So terms are matched against the changed lines and the context lines
+# separately. Absent from both is a fabrication. Present only in context is not
+# an error — "adds a field to `Settings`" is a correct and useful sentence about
+# a class declared on a context line — but it is exactly where the false claim
+# lives, so it is counted and surfaced rather than silently passed.
+#
+# What this still cannot check is the half a rationale-inventing model would
+# fail: "refactored to improve testability" names nothing at all and passes
+# cleanly. That is why the system prompt forbids explaining *why* a change was
+# made and why the summaries are short. The check is a floor, not a proof —
+# exactly as `verify_citations` is.
+# --------------------------------------------------------------------------
+
+# Identifier-shaped: a dotted path, a snake_case name, a slashed path, or an
+# internal capital. Ordinary prose does not produce these, which is what makes
+# them safe to demand evidence for. A bare lowercase word is deliberately not a
+# term here — "the worker now retries" should not be flagged because "retries"
+# is absent while "retry" is present.
+_TERM = re.compile(
+    r"`([^`\n]{2,80})`"  # anything the model put in backticks, first
+    r"|\b([A-Za-z_][A-Za-z0-9_]*(?:[./][A-Za-z0-9_]+)+)\b"  # a.b, a/b, a.b.c
+    r"|\b([a-z0-9]+(?:_[a-z0-9]+)+)\b"  # snake_case
+    r"|\b([a-z]+[A-Z][A-Za-z0-9]*|[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*)\b"  # camel/Pascal
+)
+
+# Shapes that match the pattern and are prose rather than code. Kept short on
+# purpose: every entry is a term this check has agreed not to verify, and a long
+# list is a check that has been argued down to nothing.
+_NOT_A_TERM = frozenset({"e.g.", "i.e.", "etc.", "vs.", "no.", "n.b."})
+
+
+@dataclass(frozen=True, slots=True)
+class SummaryCheck:
+    """Whether a change summary stayed inside the diff it was shown."""
+
+    terms: list[str] = field(default_factory=list)
+    # Named in the summary, absent from the diff entirely. Reported, never
+    # removed: a summary with a sentence silently deleted reads as complete and
+    # is not.
+    unsupported: list[str] = field(default_factory=list)
+    # Named in the summary and present only on unchanged context lines. Not an
+    # error — see the section note — and the place a false claim about an
+    # unchanged line will show up.
+    context_only: list[str] = field(default_factory=list)
+    # Decided before the model is called, not read off its output. See
+    # `application.evolution`.
+    trivial: bool = False
+
+    @property
+    def grounded(self) -> bool:
+        return not self.unsupported
+
+    @property
+    def support_rate(self) -> float:
+        """Verifiable terms found in the diff, over verifiable terms named.
+
+        1.0 when the summary names nothing checkable, which is the honest score
+        rather than a generous one: there was nothing to get wrong. It is also
+        why this number is worth watching as a rate over many summaries and
+        worth very little on one.
+        """
+        if not self.terms:
+            return 1.0
+        return (len(self.terms) - len(self.unsupported)) / len(self.terms)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "terms": list(self.terms),
+            "unsupported": list(self.unsupported),
+            "context_only": list(self.context_only),
+            "support_rate": round(self.support_rate, 4),
+            "grounded": self.grounded,
+            "trivial": self.trivial,
+        }
+
+
+def check_summary(summary: str, evidence: str, *, trivial: bool = False) -> SummaryCheck:
+    """Check that every identifier a summary names appears in the diff it was given.
+
+    `evidence` is the unified diff exactly as the model was shown it, so that the
+    `+`/`-`/context split can be recovered here rather than passed in — two
+    callers deriving it separately is two chances to check the summary against
+    something other than what was read.
+
+    Matched case-sensitively. `Memory` and `memory` are different things in this
+    corpus — a class and a table — and a check that conflated them would pass a
+    summary describing the wrong one.
+    """
+    changed, context = _split_diff(evidence)
+
+    terms: list[str] = []
+    seen: set[str] = set()
+    for match in _TERM.finditer(summary):
+        term = next(group for group in match.groups() if group is not None).strip()
+        if len(term) < 3 or term.lower() in _NOT_A_TERM or term in seen:
+            continue
+        seen.add(term)
+        terms.append(term)
+
+    return SummaryCheck(
+        terms=terms,
+        unsupported=[
+            term for term in terms if term not in changed and term not in context
+        ],
+        context_only=[term for term in terms if term not in changed and term in context],
+        trivial=trivial,
+    )
+
+
+def _split_diff(evidence: str) -> tuple[str, str]:
+    """A unified diff separated into what changed and what is only context.
+
+    `---`, `+++` and `@@` are neither: they are the diff's own framing, and
+    counting the file header as changed text would make every filename in it
+    look like an edit.
+    """
+    changed: list[str] = []
+    context: list[str] = []
+    for line in evidence.splitlines():
+        if line.startswith(("---", "+++", "@@", "[diff truncated")):
+            continue
+        if line.startswith(("+", "-")):
+            changed.append(line[1:])
+        else:
+            context.append(line[1:] if line.startswith(" ") else line)
+    return "\n".join(changed), "\n".join(context)

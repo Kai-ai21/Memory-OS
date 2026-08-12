@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from memoryos.api.routes import (
     answer,
+    evolution,
     health,
     judgements,
     memories,
@@ -45,6 +46,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # answer 422 for a UUID that was never meant to be one. A literal path
     # segment must be registered ahead of the parameterised one that shadows it.
     app.include_router(timeline.router)
+    # Also before `memories`: `/memories/{memory_id}/evolution` is more specific
+    # than `/memories/{memory_id}` but FastAPI matches in registration order, not
+    # by specificity, and the two do not collide only because their path lengths
+    # differ. Registered here so the grouping stays obvious rather than lucky.
+    app.include_router(evolution.router)
     app.include_router(memories.router)
     app.include_router(stats.router)
     app.include_router(judgements.router)

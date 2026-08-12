@@ -1,6 +1,52 @@
 {
   "components": {
     "schemas": {
+      "AffectedChunkOut": {
+        "properties": {
+          "char_end": {
+            "title": "Char End",
+            "type": "integer"
+          },
+          "char_start": {
+            "title": "Char Start",
+            "type": "integer"
+          },
+          "definition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "spans": {
+            "title": "Spans",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "ordinal",
+          "char_start",
+          "char_end",
+          "definition",
+          "spans"
+        ],
+        "title": "AffectedChunkOut",
+        "type": "object"
+      },
       "AnswerIn": {
         "description": "Everything a search takes, plus the generation budget.\n\nInherited rather than redeclared: an answer is a search with a model on the\nend, and two definitions of \"how do I filter\" is how they drift apart.",
         "properties": {
@@ -649,6 +695,99 @@
         "title": "CreateSource",
         "type": "object"
       },
+      "DiffOut": {
+        "properties": {
+          "added_chars": {
+            "title": "Added Chars",
+            "type": "integer"
+          },
+          "affected_chunks": {
+            "items": {
+              "$ref": "#/components/schemas/AffectedChunkOut"
+            },
+            "title": "Affected Chunks",
+            "type": "array"
+          },
+          "chunk_delta": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Delta"
+          },
+          "from_id": {
+            "format": "uuid",
+            "title": "From Id",
+            "type": "string"
+          },
+          "from_version": {
+            "title": "From Version",
+            "type": "integer"
+          },
+          "is_empty": {
+            "title": "Is Empty",
+            "type": "boolean"
+          },
+          "removed_chars": {
+            "title": "Removed Chars",
+            "type": "integer"
+          },
+          "span_count": {
+            "title": "Span Count",
+            "type": "integer"
+          },
+          "spans": {
+            "items": {
+              "$ref": "#/components/schemas/SpanOut"
+            },
+            "title": "Spans",
+            "type": "array"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SummaryOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to_id": {
+            "format": "uuid",
+            "title": "To Id",
+            "type": "string"
+          },
+          "to_version": {
+            "title": "To Version",
+            "type": "integer"
+          },
+          "unified": {
+            "title": "Unified",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_id",
+          "to_id",
+          "from_version",
+          "to_version",
+          "added_chars",
+          "removed_chars",
+          "chunk_delta",
+          "is_empty",
+          "span_count",
+          "spans",
+          "affected_chunks",
+          "unified"
+        ],
+        "title": "DiffOut",
+        "type": "object"
+      },
       "DoctorOut": {
         "properties": {
           "chunker_version": {
@@ -683,6 +822,52 @@
           "model_window"
         ],
         "title": "DoctorOut",
+        "type": "object"
+      },
+      "EvolutionOut": {
+        "properties": {
+          "diffs": {
+            "items": {
+              "$ref": "#/components/schemas/DiffOut"
+            },
+            "title": "Diffs",
+            "type": "array"
+          },
+          "external_key": {
+            "title": "External Key",
+            "type": "string"
+          },
+          "memory_id": {
+            "format": "uuid",
+            "title": "Memory Id",
+            "type": "string"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          },
+          "source_name": {
+            "title": "Source Name",
+            "type": "string"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/memoryos__api__routes__evolution__VersionOut"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "memory_id",
+          "source_id",
+          "source_name",
+          "external_key",
+          "versions",
+          "diffs"
+        ],
+        "title": "EvolutionOut",
         "type": "object"
       },
       "ExcerptOut": {
@@ -1341,7 +1526,7 @@
           },
           "versions": {
             "items": {
-              "$ref": "#/components/schemas/VersionOut"
+              "$ref": "#/components/schemas/memoryos__api__routes__memories__VersionOut"
             },
             "title": "Versions",
             "type": "array"
@@ -1813,6 +1998,54 @@
         "title": "SourceOut",
         "type": "object"
       },
+      "SpanOut": {
+        "properties": {
+          "a_end": {
+            "title": "A End",
+            "type": "integer"
+          },
+          "a_start": {
+            "title": "A Start",
+            "type": "integer"
+          },
+          "a_text": {
+            "title": "A Text",
+            "type": "string"
+          },
+          "b_end": {
+            "title": "B End",
+            "type": "integer"
+          },
+          "b_start": {
+            "title": "B Start",
+            "type": "integer"
+          },
+          "b_text": {
+            "title": "B Text",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "a_start",
+          "a_end",
+          "b_start",
+          "b_end",
+          "a_text",
+          "b_text"
+        ],
+        "title": "SpanOut",
+        "type": "object"
+      },
       "StatsOut": {
         "properties": {
           "cache_entries": {
@@ -1872,6 +2105,58 @@
           "model_window"
         ],
         "title": "StatsOut",
+        "type": "object"
+      },
+      "SummaryOut": {
+        "properties": {
+          "cached": {
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "context_only": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Context Only",
+            "type": "array"
+          },
+          "grounded": {
+            "title": "Grounded",
+            "type": "boolean"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "summarizer_version": {
+            "title": "Summarizer Version",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "trivial": {
+            "title": "Trivial",
+            "type": "boolean"
+          },
+          "unsupported": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unsupported",
+            "type": "array"
+          }
+        },
+        "required": [
+          "text",
+          "model_id",
+          "summarizer_version",
+          "grounded",
+          "trivial",
+          "cached"
+        ],
+        "title": "SummaryOut",
         "type": "object"
       },
       "SyncAccepted": {
@@ -2086,9 +2371,49 @@
         "title": "VerificationOut",
         "type": "object"
       },
-      "VersionOut": {
-        "description": "One version, with both clocks and both hashes.\n\nM4.1 draws these on a small timeline, which needs `occurred_at` as well as\n`ingested_at` \u2014 the two are a different story per version, and a history\nshowing only when the system read something cannot say when the thing it\nread was written.\n\nThe hashes are what \"what changed\" is answered from. `content_hash`\ndiffering with `normalized_hash` identical is a real and common case \u2014 a\ntrailing newline, a line ending, a byte the normalizer discards \u2014 and it is\nthe difference between a version that changed the corpus and one that only\nchanged the file.",
+      "memoryos__api__routes__evolution__VersionOut": {
         "properties": {
+          "adopted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adopted"
+          },
+          "bytes_changed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes Changed"
+          },
+          "change": {
+            "title": "Change",
+            "type": "string"
+          },
+          "characters": {
+            "title": "Characters",
+            "type": "integer"
+          },
+          "chunker_versions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Chunker Versions",
+            "type": "array"
+          },
+          "chunks": {
+            "title": "Chunks",
+            "type": "integer"
+          },
           "content_hash": {
             "title": "Content Hash",
             "type": "string"
@@ -2105,6 +2430,10 @@
             ],
             "title": "Deleted At"
           },
+          "holds_chunks": {
+            "title": "Holds Chunks",
+            "type": "boolean"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -2118,6 +2447,10 @@
           "is_current": {
             "title": "Is Current",
             "type": "boolean"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
           },
           "normalized_hash": {
             "anyOf": [
@@ -2146,6 +2479,28 @@
             "title": "Occurred At Source",
             "type": "string"
           },
+          "text_changed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Changed"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
           "version": {
             "title": "Version",
             "type": "integer"
@@ -2155,12 +2510,22 @@
           "id",
           "version",
           "is_current",
+          "kind",
+          "title",
           "content_hash",
           "normalized_hash",
           "occurred_at",
           "occurred_at_source",
           "ingested_at",
-          "deleted_at"
+          "deleted_at",
+          "characters",
+          "chunks",
+          "holds_chunks",
+          "chunker_versions",
+          "adopted",
+          "text_changed",
+          "bytes_changed",
+          "change"
         ],
         "title": "VersionOut",
         "type": "object"
@@ -2248,6 +2613,85 @@
           "embedded"
         ],
         "title": "ChunkOut",
+        "type": "object"
+      },
+      "memoryos__api__routes__memories__VersionOut": {
+        "description": "One version, with both clocks and both hashes.\n\nM4.1 draws these on a small timeline, which needs `occurred_at` as well as\n`ingested_at` \u2014 the two are a different story per version, and a history\nshowing only when the system read something cannot say when the thing it\nread was written.\n\nThe hashes are what \"what changed\" is answered from. `content_hash`\ndiffering with `normalized_hash` identical is a real and common case \u2014 a\ntrailing newline, a line ending, a byte the normalizer discards \u2014 and it is\nthe difference between a version that changed the corpus and one that only\nchanged the file.",
+        "properties": {
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "ingested_at": {
+            "format": "date-time",
+            "title": "Ingested At",
+            "type": "string"
+          },
+          "is_current": {
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "normalized_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Hash"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "occurred_at_source": {
+            "title": "Occurred At Source",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "is_current",
+          "content_hash",
+          "normalized_hash",
+          "occurred_at",
+          "occurred_at_source",
+          "ingested_at",
+          "deleted_at"
+        ],
+        "title": "VersionOut",
         "type": "object"
       },
       "memoryos__api__routes__search__ChunkOut": {
@@ -2780,6 +3224,99 @@
         "summary": "Get Memory",
         "tags": [
           "memories"
+        ]
+      }
+    },
+    "/memories/{memory_id}/evolution": {
+      "get": {
+        "operationId": "get_evolution_memories__memory_id__evolution_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Diff this version instead.",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Diff this version instead.",
+              "title": "From"
+            }
+          },
+          {
+            "description": "\u2026against this one.",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "\u2026against this one.",
+              "title": "To"
+            }
+          },
+          {
+            "description": "Generate missing summaries. Costs a model call per diff.",
+            "in": "query",
+            "name": "summarize",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Generate missing summaries. Costs a model call per diff.",
+              "title": "Summarize",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvolutionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Evolution",
+        "tags": [
+          "evolution"
         ]
       }
     },
