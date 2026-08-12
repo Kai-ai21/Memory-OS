@@ -30,11 +30,13 @@ from memoryos.application.ports import (
     EntityNode,
     GraphEdge,
     GraphNode,
+    GraphReach,
     MemoryNode,
     SourceNode,
 )
 from memoryos.domain.values import EdgeType, GraphLabel, MemoryKind, Predicate
 from tests.integration.conftest import GraphFixture
+from tests.support.fakes import InMemoryGraphStore
 
 pytestmark = pytest.mark.graph
 
@@ -587,3 +589,127 @@ async def test_an_identity_property_the_edge_does_not_carry_is_refused(
     )
     with pytest.raises(UnknownGraphLabel, match="does not carry it"):
         await graph.store.link(edge)
+
+
+# --------------------------------------------------------------------------
+# The traversal M3.5 expands along
+#
+# `test_graph_expand.py` asserts what the expansion *does* with a traversal
+# against `InMemoryGraphStore`, whose walk is a breadth-first reimplementation of
+# the Cypher below. That is only legitimate if the two agree, and this is where
+# that is checked: same graph, same seeds, same depth, same reached set.
+# --------------------------------------------------------------------------
+
+
+async def test_the_traversal_reaches_what_the_fake_reaches(graph: GraphFixture) -> None:
+    """Cypher and the test double, over one graph, must return the same memories.
+
+    Not the same *rows* — Neo4j returns one row per path and the fake returns one
+    per newly-visited entity, so a densely-connected pair legitimately produces
+    different counts. What has to match is the answer the expansion consumes: which
+    memories were reached, through which entity, at what hop distance.
+    """
+    fixture = _co_mention_fixture(graph)
+    await graph_projection.write(graph.store, fixture.projection)
+    fake = InMemoryGraphStore()
+    await graph_projection.write(fake, fixture.projection)
+
+    minted = {UUID(value) for value in graph.minted}
+    real = await graph.store.reach([fixture.seed_entity], depth=2, limit=200)
+    faked = await fake.reach([fixture.seed_entity], depth=2, limit=200)
+
+    def summarise(rows: list[GraphReach]) -> set[tuple[str, str, int]]:
+        return {
+            (str(row.memory_id), str(row.entity_id), row.hops)
+            for row in rows
+            # `all_nodes` is the whole database, and so is a traversal: filtered to
+            # this test's own ids for the reason `_minted_projection` is.
+            if row.memory_id in minted and row.entity_id in minted
+        }
+
+    assert summarise(real) == summarise(faked)
+    assert summarise(real), "a traversal that reached nothing would prove nothing"
+
+
+async def test_a_hub_in_the_middle_of_a_path_is_excluded(graph: GraphFixture) -> None:
+    """Suppression applies to every node a path crosses, not to its endpoints.
+
+    A hub excluded only as a destination is still a bridge: at depth 2 a path
+    through it connects everything that mentions it to everything else that does.
+    The Cypher says `all(node IN nodes(path) ...)` for exactly this, and the null
+    guard in that predicate is load-bearing — `Memory` nodes carry no `entity_id`,
+    and `null IN $list` is null, which would make the whole clause null and drop
+    every path.
+    """
+    fixture = _co_mention_fixture(graph)
+    await graph_projection.write(graph.store, fixture.projection)
+    minted = {UUID(value) for value in graph.minted}
+
+    without = await graph.store.reach([fixture.seed_entity], depth=2, limit=200)
+    suppressed = await graph.store.reach(
+        [fixture.seed_entity],
+        depth=2,
+        exclude_entity_ids=[fixture.bridge_entity],
+        limit=200,
+    )
+
+    reached_before = {row.memory_id for row in without if row.memory_id in minted}
+    reached_after = {row.memory_id for row in suppressed if row.memory_id in minted}
+
+    assert fixture.far_memory in reached_before
+    assert fixture.far_memory not in reached_after, "the bridge was the only route"
+    assert fixture.near_memory in reached_after, "and the direct route survives"
+
+
+@dataclass(frozen=True, slots=True)
+class _CoMentionFixture:
+    projection: GraphProjection
+    seed_entity: UUID
+    bridge_entity: UUID
+    near_memory: UUID
+    far_memory: UUID
+
+
+def _co_mention_fixture(graph: GraphFixture) -> _CoMentionFixture:
+    """Three memories chained by two shared entities.
+
+        near --[seed, bridge]--> ...   far --[bridge]--> ...
+
+    `near` mentions both entities, so it is reachable from the seed in one hop;
+    `far` mentions only the bridge, so the only route to it runs through a node
+    that hub suppression can remove.
+    """
+    seed_entity, bridge_entity = graph.new_id(), graph.new_id()
+    origin, near, far = graph.new_id(), graph.new_id(), graph.new_id()
+
+    def mention(memory_id: UUID, entity_id: UUID) -> GraphEdge:
+        return GraphEdge(
+            type=EdgeType.MENTIONS,
+            start=GraphNode(GraphLabel.MEMORY, str(memory_id)),
+            end=GraphNode(GraphLabel.ENTITY, str(entity_id)),
+            properties={"mentions": 1, "chunk_ordinal": 0},
+        )
+
+    projection = GraphProjection(
+        memories=tuple(
+            MemoryNode(memory_id, f"notes/{name}.md", MemoryKind.NOTE, OCCURRED_AT)
+            for memory_id, name in ((origin, "origin"), (near, "near"), (far, "far"))
+        ),
+        entities=(
+            EntityNode(seed_entity, "SKIP LOCKED", "skip locked", "concept", 0.9),
+            EntityNode(bridge_entity, "worker", "worker", "concept", 0.9),
+        ),
+        edges=(
+            mention(origin, seed_entity),
+            mention(near, seed_entity),
+            mention(near, bridge_entity),
+            mention(far, bridge_entity),
+        ),
+    )
+    return _CoMentionFixture(
+        projection=projection,
+        seed_entity=seed_entity,
+        bridge_entity=bridge_entity,
+        near_memory=near,
+        far_memory=far,
+    )

@@ -51,3 +51,33 @@ database, and a swap needs somewhere to build the replacement. I expect
 `CREATE DATABASE` to be refused outright by the edition rather than by
 permissions, and the honest outcome to be documented downtime for the duration
 of `graph rebuild` — which on a projection this size should be seconds.
+
+## B3 — the five queries written for the graph
+
+Written before they were run, and before the graph was rebuilt over the completed
+extraction. Each names something that connects several documents without quoting
+any of them, so the M2.1 contamination rule holds by construction.
+
+The queries are described rather than quoted, because
+`tests/unit/test_golden_hygiene.py` fails the build when a golden query appears
+verbatim in a tracked file — a file holding the string becomes a lexical match for
+it. The five are recorded in `var/golden-set.json`, which is where they belong.
+
+| # | Query, described | Why the graph should win it | Prediction |
+| - | ---------------- | --------------------------- | ---------- |
+| 1 | which files the job queue design connects | The answer set spans a module, a migration, a model and a worker. Only some of them use the obvious words; the rest are connected by naming the same things. | graph wins |
+| 2 | what was worked on around the same time as another body of work | Nothing in the corpus phrases itself that way. The answer is whatever shares entities with it — a structural question wearing a temporal phrasing. | graph wins |
+| 3 | which parts of the system one component reaches into | The verb has no lexical footprint. The answer is the modules connected to it through the types and tables it names. | graph wins |
+| 4 | what connects two named subsystems | The question is about the path between them, which is the one query shape a variable-depth traversal exists for. | graph wins, weakly: the corpus may contain no such path |
+| 5 | which modules share the work of one design decision | Names a decision and asks for its neighbourhood. | uncertain: its central term is a rare literal, so the keyword leg may already find most of it |
+
+**Overall prediction for these five: 3 of 5 improve, 1 flat, 1 unchanged or worse.**
+The corpus-wide mean stays inside the resolution floor, for the reasons in the
+section above. If the graph wins 4 or 5 of these *and* the corpus-wide mean moves
+by more than 0.0122, my reasoning about this corpus was wrong and the graph earns
+its keep outright.
+
+**What I expect the failure mode to look like if it goes badly:** the expansion
+returns plausible-looking neighbours for every query, including the 41 it was not
+designed for, and drags a relevant result out of the top ten on one or two of them
+— a small negative delta rather than a wash.

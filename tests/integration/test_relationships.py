@@ -419,3 +419,61 @@ def _entity_node(entity_id: UUID, name: str) -> EntityNode:
         type=EntityType.CONCEPT.value,
         confidence=0.9,
     )
+
+
+async def test_a_relationship_on_an_entity_with_no_mentions_is_not_projected(
+    pipeline: Pipeline,
+) -> None:
+    """The projection has to be closed under its own edges.
+
+    `entity_relationships` rows survive the deletion of their entities' mentions —
+    the foreign keys cascade from chunks and memories, not from mentions — so a
+    re-extraction that stops finding an entity leaves rows pointing at one the
+    projection no longer writes a node for. Because `link` merges its endpoints,
+    each of those rows then *created* an `Entity` node carrying an id and nothing
+    else: the M3.3 defect again, through a different door.
+
+    Found by `graph verify` on the live corpus reporting four nameless nodes, which
+    is the check doing precisely what it was built for.
+    """
+    memory_id, chunk_id, entity_ids = await seed(pipeline)
+    subject, obj = entity_ids
+    async with pipeline.sessions.begin() as session:
+        session.add(
+            models.EntityRelationship(
+                id=new_id(),
+                subject_id=subject,
+                object_id=obj,
+                predicate=Predicate.USES.value,
+                confidence=0.9,
+                memory_id=memory_id,
+                chunk_id=chunk_id,
+                extractor_version="rel-test@1",
+            )
+        )
+
+    before = await graph_projection.read(pipeline.sessions)
+    assert [
+        edge for edge in before.edges if edge.type is graph_projection.ENTITY_EDGE_TYPE
+    ], "the edge is projected while both endpoints have mentions"
+
+    # The object keeps its row and loses its last mention, which is what a
+    # re-extraction that no longer finds it leaves behind.
+    async with pipeline.sessions.begin() as session:
+        await session.execute(
+            delete(models.EntityMention).where(models.EntityMention.entity_id == obj)
+        )
+
+    after = await graph_projection.read(pipeline.sessions)
+    projected = {str(node.entity_id) for node in after.entities}
+
+    assert not [
+        edge for edge in after.edges if edge.type is graph_projection.ENTITY_EDGE_TYPE
+    ], "an edge whose endpoint has no node must not be projected"
+    assert str(obj) not in projected
+    # And every edge that *is* projected names endpoints the projection covers,
+    # which is the invariant rather than this one case.
+    for edge in after.edges:
+        if edge.type is graph_projection.ENTITY_EDGE_TYPE:
+            assert edge.start.key in projected
+            assert edge.end.key in projected

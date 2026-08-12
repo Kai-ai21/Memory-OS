@@ -1275,6 +1275,158 @@ exactly the reason `Snapshot` has never held an entity row: a diff of a section
 that is empty by design on one side is a check that fails every time and teaches
 nobody anything.
 
+## Graph-augmented retrieval
+
+M3.5 adds a fifth ranking to M2.3's weighted RRF:
+
+```
+rankings = [vector, keyword, recency, importance, graph]
+```
+
+```bash
+MEMOS_WEIGHT_GRAPH=1.0 memoryos search "what shares an entity with the parser registry" --explain
+memoryos evaluate --k 10 --compare var/baseline-hybrid.json
+memoryos tune-weights --grid coarse
+```
+
+**What it is for.** Vector retrieval finds text that means the same thing; keyword
+retrieval finds text that says the same thing. Both are similarity relations over
+one document at a time, and both are blind to the same class of answer: the memory
+that shares no vocabulary and no paraphrase with the query and is relevant because
+it is *about the same things*.
+
+**Why it might not work.** An entity mentioned in fifty memories connects all
+fifty, so expanding along it produces fifty weakly-related candidates and calls
+them evidence. Two guards decide which happens.
+
+### Hub suppression, which is IDF applied to graph nodes
+
+An entity appearing in more than `MEMOS_GRAPH_HUB_RATIO` of the reachable memories
+(default 10%) is excluded from the traversal, and everything below the threshold is
+weighted by `log(1 + N/df)`. So a shared mention of `SKIP LOCKED` counts for far
+more than a shared mention of `postgres` on a corpus about Postgres.
+
+Two details earn their place. The exclusion is applied to **every node a path
+crosses**, not to its endpoints: a hub excluded only as a destination is still a
+bridge, and at depth 2 a bridge connects everything that mentions it to everything
+else that does. And the denominator is the number of memories the graph can
+*reach* — memories with at least one mention — not the size of the corpus, because
+an entity in 20 of 34 extracted memories is a hub of everything the graph knows.
+
+The threshold is floored at 2. Without the floor, `ceil(3 × 0.10) = 1` makes every
+entity a hub on a small corpus, expansion reaches nothing, and the graph looks
+useless when what was wrong was the arithmetic.
+
+### Depth, in entity hops
+
+`MEMOS_GRAPH_DEPTH` counts *entity* hops and defaults to 2; the Cypher bound is
+twice that, because an entity reaches another either directly through a
+`RELATES_TO` edge or through a memory that mentions both. Depth 3 on a graph this
+connected reaches most of the corpus, and a ranking that contains everything is
+not a ranking.
+
+### The one ranking that introduces candidates
+
+M2.3's recency and importance signals only reorder what the retrievers found — a
+document can be promoted for being recent but cannot appear for it. Graph
+expansion has to introduce rows, because the memory that shares no vocabulary with
+the query is by construction not in either retriever's list. That is the point, and
+it is also the risk, and it is why `MEMOS_WEIGHT_GRAPH` defaults to **0.5** rather
+than 1.0: a graph-only candidate contributes 0.5/61 against a retriever's 1/61, so
+a chunk both retrievers rank first still outranks anything the graph found alone.
+
+At weight 0 the expansion does not run and its candidates never reach the fusion —
+not merely a zero-weighted term, because a chunk fused at score zero would sort
+below everything and change the result. That is what makes "graph weight 0
+reproduces M2.3 exactly" true by construction.
+
+`ScoreBreakdown` gains `graph_rank`, `graph_score` and `graph_path`, and the path
+is not a debugging aid. Expansion is the ranking whose contribution a reader is
+least able to reconstruct — a promoted result may share no word with the query — so
+`search --explain` prints the route:
+
+```
+from: keyword #3 (0.0891)  graph #2 via job queue -> SKIP LOCKED
+```
+
+### What it measured, and why the weight ships at zero
+
+The milestone specified `MEMOS_WEIGHT_GRAPH=0.5`. It ships at **0.0**, because two
+measurements overrode it. Both are controlled A/Bs — same code, same corpus, same
+46-query golden set, graph off versus on — because the committed
+`var/baseline-hybrid.json` predates M2.4's reranking and comparing against it would
+mix two changes.
+
+| configuration | queries the graph reached | results it alone found | recall@10 | precision@10 | MRR | nDCG@10 |
+| ------------- | ------------------------- | ---------------------- | --------- | ------------ | --- | ------- |
+| graph off (control) | — | — | 0.809 | 0.472 | 0.814 | 0.768 |
+| weight 0.5, hubs 10% | 0/46 | 0 | +0.000 | +0.000 | +0.000 | +0.000 |
+| weight 1.0, hubs 10% | 9/46 | 14 | −0.007 | −0.007 | +0.000 | −0.007 |
+| weight 1.0, hubs 30% | 18/46 | 33 | **−0.029** | −0.020 | +0.004 | **−0.019** |
+| weight 1.0, no suppression | 17/46 | 33 | −0.031 | −0.022 | +0.004 | −0.021 |
+
+Against the resolution floor of **0.0122** measured in M2.3a: every gain is inside
+it, and the recall and nDCG *losses* at weight 1.0 are outside it. That is the
+uncomfortable version of the result — not "no evidence of help" but evidence of
+harm, at the only weights where the ranking does anything.
+
+**At 0.5 the ranking is arithmetically inert, and that is not a corpus fact.** RRF's
+curve is flat by design: a graph-only candidate at rank 1 contributes 0.5/61 =
+0.0082, while a vector-only candidate at rank 30 contributes 1/90 = 0.0111 — and
+the vector leg returns fifty of them. Placing a graph-only candidate above vector
+rank *r* needs weight > 61/(60+r), so above rank 10 it needs 0.87. Any weight low
+enough to be safe is too low to introduce anything, and the safety argument for
+0.5 was therefore an argument for a ranking that cannot act. **An introducing
+ranking and a rank-flattening fusion are in tension, and this is where that shows
+up.** Expansion contributed candidates for 18 of 46 queries and not one of them
+reached the top ten at 0.5.
+
+Per query at weight 1.0, 13 of 46 moved — 9 worse, 4 better. The four largest
+losses are all recall: a question about two workers and one job (−0.281 nDCG,
+−0.429 recall), one about what was worked on around the time of the chunking work
+(−0.243, −0.333), one about a long-running job holding its claim (−0.177, −0.250),
+and one about cleaning text before splitting it (−0.113, −0.250). In each case the
+expansion placed a connected-but-wrong memory above a relevant one.
+
+The largest gain is the query about what the parser registry touches: **+0.064
+nDCG, +0.083 recall**, and it is the graph working exactly as designed.
+`parsers/pdf.py` entered at rank 5, correctly relevant, found by **neither
+retriever** — reached through `ParsedDocument -> PdfReader`, an entity it shares
+with the registry. That is an answer no index could have produced. It is also one
+query out of forty-six.
+
+The queries themselves are not quoted here, and that is not squeamishness:
+`tests/unit/test_golden_hygiene.py` fails the build when a golden query appears
+verbatim in a tracked file, because a file holding the query becomes a lexical
+match for it and the benchmark starts measuring its own footprint. It caught this
+section.
+
+**The confound, stated plainly.** Entity extraction has reached 21 of 162 memories
+(13%). Groq's free tier caps `llama-3.3-70b-versatile` at 100,000 tokens per *day*
+and this corpus needs roughly 730,000 to extract; `llama-3.1-8b-instant` is bound
+at 6,000 tokens per minute, over-extracts at 6.1 mentions per chunk against the
+70b's 4.7, and truncated its JSON on 12% of memories; `openai/gpt-oss-20b` spends
+its entire completion budget on reasoning tokens and returns no text at all. So the
+graph can see a fifth of the corpus, and three of the five queries written for it
+saw no expansion because their answers are in the unextracted four fifths. **A
+larger graph could change the sign of these numbers. It could not change the
+arithmetic above.**
+
+### Neo4j cannot walk from an entity back to itself
+
+Found by a test comparing the Cypher against the in-memory store's breadth-first
+walk. The most valuable expansion there is — *another memory mentions the same
+thing retrieval just found* — is a path `(seed)-[:MENTIONS]-(m)-[:MENTIONS]-(seed)`,
+and Neo4j's relationship-uniqueness rule forbids reusing one relationship inside a
+path, so it does not match. The route back only exists through a *different*
+memory, which is a longer and weaker connection.
+
+So direct co-mention is matched by its own query rather than by the traversal, and
+reported at two hops — the graph distance the path would have had — so that one
+scale weights a co-mention against a traversed hop. A `target <> seed` filter that
+looked like it was removing a degenerate self-path was in fact removing every
+direct co-mention in the corpus.
+
 ## Migrations
 
 ```bash

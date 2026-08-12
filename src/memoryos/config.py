@@ -67,6 +67,45 @@ class Settings(BaseSettings):
     weight_keyword: float = 1.0
     weight_recency: float = 0.0
     weight_importance: float = 0.0
+    # M3.5's graph expansion: the one ranking that *introduces* candidates rather
+    # than reordering them.
+    #
+    # **Zero, and that is the measurement rather than a placeholder.** The
+    # milestone specified 0.5; two results overrode it, and both are in the README.
+    #
+    # At 0.5 the ranking is arithmetically *inert*. RRF's curve is flat by design,
+    # so a graph-only candidate at rank 1 contributes 0.5/61 = 0.0082 while a
+    # vector-only candidate at rank 30 contributes 1/90 = 0.0111 — and the vector
+    # leg returns fifty. Measured over 46 golden queries: expansion produced
+    # candidates for 18 of them and *not one* reached the top ten. It cost 30-140ms
+    # per query to change nothing.
+    #
+    # At 1.0 it places candidates and they are worse than what they displace:
+    # recall@10 falls 0.029 and nDCG@10 falls 0.019, both larger than the 0.0122
+    # resolution floor, so that is real harm rather than noise. Per query, 1 of the
+    # 5 written for the graph improved (+0.064 nDCG), 1 fell sharply (-0.243), and
+    # 3 saw no contribution at all.
+    #
+    # The machinery stays and the knob stays, exactly as M2.3b left recency and
+    # importance: this corpus is one person's prose about one system, where
+    # structural relatedness and semantic relatedness are nearly the same relation.
+    # A corpus of meetings, commits and invoices sharing a person might answer
+    # differently — and extraction here has reached only 13% of the corpus, which
+    # bounds what the number can mean. See the README.
+    weight_graph: float = 0.0
+    # Entity hops the expansion traverses. Two, because depth 3 on a graph this
+    # connected reaches most of the corpus and a ranking that contains everything
+    # is not a ranking.
+    graph_depth: int = 2
+    # The share of reachable memories an entity may appear in before it is treated
+    # as carrying no information. An entity in a tenth of the corpus is a bridge
+    # every path can cross, and at depth 2 a bridge connects everything to
+    # everything — which is what hub suppression exists to prevent.
+    graph_hub_ratio: float = 0.10
+    # How many of hybrid retrieval's memories seed the expansion. A precision
+    # bound rather than a cost one: expanding from a memory retrieval ranked
+    # fortieth expands from something retrieval was not sure about.
+    graph_seed_memories: int = 10
     # The cross-encoder that rescores the shortlist. Sourced from the adapter
     # for the same reason the embedder is: two copies of a model name is how the
     # CLI ended up running a different model from the tests.

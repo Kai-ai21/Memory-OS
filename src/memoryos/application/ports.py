@@ -435,8 +435,21 @@ class ScoreBreakdown:
     # the same as one it scored badly.
     rerank_score: float | None = None
     rerank_rank: int | None = None
+    # M3.5's graph expansion. `graph_rank` is where the expansion placed this
+    # chunk; `graph_path` is the entity route that reached it, seed entity first.
+    #
+    # The path is not a debugging aid. Graph expansion is the one ranking that
+    # *introduces* candidates rather than reordering them, so it is the one whose
+    # contribution a reader is least able to reconstruct — a result that shares no
+    # word with the query is inexplicable without the route, and an unexplained
+    # promotion is exactly what M2.5 built this dataclass to prevent. A chunk with
+    # a `graph_rank` and no `graph_path` would be the same failure wearing a
+    # number.
+    graph_rank: int | None = None
+    graph_score: float | None = None
+    graph_path: tuple[str, ...] | None = None
 
-    def as_dict(self) -> dict[str, float | int | None]:
+    def as_dict(self) -> dict[str, float | int | str | None]:
         return {
             "fused": self.fused,
             "vector_rank": self.vector_rank,
@@ -449,6 +462,11 @@ class ScoreBreakdown:
             "importance_score": self.importance_score,
             "rerank_score": self.rerank_score,
             "rerank_rank": self.rerank_rank,
+            "graph_rank": self.graph_rank,
+            "graph_score": self.graph_score,
+            # Rendered as the route a reader would follow, because that is what it
+            # is: `queue -> SKIP LOCKED -> worker`.
+            "graph_path": None if self.graph_path is None else " -> ".join(self.graph_path),
         }
 
 
@@ -871,6 +889,33 @@ class GraphPath:
         return len(self.edges)
 
 
+@dataclass(frozen=True, slots=True)
+class GraphReach:
+    """One memory the graph reached from a seed entity, and the route that reached it.
+
+    `route` is the entity names along the path, seed first, and it is not
+    decoration: it is what `ScoreBreakdown.graph_path` carries, and the reason a
+    graph contribution can be argued with rather than merely observed. A result
+    promoted because it shares an entity with something you already found is
+    explicable; one promoted by "the graph said so" is not.
+
+    `hops` is the *graph* path length, not the entity-hop depth. Two entities
+    connected by a `RELATES_TO` edge are one hop apart; two co-mentioned in the
+    same memory are two, because the path runs through the memory. Both are one
+    entity hop, and the distinction is kept here rather than flattened because a
+    typed relationship is a stronger claim than a co-mention and the ranking is
+    entitled to say so.
+    """
+
+    memory_id: UUID
+    # Which chunk of that memory named the entity. An ordinal, not an id, because
+    # that is what the projection stores — see `graph_projection._mention_edges`.
+    chunk_ordinal: int
+    entity_id: UUID
+    hops: int
+    route: tuple[str, ...]
+
+
 class GraphStore(Protocol):
     """The graph projection: relationships as first-class objects.
 
@@ -972,6 +1017,41 @@ class GraphStore(Protocol):
         well-connected entity has combinatorially many paths to the same handful
         of neighbours. Shortest-first is what makes the bound useful rather than
         arbitrary.
+        """
+        ...
+
+    async def reach(
+        self,
+        seed_entity_ids: Sequence[UUID],
+        *,
+        depth: int = 2,
+        exclude_entity_ids: Sequence[UUID] = (),
+        limit: int = 200,
+    ) -> list[GraphReach]:
+        """Memories reachable from these entities, shortest route first.
+
+        **This is the read M3.5 exists to make, and the one that justifies a graph
+        database rather than more Postgres tables.** It is a variable-depth
+        traversal whose bound is a parameter: `depth=1` is a join, `depth=2` is a
+        join of a join, and the recursive CTE that expresses the family degrades in
+        both cost and readability with every level. Here it is `[*1..4]`.
+
+        `depth` counts *entity* hops, and the query bounds graph hops at twice that
+        — an entity reaches another either directly, through a `RELATES_TO` edge, or
+        through a memory that mentions both. Depth 2 is the default because depth 3
+        on a connected graph reaches most of the corpus, which is not a ranking.
+
+        `exclude_entity_ids` is hub suppression, and it is applied *inside* the
+        traversal rather than to its results. An entity mentioned in a third of the
+        corpus does not merely add noise at the end: it is a bridge every path can
+        cross, so at depth 2 it connects everything to everything. Excluding hubs
+        afterwards would leave the paths that ran through them.
+
+        Undirected, for the reason `neighbours` is: `MENTIONS` points from a memory
+        to an entity, so a direction-respecting walk from an entity finds nothing.
+
+        `limit` bounds rows, and the ordering is what makes the bound meaningful:
+        shortest route first, then by id so a rerun agrees.
         """
         ...
 

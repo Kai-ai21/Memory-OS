@@ -23,6 +23,7 @@ from memoryos.application.ports import (
     GraphEdge,
     GraphNode,
     GraphPath,
+    GraphReach,
     LanguageModel,
     MemoryNode,
     Reranker,
@@ -355,6 +356,96 @@ class InMemoryGraphStore:
         self, entity_id: UUID, *, depth: int = 2, limit: int = 50
     ) -> list[GraphPath]:
         return []
+
+    async def reach(
+        self,
+        seed_entity_ids: Sequence[UUID],
+        *,
+        depth: int = 2,
+        exclude_entity_ids: Sequence[UUID] = (),
+        limit: int = 200,
+    ) -> list[GraphReach]:
+        """Breadth-first over the same edges the Cypher walks, hubs excluded.
+
+        Reimplemented rather than stubbed, because the tests it serves are about
+        what the *expansion* does with a traversal — which routes it keeps, how it
+        weights them, whether a hub can bridge a path — and a stub returning nothing
+        would let all of that pass untested. What it deliberately does not
+        establish is that Cypher agrees with it; that is
+        `test_graph.py::test_the_traversal_reaches_what_the_fake_reaches`.
+
+        Undirected and bounded at `2 * depth` graph hops, matching the adapter: an
+        entity reaches another through a `RELATES_TO` edge or through a memory that
+        mentions both.
+        """
+        excluded = {str(value) for value in exclude_entity_ids}
+        adjacency: dict[str, list[tuple[str, GraphLabel]]] = {}
+        for edge in self._edges.values():
+            if edge.type is EdgeType.FROM_SOURCE:
+                # Excluded from the walk for the reason the Cypher excludes it: it
+                # would make every memory of one source two hops from every other.
+                continue
+            adjacency.setdefault(edge.start.key, []).append((edge.end.key, edge.end.label))
+            adjacency.setdefault(edge.end.key, []).append((edge.start.key, edge.start.label))
+
+        mentions: dict[str, list[GraphEdge]] = {}
+        for edge in self._edges.values():
+            if edge.type is EdgeType.MENTIONS:
+                mentions.setdefault(edge.end.key, []).append(edge)
+
+        found: list[GraphReach] = []
+        for seed in sorted(str(value) for value in seed_entity_ids):
+            if seed in excluded:
+                continue
+
+            def emit(entity: str, hops: int, route: tuple[str, ...]) -> None:
+                for edge in mentions.get(entity, []):
+                    found.append(
+                        GraphReach(
+                            memory_id=UUID(edge.start.key),
+                            chunk_ordinal=int(edge.properties.get("chunk_ordinal", 0)),
+                            entity_id=UUID(entity),
+                            hops=hops,
+                            route=route,
+                        )
+                    )
+
+            # The seed itself, at two hops: entity-memory-entity is the shortest
+            # route from an entity back to itself, and it is the case "another
+            # memory mentions the same thing retrieval found" — the most valuable
+            # expansion there is. The Cypher reaches it by not excluding
+            # `target = seed`; here it has to be emitted before the walk, because a
+            # breadth-first search does not revisit its own start.
+            emit(seed, 2, (self._name_of(seed),))
+
+            frontier: list[tuple[str, int, tuple[str, ...]]] = [
+                (seed, 0, (self._name_of(seed),))
+            ]
+            visited = {seed}
+            while frontier:
+                key, hops, route = frontier.pop(0)
+                if hops >= 2 * depth:
+                    continue
+                for neighbour, label in sorted(adjacency.get(key, [])):
+                    if neighbour in visited or neighbour in excluded:
+                        continue
+                    visited.add(neighbour)
+                    is_entity = label is GraphLabel.ENTITY
+                    name = self._name_of(neighbour)
+                    onward = (
+                        (*route, name)
+                        if is_entity and (not route or route[-1] != name)
+                        else route
+                    )
+                    frontier.append((neighbour, hops + 1, onward))
+                    if is_entity:
+                        emit(neighbour, hops + 1, onward)
+        found.sort(key=lambda reach: (reach.hops, str(reach.memory_id), str(reach.entity_id)))
+        return found[:limit]
+
+    def _name_of(self, key: str) -> str:
+        node = self._nodes.get((GraphLabel.ENTITY, key))
+        return "" if node is None else str(node.properties.get("name", ""))
 
     # -- for assertions ------------------------------------------------
 

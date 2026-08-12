@@ -26,6 +26,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
+from memoryos.application.graph_expand import (
+    DEFAULT_SEED_MEMORIES,
+    ExpandThroughGraph,
+    GraphCandidates,
+)
 from memoryos.application.ports import (
     Embedder,
     KeywordStore,
@@ -136,11 +141,29 @@ class FusionWeights:
     keyword: float = 1.0
     recency: float = 0.0
     importance: float = 0.0
+    # M3.5. Below the retrievers at 0.5, and that is the whole safety argument for
+    # a ranking that introduces candidates: a graph-only chunk contributes 0.5/61
+    # against a retriever's 1/61, so the graph can lift a strongly-connected memory
+    # into the top ten and cannot manufacture an answer out of a weakly-connected
+    # one.
+    graph: float = 0.5
 
     @property
     def signals_are_off(self) -> bool:
         """True when this is M2.2 hybrid exactly, with no signal contribution."""
-        return self.recency == 0.0 and self.importance == 0.0
+        return self.recency == 0.0 and self.importance == 0.0 and self.graph == 0.0
+
+    @property
+    def graph_is_off(self) -> bool:
+        """True when expansion contributes nothing, so it need not run at all.
+
+        Checked before the traversal rather than only inside fusion. A weight of
+        zero already contributes no terms to the RRF sum, but the expansion is the
+        one ranking that costs a database round trip and a variable-depth walk —
+        and it is the one whose candidates would otherwise reach `by_id` and change
+        the result at weight zero. See `fuse`.
+        """
+        return self.graph == 0.0
 
     def as_dict(self) -> dict[str, float]:
         return {
@@ -148,6 +171,7 @@ class FusionWeights:
             "keyword": self.keyword,
             "recency": self.recency,
             "importance": self.importance,
+            "graph": self.graph,
         }
 
 
@@ -188,12 +212,20 @@ class SearchMemories:
         *,
         rerank_candidates: int = DEFAULT_RERANK_CANDIDATES,
         now: Callable[[], datetime] = _utcnow,
+        expand: ExpandThroughGraph | None = None,
+        seed_memories: int = DEFAULT_SEED_MEMORIES,
     ) -> None:
         self._sessions = session_factory
         self._embedder = embedder
         self._store = vector_store
         self._keywords = keyword_store
         self._weights = weights or FusionWeights()
+        # None means the graph is not wired at all, which is different from a
+        # weight of zero: one is a deployment without Neo4j, the other is a
+        # measured decision that expansion does not help. Both produce the hybrid
+        # ranking, and the distinction is visible in the logs rather than inferred.
+        self._expand = expand
+        self._seed_memories = seed_memories
         # None means no reranking is possible at all, which is different from a
         # caller passing `rerank=False` for one query. Both paths return the
         # fused ordering; only one of them is a configuration.
@@ -318,6 +350,10 @@ class SearchMemories:
         )
 
         signals = await self.signals_for(vector_chunks, keyword_chunks)
+        # Sequential after the retrievers, not concurrent with them, and that is
+        # forced rather than chosen: the expansion's seeds *are* the retrievers'
+        # top results. See `graph_expand`.
+        expansion = await self.expand(vector_chunks, keyword_chunks)
 
         return (
             fuse(
@@ -326,10 +362,57 @@ class SearchMemories:
                 signals=signals,
                 weights=self._weights,
                 rrf_k=rrf_k,
+                graph=expansion,
             ),
             embed_ms,
             embed_started,
         )
+
+    async def expand(
+        self, *chunk_lists: Sequence[ScoredChunk]
+    ) -> GraphCandidates | None:
+        """Graph candidates seeded from the retrievers' best memories.
+
+        Public because the tuner needs it: it re-fuses over cached candidates once
+        per weight combination, and the expansion — like the retrievals and the
+        signal scores — does not depend on the weights, so it is collected once.
+
+        Returns None when there is nothing wired or nothing to contribute, which
+        `fuse` treats identically to an empty ranking. Skipped entirely at weight
+        zero, because this is the one ranking that costs a variable-depth traversal.
+        """
+        if self._weights.graph_is_off:
+            return None
+        return await self._expansion_for(chunk_lists)
+
+    async def expand_for_tuning(
+        self, *chunk_lists: Sequence[ScoredChunk]
+    ) -> GraphCandidates | None:
+        """The expansion, collected regardless of the configured weight.
+
+        The tuner needs this and ordinary search must not have it. A grid whose
+        graph rows were all scored over an empty expansion — because
+        `MEMOS_WEIGHT_GRAPH` happened to be zero when the candidates were
+        collected — would report that the graph does nothing, and that report would
+        be a statement about the configuration rather than about the graph. The
+        weight belongs in the fusion, which is where the grid varies it.
+        """
+        return await self._expansion_for(chunk_lists)
+
+    async def _expansion_for(
+        self, chunk_lists: Sequence[Sequence[ScoredChunk]]
+    ) -> GraphCandidates | None:
+        if self._expand is None:
+            return None
+
+        # Seeded by fused order, which is not the same as either retriever's order
+        # and is the ordering the search is actually about to produce. Fusing twice
+        # would be circular, so the seeds come from a cheap unweighted pass: the
+        # chunks both retrievers found, best rank first.
+        seeds = _seed_memories(chunk_lists)
+        if not seeds:
+            return None
+        return await self._expand(seeds[: self._seed_memories], exclude=seeds)
 
     async def _rerank(
         self, query: str, chunks: Sequence[ScoredChunk]
@@ -544,8 +627,9 @@ def fuse(
     signals: SignalTable | None = None,
     weights: FusionWeights | None = None,
     rrf_k: int = DEFAULT_RRF_K,
+    graph: GraphCandidates | None = None,
 ) -> list[ScoredChunk]:
-    """One ranking from four, each chunk carrying where it came from.
+    """One ranking from five, each chunk carrying where it came from.
 
     Signals enter as *additional rankings*, not as multipliers on a fused score.
     A post-hoc multiplier would be a second, differently-shaped mechanism whose
@@ -564,9 +648,18 @@ def fuse(
     collapses to whatever remains, reordered by a function monotonic in rank,
     which preserves that ordering exactly. Nothing is special-cased, because a
     special case is a branch that only runs where nobody tests.
+
+    **The graph ranking is the one that introduces rows**, and at weight zero it
+    must introduce none. That is not arithmetic — a weight of zero contributes no
+    terms to the sum, but a chunk that reached `by_id` with no terms at all would
+    be fused at score zero and appear below everything, which is a changed result.
+    So the graph candidates are not merged into `by_id` at all unless the weight is
+    non-zero, which is what makes "graph weight 0 reproduces M2.3 exactly" true by
+    construction rather than by cancellation.
     """
     resolved = weights or FusionWeights()
     table = signals or SignalTable()
+    expansion = graph if graph is not None and not resolved.graph_is_off else None
 
     by_id: dict[str, ScoredChunk] = {}
     vector_ranks: dict[str, int] = {}
@@ -581,6 +674,16 @@ def fuse(
         # scores are preserved separately below.
         by_id.setdefault(str(chunk.chunk_id), chunk)
         keyword_ranks.setdefault(str(chunk.chunk_id), rank)
+
+    graph_ranks: dict[str, int] = {}
+    graph_scores: dict[str, float] = {}
+    if expansion is not None:
+        for rank, chunk in enumerate(expansion.chunks, start=1):
+            # `setdefault`, so a chunk a retriever already returned keeps that
+            # copy — same row, and the retriever's is the one carrying its score.
+            by_id.setdefault(str(chunk.chunk_id), chunk)
+            graph_ranks.setdefault(str(chunk.chunk_id), rank)
+            graph_scores.setdefault(str(chunk.chunk_id), chunk.score)
 
     vector_scores = {str(chunk.chunk_id): chunk.score for chunk in vector_chunks}
     keyword_scores = {str(chunk.chunk_id): chunk.score for chunk in keyword_chunks}
@@ -607,6 +710,7 @@ def fuse(
             [str(chunk.chunk_id) for chunk in keyword_chunks],
             recency_ranking,
             importance_ranking,
+            [] if expansion is None else expansion.ranking,
         ],
         k=rrf_k,
         weights=[
@@ -614,9 +718,11 @@ def fuse(
             resolved.keyword,
             resolved.recency,
             resolved.importance,
+            resolved.graph,
         ],
     )
 
+    routes = {} if expansion is None else expansion.routes
     return [
         replace(
             by_id[identifier],
@@ -634,9 +740,33 @@ def fuse(
                 importance_rank=importance_ranks.get(identifier),
                 recency_score=table.recency.get(identifier),
                 importance_score=table.importance.get(identifier),
+                graph_rank=graph_ranks.get(identifier),
+                graph_score=graph_scores.get(identifier),
+                graph_path=routes.get(identifier),
             ),
         )
         for identifier, score in fused
+    ]
+
+
+def _seed_memories(chunk_lists: Sequence[Sequence[ScoredChunk]]) -> list[UUID]:
+    """The retrieved memories, best rank first, deduplicated.
+
+    Interleaved by rank across the retrievers rather than concatenated, so the
+    seeds are not "everything vector found, then everything keyword found" — which
+    would make the seed set a property of argument order. A memory both retrievers
+    ranked highly comes first, which is the same agreement principle RRF applies
+    one level up.
+    """
+    best: dict[UUID, int] = {}
+    for chunks in chunk_lists:
+        for rank, chunk in enumerate(chunks, start=1):
+            current = best.get(chunk.memory_id)
+            if current is None or rank < current:
+                best[chunk.memory_id] = rank
+    return [
+        memory_id
+        for memory_id, _ in sorted(best.items(), key=lambda item: (item[1], str(item[0])))
     ]
 
 

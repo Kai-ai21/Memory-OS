@@ -1,12 +1,233 @@
 {
   "components": {
     "schemas": {
+      "AnswerIn": {
+        "description": "Everything a search takes, plus the generation budget.\n\nInherited rather than redeclared: an answer is a search with a model on the\nend, and two definitions of \"how do I filter\" is how they drift apart.",
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before"
+          },
+          "ef_search": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ef Search"
+          },
+          "exact": {
+            "default": false,
+            "title": "Exact",
+            "type": "boolean"
+          },
+          "explain": {
+            "default": true,
+            "title": "Explain",
+            "type": "boolean"
+          },
+          "include_deleted": {
+            "default": false,
+            "title": "Include Deleted",
+            "type": "boolean"
+          },
+          "k": {
+            "default": 10,
+            "title": "K",
+            "type": "integer"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MemoryKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_tokens": {
+            "default": 1024,
+            "title": "Max Tokens",
+            "type": "integer"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SearchMode",
+            "default": "hybrid"
+          },
+          "q": {
+            "minLength": 1,
+            "title": "Q",
+            "type": "string"
+          },
+          "rerank": {
+            "default": true,
+            "title": "Rerank",
+            "type": "boolean"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "required": [
+          "q"
+        ],
+        "title": "AnswerIn",
+        "type": "object"
+      },
+      "AnswerOut": {
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/CitationOut"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ContextOut"
+          },
+          "marked_answer": {
+            "title": "Marked Answer",
+            "type": "string"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "timing": {
+            "$ref": "#/components/schemas/AnswerTimingOut"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationOut"
+          }
+        },
+        "required": [
+          "question",
+          "answer",
+          "marked_answer",
+          "model_id",
+          "context",
+          "verification",
+          "timing"
+        ],
+        "title": "AnswerOut",
+        "type": "object"
+      },
+      "AnswerTimingOut": {
+        "properties": {
+          "assemble_ms": {
+            "title": "Assemble Ms",
+            "type": "integer"
+          },
+          "generate_ms": {
+            "title": "Generate Ms",
+            "type": "integer"
+          },
+          "retrieve_ms": {
+            "title": "Retrieve Ms",
+            "type": "integer"
+          },
+          "total_ms": {
+            "title": "Total Ms",
+            "type": "integer"
+          },
+          "verify_ms": {
+            "title": "Verify Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "retrieve_ms",
+          "assemble_ms",
+          "generate_ms",
+          "verify_ms",
+          "total_ms"
+        ],
+        "title": "AnswerTimingOut",
+        "type": "object"
+      },
       "BreakdownOut": {
         "description": "Where the score came from, per retriever.\n\nReturned on every hit in every mode. Once two retrievers are fused into one\nnumber, that number is the only thing a client can show, and without this it\ncannot say *why* \u2014 which is both how a bad ranking gets debugged and what\nM2.5's citations will render. A null rank means that retriever did not\nreturn the chunk, which is not the same as returning it last.",
         "properties": {
           "fused": {
             "title": "Fused",
             "type": "number"
+          },
+          "graph_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Path"
+          },
+          "graph_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Rank"
+          },
+          "graph_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Score"
           },
           "importance_rank": {
             "anyOf": [
@@ -212,6 +433,34 @@
         "title": "CitationOut",
         "type": "object"
       },
+      "ContextOut": {
+        "properties": {
+          "dropped": {
+            "title": "Dropped",
+            "type": "integer"
+          },
+          "passages": {
+            "title": "Passages",
+            "type": "integer"
+          },
+          "token_budget": {
+            "title": "Token Budget",
+            "type": "integer"
+          },
+          "tokens_used": {
+            "title": "Tokens Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "passages",
+          "dropped",
+          "token_budget",
+          "tokens_used"
+        ],
+        "title": "ContextOut",
+        "type": "object"
+      },
       "ContributionOut": {
         "properties": {
           "contribution": {
@@ -409,6 +658,17 @@
           "fused_score": {
             "title": "Fused Score",
             "type": "number"
+          },
+          "graph_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Path"
           },
           "rerank_score": {
             "anyOf": [
@@ -989,9 +1249,14 @@
         "type": "object"
       },
       "Readiness": {
+        "description": "What this instance can currently do.\n\n`status` and the HTTP code answer two different questions, and conflating\nthem is what makes a graph outage into an availability incident. The status\ncode answers \"should traffic come here?\"; the body answers \"what works?\".\n\nSo Postgres unreachable is a 503 \u2014 nothing works without it \u2014 while Neo4j\nunreachable is a 200 with `status: degraded`. The graph is a projection that\nonly M3.1 onwards reads, and returning 503 for it would have an orchestrator\nremove an instance that can still serve every Phase 1 and Phase 2 request:\ningestion, search, and answering would all go down to protect a feature none\nof them use.",
         "properties": {
           "database": {
             "title": "Database",
+            "type": "boolean"
+          },
+          "graph": {
+            "title": "Graph",
             "type": "boolean"
           },
           "pgvector_version": {
@@ -1017,7 +1282,8 @@
         "required": [
           "status",
           "database",
-          "pgvector_version"
+          "pgvector_version",
+          "graph"
         ],
         "title": "Readiness",
         "type": "object"
@@ -1157,6 +1423,37 @@
           "timing"
         ],
         "title": "SearchOut",
+        "type": "object"
+      },
+      "SentenceOut": {
+        "properties": {
+          "citations": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "factual": {
+            "title": "Factual",
+            "type": "boolean"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "unsupported": {
+            "title": "Unsupported",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text",
+          "citations",
+          "factual",
+          "unsupported"
+        ],
+        "title": "SentenceOut",
         "type": "object"
       },
       "SourceKind": {
@@ -1409,6 +1706,62 @@
         "title": "Verdict",
         "type": "string"
       },
+      "VerificationOut": {
+        "properties": {
+          "citation_rate": {
+            "title": "Citation Rate",
+            "type": "number"
+          },
+          "cited_indices": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Cited Indices",
+            "type": "array"
+          },
+          "factual_sentences": {
+            "title": "Factual Sentences",
+            "type": "integer"
+          },
+          "grounded": {
+            "title": "Grounded",
+            "type": "boolean"
+          },
+          "hallucinated_indices": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Hallucinated Indices",
+            "type": "array"
+          },
+          "is_refusal": {
+            "title": "Is Refusal",
+            "type": "boolean"
+          },
+          "sentences": {
+            "items": {
+              "$ref": "#/components/schemas/SentenceOut"
+            },
+            "title": "Sentences",
+            "type": "array"
+          },
+          "supported_sentences": {
+            "title": "Supported Sentences",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "citation_rate",
+          "factual_sentences",
+          "supported_sentences",
+          "hallucinated_indices",
+          "cited_indices",
+          "is_refusal",
+          "grounded"
+        ],
+        "title": "VerificationOut",
+        "type": "object"
+      },
       "VersionOut": {
         "properties": {
           "content_hash": {
@@ -1616,6 +1969,47 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/answer": {
+      "post": {
+        "operationId": "answer_answer_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnswerOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Answer",
+        "tags": [
+          "answer"
+        ]
+      }
+    },
     "/doctor": {
       "get": {
         "description": "The standing checks, rendered instead of read from a terminal.\n\nDeliberately the same `run_doctor` the CLI calls. It tokenizes candidate\nchunks with the real tokenizer, so this is not a free request \u2014 it is a\ndiagnostic somebody asked for, not something to poll.",

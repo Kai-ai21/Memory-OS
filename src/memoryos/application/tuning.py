@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.application.evaluate import _resolve_filters, _rows
 from memoryos.application.golden import GoldenSet, excluded_by
+from memoryos.application.graph_expand import GraphCandidates
 from memoryos.application.metrics import EvalResult, score
 from memoryos.application.ports import ScoredChunk
 from memoryos.application.search import (
@@ -59,16 +60,28 @@ RESOLUTION_FLOOR = 0.0122
 COARSE: dict[str, tuple[float, ...]] = {
     "recency": (0.0, 0.15, 0.3, 0.6),
     "importance": (0.0, 0.1, 0.2, 0.4),
+    # M3.5. Zero is in the grid deliberately and is the row every other row is
+    # judged against: it is M2.3's fusion exactly, so "does the graph help" is a
+    # comparison inside one table rather than between two runs of the harness.
+    "graph": (0.0, 0.25, 0.5, 1.0),
 }
 FINE: dict[str, tuple[float, ...]] = {
     "recency": (0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.45, 0.6, 0.9),
     "importance": (0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.45, 0.6, 0.9),
+    "graph": (0.0, 0.1, 0.25, 0.5, 0.75, 1.0),
 }
 
 
 @dataclass(frozen=True, slots=True)
 class Candidates:
-    """One query's retrieval, cached so every weight combination can reuse it."""
+    """One query's retrieval, cached so every weight combination can reuse it.
+
+    The graph expansion is cached here for the same reason the retrievals are: it
+    depends on the retrievers' top memories, not on the weights, so collecting it
+    once per query rather than once per combination is what keeps a 96-row grid a
+    minute instead of an afternoon. It is also what makes the comparison honest —
+    every row is scored over the same expansion.
+    """
 
     query_text: str
     vector: list[ScoredChunk]
@@ -77,6 +90,7 @@ class Candidates:
     metadata: dict[str, tuple[str, str | None, str, object, str]] = field(
         default_factory=dict
     )
+    graph: GraphCandidates | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,7 +129,15 @@ async def collect_candidates(
             query.query_text, k=wanted, filters=filters
         )
         signals = await search.signals_for(vector, keyword)
-        memory_ids = {chunk.memory_id for chunk in [*vector, *keyword]}
+        # Collected with a non-zero weight in force whatever the base weights say:
+        # a grid whose graph rows were all scored over an empty expansion — because
+        # the configured weight happened to be zero — would report that the graph
+        # does nothing, which is a statement about the configuration.
+        expansion = await search.expand_for_tuning(vector, keyword)
+        memory_ids = {
+            chunk.memory_id
+            for chunk in [*vector, *keyword, *(expansion.chunks if expansion else [])]
+        }
         metadata = {
             str(memory_id): row
             for memory_id, row in (await search.memory_metadata(list(memory_ids))).items()
@@ -127,6 +149,7 @@ async def collect_candidates(
                 keyword=keyword,
                 signals=signals,
                 metadata=metadata,
+                graph=expansion,
             )
         )
 
@@ -147,12 +170,15 @@ def score_grid(
     by_text = {query.query_text: query for query in golden.queries}
     rows: list[GridRow] = []
 
-    for recency, importance in itertools.product(grid["recency"], grid["importance"]):
+    for recency, importance, graph_weight in itertools.product(
+        grid["recency"], grid["importance"], grid["graph"]
+    ):
         weights = FusionWeights(
             vector=base.vector,
             keyword=base.keyword,
             recency=recency,
             importance=importance,
+            graph=graph_weight,
         )
         results = [
             _score_one(by_text[found.query_text], found, golden, k=k, weights=weights, rrf_k=rrf_k)
@@ -175,7 +201,13 @@ def score_grid(
     # which is what a weight change actually moves. Ties broken by MRR then by
     # the weights themselves, so a rerun produces the same table.
     rows.sort(
-        key=lambda row: (-row.ndcg, -row.mrr, row.weights.recency, row.weights.importance)
+        key=lambda row: (
+            -row.ndcg,
+            -row.mrr,
+            row.weights.recency,
+            row.weights.importance,
+            row.weights.graph,
+        )
     )
     return rows
 
@@ -195,6 +227,7 @@ def _score_one(
         signals=found.signals,
         weights=weights,
         rrf_k=rrf_k,
+        graph=found.graph,
     )
     hits = _group(chunks, found.metadata)
     kept = [
@@ -262,11 +295,13 @@ def format_grid(
 ) -> str:
     """The top combinations, with every gain judged against the floor."""
     lines = [
-        f"{'recency':>8}{'import':>8}{'nDCG@10':>10}{'MRR':>9}{'recall':>9}{'prec':>9}"
+        f"{'recency':>8}{'import':>8}{'graph':>8}"
+        f"{'nDCG@10':>10}{'MRR':>9}{'recall':>9}{'prec':>9}"
     ]
     for row in rows[:top]:
         lines.append(
             f"{row.weights.recency:>8.2f}{row.weights.importance:>8.2f}"
+            f"{row.weights.graph:>8.2f}"
             f"{row.ndcg:>10.4f}{row.mrr:>9.4f}{row.recall:>9.4f}{row.precision:>9.4f}"
         )
 
@@ -277,10 +312,18 @@ def format_grid(
     gain = best.ndcg - baseline.ndcg
     lines += [
         "",
-        f"signals off (recency 0, importance 0): nDCG {baseline.ndcg:.4f}",
-        f"best combination:                      nDCG {best.ndcg:.4f}  ({gain:+.4f})",
+        f"all off (recency 0, importance 0, graph 0): nDCG {baseline.ndcg:.4f}",
+        f"best combination:                          nDCG {best.ndcg:.4f}  ({gain:+.4f})",
         "",
     ]
+    graph_only = _best_graph_only(rows)
+    if graph_only is not None:
+        graph_gain = graph_only.ndcg - baseline.ndcg
+        lines += [
+            f"best with graph alone (weight {graph_only.weights.graph:.2f}): "
+            f"nDCG {graph_only.ndcg:.4f}  ({graph_gain:+.4f})",
+            "",
+        ]
     if abs(gain) < floor:
         lines.append(
             f"That difference is smaller than the measured resolution floor "
@@ -297,11 +340,28 @@ def format_grid(
 
 
 def baseline_row(rows: Sequence[GridRow]) -> GridRow | None:
-    """The combination with both signals off: M2.2 hybrid, inside this grid."""
+    """The combination with every added ranking off: M2.2 hybrid, inside this grid."""
     for row in rows:
         if row.weights.signals_are_off:
             return row
     return None
+
+
+def _best_graph_only(rows: Sequence[GridRow]) -> GridRow | None:
+    """The best row with the graph on and both M2.3 signals off.
+
+    Reported separately from the best row overall, because the best overall may owe
+    its position to a recency weight — and the question this milestone asks is what
+    the *graph* is worth, held against the same baseline it is being added to.
+    """
+    candidates = [
+        row
+        for row in rows
+        if row.weights.graph > 0.0
+        and row.weights.recency == 0.0
+        and row.weights.importance == 0.0
+    ]
+    return max(candidates, key=lambda row: row.ndcg, default=None)
 
 
 def _mean(values: object) -> float:

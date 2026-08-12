@@ -168,7 +168,24 @@ async def read(
         sources = await _sources(session, set(source_of.values()))
         entities, entity_ids = await _entities(session, resolved)
         mentions = await _mention_edges(session, resolved)
-        relates = await _relationship_edges(session, entity_ids or None)
+        relates = await _relationship_edges(
+            session, entity_ids or None, await _projectable_entity_ids(session)
+        )
+        # A scoped projection may legitimately carry an edge to an entity outside
+        # its scope — the sync is responsible for one endpoint, not both. Those
+        # endpoints are fetched so the write covers them: `link` merges an endpoint
+        # it is given, so an edge written without its node is a node with nothing
+        # on it. Cheap, because it is at most a handful of ids.
+        beyond = {
+            UUID(node.key) for edge in relates for node in (edge.start, edge.end)
+        } - entity_ids
+        if beyond:
+            entities = tuple(
+                sorted(
+                    entities + await _entities_by_id(session, beyond),
+                    key=lambda node: node.entity_id,
+                )
+            )
 
     return GraphProjection(
         sources=sources,
@@ -349,8 +366,70 @@ async def _mention_edges(session: AsyncSession, scope: Scope) -> tuple[GraphEdge
     )
 
 
+async def _projectable_entity_ids(session: AsyncSession) -> set[UUID]:
+    """Every entity this module would write a node for, corpus-wide.
+
+    The condition `_entities` applies, asked without a scope, because it is used to
+    keep the projection **closed under its own edges** — and that closure is a
+    property of the whole corpus rather than of whatever neighbourhood is being
+    synced.
+
+    The closure is not theoretical. `entity_relationships` rows survive the deletion
+    of their entities' mentions: the foreign keys cascade from chunks and memories,
+    not from mentions, so a re-extraction that stops finding an entity leaves rows
+    pointing at one this module no longer projects. `link` merges its endpoints, so
+    each of those rows then *created* an `Entity` node carrying an id and nothing
+    else — exactly the M3.3 defect arriving through a different door, and found by
+    `graph verify` reporting four nameless nodes rather than by anybody reading the
+    code.
+    """
+    stmt = (
+        select(models.EntityMention.entity_id)
+        .join(models.Entity, models.Entity.id == models.EntityMention.entity_id)
+        .join(models.Memory, models.Memory.id == models.EntityMention.memory_id)
+        .where(
+            models.Entity.merged_into_id.is_(None),
+            models.Memory.is_current.is_(True),
+            models.Memory.deleted_at.is_(None),
+        )
+        .distinct()
+    )
+    return {row[0] for row in await session.execute(stmt)}
+
+
+async def _entities_by_id(
+    session: AsyncSession, entity_ids: set[UUID]
+) -> tuple[EntityNode, ...]:
+    """Entity nodes by id, for closing a scoped projection over its own edges."""
+    if not entity_ids:
+        return ()
+    stmt = (
+        select(
+            models.Entity.id,
+            models.Entity.name,
+            models.Entity.canonical_name,
+            models.Entity.type,
+            models.Entity.confidence,
+        )
+        .where(models.Entity.id.in_(entity_ids))
+        .order_by(models.Entity.id)
+    )
+    return tuple(
+        EntityNode(
+            entity_id=row[0],
+            name=row[1],
+            canonical_name=row[2],
+            type=row[3],
+            confidence=row[4] if row[4] is not None else 0.0,
+        )
+        for row in await session.execute(stmt)
+    )
+
+
 async def _relationship_edges(
-    session: AsyncSession, entity_ids: set[UUID] | None
+    session: AsyncSession,
+    entity_ids: set[UUID] | None,
+    projectable: set[UUID],
 ) -> tuple[GraphEdge, ...]:
     """`RELATES_TO` edges, with merged-away endpoints resolved to their winners.
 
@@ -416,6 +495,9 @@ async def _relationship_edges(
             identity=("predicate",),
         )
         for row in await session.execute(stmt)
+        # Both endpoints, resolved, have to be entities this projection writes
+        # nodes for. See `_projectable_entity_ids`.
+        if row[0] in projectable and row[1] in projectable
     )
 
 

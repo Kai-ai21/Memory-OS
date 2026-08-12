@@ -32,6 +32,7 @@ from memoryos.adapters.reranking.cross_encoder import CrossEncoderReranker
 from memoryos.application.answering import AnswerQuestion
 from memoryos.application.embed import EmbedMemory
 from memoryos.application.extraction import ExtractEntities
+from memoryos.application.graph_expand import ExpandThroughGraph
 from memoryos.application.graph_sync import SyncGraph
 from memoryos.application.jobs.handlers import build_default_registry
 from memoryos.application.jobs.registry import HandlerRegistry
@@ -200,6 +201,23 @@ class Container:
             weights or self.weights(),
             self.reranker,
             rerank_candidates=self.settings.rerank_candidates,
+            expand=self.graph_expansion(),
+            seed_memories=self.settings.graph_seed_memories,
+        )
+
+    def graph_expansion(self) -> ExpandThroughGraph:
+        """M3.5's expansion, wired to the same graph store everything else uses.
+
+        Always constructed, never connected here — the same reasoning as
+        `Container.build`'s graph store. An unreachable Neo4j makes the expansion
+        return nothing, which is a hybrid search, rather than making search fail.
+        """
+        return ExpandThroughGraph(
+            self.database.session_factory,
+            self.graph,
+            depth=self.settings.graph_depth,
+            hub_ratio=self.settings.graph_hub_ratio,
+            seed_memories=self.settings.graph_seed_memories,
         )
 
     def answer(self) -> AnswerQuestion:
@@ -233,6 +251,7 @@ class Container:
             keyword=self.settings.weight_keyword,
             recency=self.settings.weight_recency,
             importance=self.settings.weight_importance,
+            graph=self.settings.weight_graph,
         )
 
     def embed(self) -> EmbedMemory:

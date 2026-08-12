@@ -7,6 +7,7 @@ command gets written in it; the commands here do not need one.
 import argparse
 import asyncio
 import json
+import math
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -71,7 +72,7 @@ from memoryos.application.verify_citations import verify_citations
 from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
 from memoryos.container import Container
-from memoryos.domain.backoff import compute_backoff
+from memoryos.domain.backoff import wait_for
 from memoryos.domain.entities import Source
 from memoryos.domain.fusion import DEFAULT_RRF_K
 from memoryos.domain.ids import new_id
@@ -343,12 +344,21 @@ def _print_explanation(explained: ExplainedHit) -> None:
 
 
 def _describe(breakdown: ScoreBreakdown) -> str:
-    """One line of provenance: which retriever ranked this where."""
+    """One line of provenance: which ranking placed this where, and how.
+
+    The graph line carries its route, and that is not a nicety. Expansion is the
+    one ranking that introduces a result rather than reordering one, so a
+    graph-promoted hit may share no word with the query — and "the graph found it"
+    is not something a reader can check. `queue -> SKIP LOCKED -> worker` is.
+    """
     parts = []
     if breakdown.vector_rank is not None:
         parts.append(f"vector #{breakdown.vector_rank} ({breakdown.vector_score:.4f})")
     if breakdown.keyword_rank is not None:
         parts.append(f"keyword #{breakdown.keyword_rank} ({breakdown.keyword_score:.4f})")
+    if breakdown.graph_rank is not None:
+        route = " -> ".join(breakdown.graph_path or ())
+        parts.append(f"graph #{breakdown.graph_rank} via {route or 'an unnamed route'}")
     return "from: " + ("  ".join(parts) if parts else "nothing")
 
 
@@ -647,13 +657,33 @@ async def run_tune_weights(
             return 1
 
         grid = COARSE if grid_name == "coarse" else FINE
-        combinations = len(grid["recency"]) * len(grid["importance"])
+        # Every axis, not two of them. M3.5 added a third and this line kept
+        # reporting the size of the grid it used to be — a wrong number in the one
+        # place a reader looks to know how much of the space was searched.
+        combinations = math.prod(len(values) for values in grid.values())
         print(
             f"queries: {len(golden.queries)}   k={k}   grid={grid_name} "
             f"({combinations} combinations)\n"
         )
 
         candidates = await collect_candidates(golden, container.search(), sessions, k=k)
+        # Before the grid, because the grid cannot be read without it: a graph row
+        # that scores the same as the baseline means one of two very different
+        # things, and only expansion coverage says which.
+        reached = [found for found in candidates if found.graph and found.graph.chunks]
+        introduced = sum(len(found.graph.chunks) for found in reached if found.graph)
+        print(
+            f"graph expansion: candidates for {len(reached)}/{len(candidates)} "
+            f"queries, {introduced} chunks in total"
+        )
+        if not reached:
+            print(
+                "  nothing to fuse — every graph row below will equal the baseline. "
+                "Check extraction coverage with `memoryos entity-stats`.\n"
+            )
+        else:
+            print()
+
         rows = score_grid(
             golden, candidates, k=k, grid=grid, base=container.weights()
         )
@@ -828,7 +858,8 @@ async def _extract_with_backoff(
         except TransientError as exc:
             if attempt == EXTRACT_MAX_ATTEMPTS - 1:
                 raise
-            delay = compute_backoff(attempt)
+            # The provider's own number when it gave one. See `backoff.wait_for`.
+            delay = wait_for(exc, attempt)
             print(f"    rate limited ({exc}); waiting {delay:.0f}s")
             await asyncio.sleep(delay)
     raise AssertionError("unreachable")
@@ -918,7 +949,8 @@ async def _relationships_with_backoff(
         except TransientError as exc:
             if attempt == EXTRACT_MAX_ATTEMPTS - 1:
                 raise
-            delay = compute_backoff(attempt)
+            # The provider's own number when it gave one. See `backoff.wait_for`.
+            delay = wait_for(exc, attempt)
             print(f"    rate limited ({exc}); waiting {delay:.0f}s")
             await asyncio.sleep(delay)
     raise AssertionError("unreachable")

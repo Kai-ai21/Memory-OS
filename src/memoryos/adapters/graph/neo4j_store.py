@@ -46,6 +46,7 @@ from memoryos.application.ports import (
     GraphEdge,
     GraphNode,
     GraphPath,
+    GraphReach,
     MemoryNode,
     SourceNode,
 )
@@ -426,6 +427,112 @@ class Neo4jGraphStore:
         )
         return [_path_of(record["path"]) for record in result.records]
 
+    async def reach(
+        self,
+        seed_entity_ids: Sequence[UUID],
+        *,
+        depth: int = 2,
+        exclude_entity_ids: Sequence[UUID] = (),
+        limit: int = 200,
+    ) -> list[GraphReach]:
+        """See the port. One variable-length traversal, hubs excluded inside it."""
+        if not seed_entity_ids or limit <= 0:
+            return []
+        # Entity hops to graph hops. An entity reaches another in one graph hop
+        # through `RELATES_TO` or two through a memory that mentions both, so the
+        # bound is twice the requested depth — and `_checked_depth` is applied to
+        # the graph bound, because that is what the planner will actually walk.
+        bounded = _checked_depth(_checked_entity_depth(depth) * 2)
+
+        # Two queries, and the first one is not an optimisation.
+        #
+        # **Cypher cannot express "a path from an entity back to itself" here, and
+        # that is the most valuable expansion there is.** Neo4j's relationship
+        # uniqueness rule forbids reusing a relationship within one path, so
+        # `(seed)-[MENTIONS]-(m)-[MENTIONS]-(seed)` does not match: the two hops
+        # would be the same edge. The route back only exists through a *different*
+        # memory, which is a longer and weaker connection. So "another memory
+        # mentions the same thing retrieval just found" — a direct co-mention, and
+        # the strongest signal the graph has — is unreachable by traversal and is
+        # matched directly below.
+        #
+        # Found by a test comparing this against the in-memory store's
+        # breadth-first walk, which happily revisits its start.
+        direct = await self._driver.execute_query(
+            "MATCH (m:Memory)-[mention:MENTIONS]->(seed:Entity) "
+            "WHERE seed.entity_id IN $seeds "
+            "RETURN m.memory_id AS memory_id, "
+            "       mention.chunk_ordinal AS chunk_ordinal, "
+            "       seed.entity_id AS entity_id, "
+            # Two, matching what the graph distance would be if the path existed:
+            # entity to memory to entity. Reported the same way so that `_score`
+            # weights a co-mention against a traversed hop on one scale.
+            "       2 AS hops, "
+            "       [seed.name] AS route "
+            "ORDER BY memory_id, entity_id "
+            "LIMIT $limit",
+            {
+                "seeds": [str(value) for value in seed_entity_ids],
+                "limit": limit,
+            },
+            database_=self._database,
+        )
+
+        result = await self._driver.execute_query(
+            # Only the depth bound is formatted in; everything else is a bound
+            # parameter. Cypher will not accept a parameter inside `[*1..n]`
+            # because the planner needs the bound at plan time.
+            #
+            # `MENTIONS|RELATES_TO` rather than an unrestricted walk: `FROM_SOURCE`
+            # would make every memory of one source two hops from every other,
+            # which is a connection nobody wrote down.
+            "MATCH path = (seed:Entity)"
+            f"-[:MENTIONS|RELATES_TO*1..{bounded}]-(target:Entity) "
+            "WHERE seed.entity_id IN $seeds "
+            # The seed itself is handled by the query above, where it can be
+            # matched at all. Excluded here so a longer route back to it does not
+            # produce a second, worse-ranked copy of the same connection.
+            "  AND target.entity_id <> seed.entity_id "
+            # Hub suppression, applied to every node the path crosses rather than
+            # to the endpoint alone: a hub in the middle is a bridge, and at this
+            # depth a bridge connects everything to everything. The null guard is
+            # load-bearing — `Memory` nodes carry no `entity_id`, and `null IN $x`
+            # is null, which would make `all(...)` null and drop every path.
+            "  AND all(node IN nodes(path) WHERE "
+            "        node.entity_id IS NULL OR NOT node.entity_id IN $exclude) "
+            "MATCH (m:Memory)-[mention:MENTIONS]->(target) "
+            "RETURN m.memory_id AS memory_id, "
+            "       mention.chunk_ordinal AS chunk_ordinal, "
+            "       target.entity_id AS entity_id, "
+            "       length(path) AS hops, "
+            "       [node IN nodes(path) WHERE node:Entity | node.name] AS route "
+            # Shortest first, which is what makes `limit` a bound on the *best*
+            # routes rather than on an arbitrary set of them. Ties broken by id so
+            # two runs of one query return the same rows in the same order.
+            "ORDER BY hops, memory_id, entity_id "
+            "LIMIT $limit",
+            {
+                "seeds": [str(value) for value in seed_entity_ids],
+                "exclude": [str(value) for value in exclude_entity_ids],
+                "limit": limit,
+            },
+            database_=self._database,
+        )
+        reached = [
+            GraphReach(
+                memory_id=UUID(record["memory_id"]),
+                chunk_ordinal=int(record["chunk_ordinal"] or 0),
+                entity_id=UUID(record["entity_id"]),
+                hops=int(record["hops"]),
+                route=_route_of(record["route"]),
+            )
+            for record in [*direct.records, *result.records]
+        ]
+        # Sorted across both queries, so `limit` keeps the shortest routes overall
+        # rather than the first query's rows followed by the second's.
+        reached.sort(key=lambda row: (row.hops, str(row.memory_id), str(row.entity_id)))
+        return reached[:limit]
+
     async def counts_by_label(self) -> dict[str, int]:
         """Node counts per label, for `doctor`.
 
@@ -503,6 +610,43 @@ def _checked_depth(depth: int) -> int:
             f"depth must be between 1 and {MAX_DEPTH}, got {depth}. An undirected "
             f"variable-length traversal fans out with the branching factor, so a "
             f"deeper bound is not a longer query, it is potentially the whole graph."
+        )
+    return depth
+
+
+def _route_of(names: list[object]) -> tuple[str, ...]:
+    """The entity names along a path, without a name repeated back to back.
+
+    A route that returns to the entity it started from — the co-mention case — reads
+    `SKIP LOCKED -> SKIP LOCKED` verbatim, which tells a reader nothing about why
+    the result is there. Collapsed to one name, it says exactly what happened:
+    another memory mentions this.
+    """
+    route: list[str] = []
+    for name in names:
+        text = str(name)
+        if not route or route[-1] != text:
+            route.append(text)
+    return tuple(route)
+
+
+def _checked_entity_depth(depth: int) -> int:
+    """The entity-hop depth, bounded before it is doubled into a graph bound.
+
+    Separate from `_checked_depth` because the two count different things and the
+    error a caller needs to read is about the one they passed. `MAX_DEPTH // 2` is
+    the ceiling that falls out of the mapping rather than a second limit to keep in
+    step with the first.
+    """
+    if not isinstance(depth, int) or isinstance(depth, bool):
+        raise TypeError(f"depth must be an int, got {depth!r}")
+    if not 1 <= depth <= MAX_DEPTH // 2:
+        raise ValueError(
+            f"entity depth must be between 1 and {MAX_DEPTH // 2}, got {depth}. Each "
+            f"entity hop is up to two graph hops — an entity reaches another through "
+            f"a relationship or through a memory that mentions both — so the graph "
+            f"bound is twice this and {MAX_DEPTH} is the ceiling that makes a "
+            f"variable-length match affordable."
         )
     return depth
 

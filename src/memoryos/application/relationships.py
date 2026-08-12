@@ -35,7 +35,7 @@ from memoryos.application.ports import (
     ExtractedRelationship,
     JobQueue,
 )
-from memoryos.domain.backoff import compute_backoff
+from memoryos.domain.backoff import wait_for
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import PermanentError, TransientError
 from memoryos.domain.values import EntityType
@@ -151,10 +151,11 @@ class ExtractRelationships:
         for attempt in range(_CHUNK_MAX_ATTEMPTS):
             try:
                 return await self._extractor.extract_relationships(text, refs)
-            except TransientError:
+            except TransientError as exc:
                 if attempt == _CHUNK_MAX_ATTEMPTS - 1:
                     raise
-                delay = compute_backoff(attempt)
+                # The provider's own number when it gave one; see `wait_for`.
+                delay = wait_for(exc, attempt)
                 logger.info("relationships.rate_limited", waiting_seconds=round(delay))
                 await asyncio.sleep(delay)
         raise AssertionError("unreachable")
