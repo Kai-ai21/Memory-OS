@@ -14,8 +14,8 @@ M2.5 (citations and explainability) and M2.6 (grounded answers). **Phase 2 compl
 M3.2 (entity resolution), M3.3 (typed relationships), M3.4 (projection sync, rebuild and
 divergence detection) and M3.5 (graph-augmented retrieval, measured and shipped at weight
 zero). See [Graph](#graph) and [Graph-augmented retrieval](#graph-augmented-retrieval).
-**Phase 4 in progress**: M4.0 (the temporal query layer) and M4.1 (the timeline view).
-See [Time](#time).
+**Phase 4 in progress**: M4.0 (the temporal query layer), M4.1 (the timeline view) and
+M4.2 (evolution and change detection). See [Time](#time).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -1699,6 +1699,120 @@ zone the boundaries were computed in, and the window is labelled `(utc)`.
 **The count labels floated at the plot's ceiling.** Absolutely positioned against the full-height
 button rather than against the bar, so every number had to be matched to its bar by eye — which
 is exactly the reading error the number was added to remove.
+
+### Evolution, and what a corpus of one clone can show of it
+
+M4.2 reconstructs how one item changed. It is nearly free, and specifically because of
+M1.1: a modified file produces a new artifact, a new event and a new memory version, and
+the old version keeps its bytes, its normalized text and both hashes. That history has
+been in the database, unread, since the first sync.
+
+```bash
+memoryos evolution self README.md          # each version, what changed, what it touched
+memoryos evolution self README.md --no-summary
+```
+
+```
+GET /memories/{id}/evolution               # consecutive diffs, cached summaries only
+GET /memories/{id}/evolution?from=&to=     # one specific pair
+GET /memories/{id}/evolution?summarize=true
+```
+
+**How much history this corpus actually has: seven items, two versions each.** 155 of the
+162 current memories have exactly one version and no evolution to show. All seven pairs
+have different normalized text, so the adoption case — a version whose chunks were moved
+across because only the bytes changed — occurs **zero times in the real corpus** and
+exists here only in tests. The feature is correct and almost entirely unexercised, which
+is what a corpus assembled by cloning a repository once will do.
+
+`difflib`, no dependency, line-level with exact character offsets recovered by summing
+line lengths. Two decisions worth naming: `SequenceMatcher` over *characters* on a
+54,000-character README finds thousands of one-character runs and produces something
+technically correct and unreadable; and `autojunk=False` is not a tuning knob, because
+the heuristic discards any element appearing in over 1% of a long sequence and in source
+code the commonest lines are blank ones — with it on, a diff of two long files loses its
+anchors and reports one enormous replacement.
+
+**The diff is over normalized text, never bytes.** A file rewritten with CRLF is a
+genuinely new artifact with a completely different content hash, and it diffs to nothing.
+That is the correct answer and it is a live check on M1.4: if normalization ever stops
+collapsing line endings, `test_evolution.py` fails on its first test rather than
+retrieval degrading three milestones later.
+
+#### Two things this layer refuses to claim
+
+`NormalizeMemory._store` deletes the chunks of every earlier version when it writes the
+new ones, because chunks belonging to a version nobody can retrieve stay in the vector
+index and keep surfacing stale text. Two consequences follow, and both are reported as
+absences rather than papered over:
+
+- A **chunk-count delta** against a superseded version is `n/a`, not a number.
+  `after.chunks - 0` would print `+50` for a two-line edit.
+- **Affected chunks** are the newer version's only. There is nothing to say about the
+  older one's, because they do not exist.
+
+Adoption is still recoverable after the fact: two consecutive versions sharing a
+`normalized_hash` are exactly the condition M1.4 acted on, so `evolution` reports "chunks
+adopted" rather than showing an empty diff and leaving a reader to wonder whether the
+diff failed.
+
+#### Grounding a summary when there is nothing to cite
+
+M2.6's guardrail applies here, and it had to be adapted: a change summary has one piece
+of evidence, so there is nothing to number and citation markers would be noise. Three
+layers instead.
+
+**The trivial case never reaches the model.** "No substantive change" is decided from the
+spans, in code. A model shown an empty diff and asked what changed will answer, because
+answering is what it is for, and the answer will be fluent and invented. The prompt asks
+for the same string as a second line of defence for near-trivial diffs, not as the first.
+
+**The prompt forbids the rationale.** Rule 2 is "do not explain why the change was made" —
+that is the fabrication this milestone is most exposed to, and it is the one no
+mechanical check can catch, because "refactored for clarity" names nothing verifiable.
+
+**`check_summary` verifies vocabulary.** Every identifier the summary names must appear
+in the diff it was shown. Absent entirely is a fabrication, and it is the exact analogue
+of citing passage [7] when six were supplied.
+
+#### What the check caught, and what it did not
+
+The first summary this system generated, on `src/memoryos/config.py`, passed the
+vocabulary check and contained a false claim: that two import lines had been *reordered*.
+Those lines appear in the diff only as unchanged context. Nothing moved.
+
+Two fixes came out of it. The prompt gained rule 4 — `+` was added, `-` was removed,
+everything else is context, never say an unchanged line moved — and the check now splits
+the diff into changed lines and context lines and reports terms found **only in context**
+separately. Not an error, since "adds a field to `Settings`" is a correct sentence about
+a class declared on a context line, but it is precisely where this class of false claim
+lives, so it is surfaced rather than passed. After the fix the same pair summarised
+cleanly.
+
+The limit is real and worth stating. On the README pair the model wrote that the change
+added "details about citations, synthesis, and refusal rates" — and *synthesis* appears
+only on a **removed** line. The direction is wrong and the vocabulary check cannot see
+it: "synthesis" is a lowercase prose word, not identifier-shaped, and it is genuinely in
+the diff. The check is a floor, not a proof.
+
+`summarizer_version` is part of the cache key for exactly this reason, and it caught its
+own lesson immediately: rule 4 was added without bumping it, so every read kept serving
+the pre-fix text and the fix looked like it had not worked. The same run found that
+`--refresh` regenerated the summary, paid for the call, and left the old row in place —
+`ON CONFLICT DO NOTHING` was right for the concurrent case and wrong for the explicit
+one.
+
+#### Replay classification
+
+`change_summaries` is derived, decided by its foreign keys the same way `entity_merges`
+is: both ends point at `memories`, which a replay truncates. It carries a different
+discomfort though — nothing in it is anybody's judgement, but every row cost a model call
+and a rebuild throws all of them away. It is also the one derived table whose *input*
+survives a replay perfectly: the versions come back with identical normalized text, so
+the diffs are unchanged and only the descriptions are lost. Keying the cache on the pair
+of normalized hashes rather than on memory ids would make these survivable, exactly as
+M1.7 proposed for merges. That is a schema change, so it is written down rather than done
+quietly.
 
 ## Migrations
 
