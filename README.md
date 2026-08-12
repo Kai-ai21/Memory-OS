@@ -10,9 +10,11 @@ it grows. Postgres 17 with `pgvector` is the storage substrate.
 M2.1 (keyword search), M2.2 (hybrid retrieval), M2.3a (measurement reliability),
 M2.3b (ranking signals, measured and switched off), M2.4 (cross-encoder reranking),
 M2.5 (citations and explainability) and M2.6 (grounded answers). **Phase 2 complete.**
-**Phase 3 in progress**: M3.0 (Neo4j and the graph schema), M3.1 (entity extraction),
-M3.2 (entity resolution), M3.3 (typed relationships) and M3.4 (projection sync, rebuild and
-divergence detection). See [Graph](#graph).
+**Phase 3 complete**: M3.0 (Neo4j and the graph schema), M3.1 (entity extraction),
+M3.2 (entity resolution), M3.3 (typed relationships), M3.4 (projection sync, rebuild and
+divergence detection) and M3.5 (graph-augmented retrieval, measured and shipped at weight
+zero). See [Graph](#graph) and [Graph-augmented retrieval](#graph-augmented-retrieval).
+**Phase 4 in progress**: M4.0 (the temporal query layer). See [Time](#time).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
