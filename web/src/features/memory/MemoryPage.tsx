@@ -18,6 +18,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api, type MemoryChunk } from "../../api/client";
 import { DateStamp } from "../../components/DateStamp";
+import { Evolution } from "./Evolution";
 import { Failure, Loading, Meta, SectionHeading, Tag } from "../../components/primitives";
 import { count, isCode, range, shortHash, timestamp } from "../../lib/format";
 import { VersionTimeline } from "./VersionTimeline";
@@ -123,6 +124,13 @@ export function MemoryPage() {
             ))}
           </tbody>
         </table>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <SectionHeading right={`${detail.versions.length} versions`}>
+          evolution
+        </SectionHeading>
+        <Evolution memoryId={detail.id} kind={detail.kind} />
       </section>
 
       <section className="flex flex-col gap-2">

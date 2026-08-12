@@ -141,6 +141,25 @@ DERIVED_TABLES: tuple[str, ...] = (
     "entity_merges",
     "entity_mentions",
     "entities",
+    # M4.2, and classified by its foreign keys the same way `entity_merges` is:
+    # both ends point at `memories`, which is truncated, so a retained row would
+    # describe a diff between two versions that no longer exist.
+    #
+    # **The same discomfort, for a different reason.** Nothing here is anybody's
+    # judgement, so this is not user-authored — but it is not cheaply
+    # rebuildable either, because every row cost a model call and a replay throws
+    # all of them away. That is unlike `memory_chunks`, which a rebuild
+    # reproduces exactly for free, and unlike `entity_mentions`, which a rebuild
+    # at least *could* reproduce by re-running extraction over the same text.
+    #
+    # It is also the one derived table whose input survives a replay perfectly:
+    # the versions come back from the log with the same normalized text, so the
+    # diffs are identical and only the *description* of them is gone. Keying the
+    # cache on the pair of normalized hashes rather than on memory ids would
+    # make these survivable, exactly as M1.7 proposed keying merges on
+    # `(canonical_name, type)`. Written down rather than done quietly: it is a
+    # schema change, and this corpus has seven version pairs.
+    "change_summaries",
     "memory_chunks",
     "memories",
     "jobs",

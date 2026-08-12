@@ -26,7 +26,13 @@ from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.extraction.llm import ExtractionStats
 from memoryos.adapters.graph.schema import SCHEMA_VERSION
 from memoryos.adapters.llm.errors import MissingApiKey
-from memoryos.application import graph_projection, graph_sync, graph_verify, temporal
+from memoryos.application import (
+    evolution,
+    graph_projection,
+    graph_sync,
+    graph_verify,
+    temporal,
+)
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
 from memoryos.application.backfill import (
     enqueue_embedding,
@@ -1217,6 +1223,121 @@ async def run_graph_sync(settings: Settings, *, memories: list[str], entities: l
     return 0
 
 
+async def run_evolution(
+    settings: Settings, *, source: str, path: str, summarize: bool, refresh: bool
+) -> int:
+    """One item's history: when, what changed, and whether it was rechunked.
+
+    The summaries are opt-out rather than opt-in, because a history with no
+    account of what changed is a list of hashes. They are cached on the version
+    pair, so the second run of this command spends nothing.
+    """
+    container = Container.build(settings)
+    sessions = container.database.session_factory
+    try:
+        async with sessions() as session:
+            source_id = (
+                await session.execute(
+                    select(models.Source.id).where(models.Source.name == source)
+                )
+            ).scalars().first()
+        if source_id is None:
+            print(f"no source named {source!r}")
+            return 1
+
+        history = await evolution.version_history(sessions, source_id, path)
+        if not history:
+            print(f"no memory at {path!r} in source {source!r}")
+            return 1
+
+        print(f"{path}  ({len(history)} version{'s' if len(history) != 1 else ''})")
+        # Stated once, here, rather than implied by a column of zeroes further
+        # down. The rule is not obvious and the number is misleading without it.
+        if any(not version.holds_chunks for version in history[:-1]):
+            print(
+                "  note: superseded versions hold no chunks — M1.4 deletes them when "
+                "the next version is written, so a chunk delta against one is not\n"
+                "        a measurement of chunking."
+            )
+
+        summarizer = None
+        if summarize:
+            try:
+                summarizer = evolution.SummarizeChange(sessions, container.language_model())
+            except MissingApiKey as exc:
+                print(f"\n  (no change summaries: {exc})")
+
+        for index, version in enumerate(history):
+            print()
+            print(
+                f"  v{version.version}"
+                f"{'  [current]' if version.is_current else ''}"
+                f"{'  [tombstoned]' if version.deleted_at else ''}"
+            )
+            print(f"    occurred   {_stamp(version.occurred_at)} ({version.occurred_at_source})")
+            print(f"    ingested   {_stamp(version.ingested_at)}")
+            print(
+                f"    content    {version.characters} chars, "
+                f"{version.chunks} chunk{'s' if version.chunks != 1 else ''}"
+                f"{'' if version.holds_chunks else ' (discarded)'}"
+            )
+            normalized = (version.normalized_hash or "-")[:8]
+            print(f"    hashes     {version.content_hash[:8]} / {normalized}")
+            print(f"    change     {version.summary_of_change}")
+
+            if index == 0:
+                continue
+
+            diff = await evolution.diff_versions(sessions, history[index - 1].id, version.id)
+            delta = diff.chunk_delta
+            print(
+                f"    diff       +{diff.added_chars} -{diff.removed_chars} chars "
+                f"in {len(diff.spans)} span{'s' if len(diff.spans) != 1 else ''}, "
+                f"chunk delta {delta if delta is not None else 'n/a'}"
+            )
+            if diff.affected_chunks:
+                named = [
+                    f"#{chunk.ordinal}"
+                    + (f" ({chunk.definition})" if chunk.definition else "")
+                    for chunk in diff.affected_chunks
+                ]
+                print(f"    touches    {len(named)} chunks: {', '.join(named[:8])}")
+                if len(named) > 8:
+                    print(f"               … and {len(named) - 8} more")
+
+            if summarizer is not None:
+                try:
+                    summary = await summarizer(diff, refresh=refresh)
+                except (TransientError, PermanentError) as exc:
+                    print(f"    summary    (unavailable: {exc})")
+                    continue
+                mark = "" if summary.grounding.grounded else "  [ungrounded]"
+                origin = "cached" if summary.cached else summary.model_id
+                print(f"    summary    {summary.text}{mark}")
+                print(f"               ({origin})")
+                if summary.grounding.unsupported:
+                    # Named, not hidden. These are the terms the summary used
+                    # that the diff does not contain.
+                    print(
+                        "               not in the diff: "
+                        f"{', '.join(summary.grounding.unsupported)}"
+                    )
+                if summary.grounding.context_only:
+                    # Not an error. The place to look when a summary describes
+                    # something that did not actually change.
+                    print(
+                        "               context only: "
+                        f"{', '.join(summary.grounding.context_only)}"
+                    )
+    finally:
+        await container.dispose()
+    return 0
+
+
+def _stamp(moment: datetime | None) -> str:
+    return "—" if moment is None else f"{moment:%Y-%m-%d %H:%M:%S}"
+
+
 def parse_moment(value: str, *, name: str) -> datetime:
     """A date or a timestamp on the command line, as an instant in UTC.
 
@@ -1807,6 +1928,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     as_of_parser.add_argument("date", help="ISO date or timestamp, interpreted as UTC")
 
+    evolution_parser = commands.add_parser(
+        "evolution", help="how one item changed across its versions"
+    )
+    evolution_parser.add_argument("source", help="source name")
+    evolution_parser.add_argument("path", help="external key, e.g. README.md")
+    evolution_parser.add_argument(
+        "--no-summary",
+        dest="summarize",
+        action="store_false",
+        help="skip the language model and print the diffs alone",
+    )
+    evolution_parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="regenerate cached summaries instead of reading them",
+    )
+
     commands.add_parser("stats", help="report corpus and embedding coverage")
     commands.add_parser(
         "doctor", help="check the corpus for silently-degrading conditions"
@@ -2167,6 +2305,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "as-of":
         return asyncio.run(run_as_of(settings, moment=args.date))
+
+    if args.command == "evolution":
+        return asyncio.run(
+            run_evolution(
+                settings,
+                source=args.source,
+                path=args.path,
+                summarize=args.summarize,
+                refresh=args.refresh,
+            )
+        )
 
     if args.command == "stats":
         return asyncio.run(run_stats(settings))

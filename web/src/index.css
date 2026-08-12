@@ -158,6 +158,24 @@
     -webkit-box-decoration-break: clone;
   }
 
+  /* The removal counterpart of `.mark`, for the left side of a diff.
+   *
+   * The same physical-highlighter construction — a wash plus a solid bottom
+   * edge — in the verdict red rather than the accent amber, and struck through.
+   * The strike is what carries it without a legend: a red wash alone reads as
+   * "look here", which is the opposite of "this is gone". */
+  .mark-removed {
+    background-color: color-mix(in oklab, var(--color-deny) 16%, transparent);
+    border-bottom: 1.5px solid color-mix(in oklab, var(--color-deny) 55%, transparent);
+    text-decoration: line-through;
+    text-decoration-color: color-mix(in oklab, var(--color-deny) 60%, transparent);
+    padding: 0.05em 0.08em;
+    margin: 0 -0.08em;
+    border-radius: 1px;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
   /* --- Text roles --------------------------------------------------------- */
   .meta {
     font-family: var(--font-mono);

@@ -60,6 +60,54 @@ export function segment(text: string, start: number, end: number): Segment[] {
 }
 
 /**
+ * Split `text` at several ranges at once, for a diff rather than a match.
+ *
+ * `segment` above marks one span because a search result has one matched span.
+ * A version diff has many, and running `segment` per span and concatenating
+ * would double-count every unmarked stretch between two of them.
+ *
+ * Ranges are sorted and clipped, and overlapping ones are merged rather than
+ * rejected. Two marks touching the same character would nest `<mark>` inside
+ * `<mark>`, which renders as a darker patch that means nothing — merging says
+ * the same thing without inventing a third emphasis level.
+ */
+export function segmentAll(
+  text: string,
+  ranges: { start: number; end: number }[],
+): Segment[] {
+  if (text.length === 0) return [];
+
+  const clipped = ranges
+    .map((range) => ({
+      start: clamp(range.start, 0, text.length),
+      end: clamp(range.end, 0, text.length),
+    }))
+    .filter((range) => range.end > range.start)
+    .sort((a, b) => a.start - b.start);
+
+  if (clipped.length === 0) return [{ text, marked: false }];
+
+  const merged: { start: number; end: number }[] = [];
+  for (const range of clipped) {
+    const last = merged[merged.length - 1];
+    if (last && range.start <= last.end) last.end = Math.max(last.end, range.end);
+    else merged.push({ ...range });
+  }
+
+  const segments: Segment[] = [];
+  let cursor = 0;
+  for (const range of merged) {
+    if (range.start > cursor) {
+      segments.push({ text: text.slice(cursor, range.start), marked: false });
+    }
+    segments.push({ text: text.slice(range.start, range.end), marked: true });
+    cursor = range.end;
+  }
+  if (cursor < text.length) segments.push({ text: text.slice(cursor), marked: false });
+  return segments;
+}
+
+/**
  * How much of a chunk's stored text is borrowed from the previous chunk.
  *
  * Returns null when the arithmetic cannot hold — a span longer than the text

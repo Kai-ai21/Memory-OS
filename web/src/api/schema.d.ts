@@ -213,6 +213,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/memories/{memory_id}/evolution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Evolution */
+        get: operations["get_evolution_memories__memory_id__evolution_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/search": {
         parameters: {
             query?: never;
@@ -329,6 +346,24 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AffectedChunkOut */
+        AffectedChunkOut: {
+            /** Char End */
+            char_end: number;
+            /** Char Start */
+            char_start: number;
+            /** Definition */
+            definition: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Ordinal */
+            ordinal: number;
+            /** Spans */
+            spans: number;
+        };
         /**
          * AnswerIn
          * @description Everything a search takes, plus the generation budget.
@@ -558,6 +593,40 @@ export interface components {
             /** Root */
             root: string;
         };
+        /** DiffOut */
+        DiffOut: {
+            /** Added Chars */
+            added_chars: number;
+            /** Affected Chunks */
+            affected_chunks: components["schemas"]["AffectedChunkOut"][];
+            /** Chunk Delta */
+            chunk_delta: number | null;
+            /**
+             * From Id
+             * Format: uuid
+             */
+            from_id: string;
+            /** From Version */
+            from_version: number;
+            /** Is Empty */
+            is_empty: boolean;
+            /** Removed Chars */
+            removed_chars: number;
+            /** Span Count */
+            span_count: number;
+            /** Spans */
+            spans: components["schemas"]["SpanOut"][];
+            summary?: components["schemas"]["SummaryOut"] | null;
+            /**
+             * To Id
+             * Format: uuid
+             */
+            to_id: string;
+            /** To Version */
+            to_version: number;
+            /** Unified */
+            unified: string;
+        };
         /** DoctorOut */
         DoctorOut: {
             /** Chunker Version */
@@ -570,6 +639,27 @@ export interface components {
             healthy: boolean;
             /** Model Window */
             model_window: number;
+        };
+        /** EvolutionOut */
+        EvolutionOut: {
+            /** Diffs */
+            diffs: components["schemas"]["DiffOut"][];
+            /** External Key */
+            external_key: string;
+            /**
+             * Memory Id
+             * Format: uuid
+             */
+            memory_id: string;
+            /**
+             * Source Id
+             * Format: uuid
+             */
+            source_id: string;
+            /** Source Name */
+            source_name: string;
+            /** Versions */
+            versions: components["schemas"]["memoryos__api__routes__evolution__VersionOut"][];
         };
         /**
          * ExcerptOut
@@ -816,7 +906,7 @@ export interface components {
             /** Version */
             version: number;
             /** Versions */
-            versions: components["schemas"]["VersionOut"][];
+            versions: components["schemas"]["memoryos__api__routes__memories__VersionOut"][];
         };
         /**
          * MemoryKind
@@ -1037,6 +1127,28 @@ export interface components {
             /** Name */
             name: string;
         };
+        /** SpanOut */
+        SpanOut: {
+            /** A End */
+            a_end: number;
+            /** A Start */
+            a_start: number;
+            /** A Text */
+            a_text: string;
+            /** B End */
+            b_end: number;
+            /** B Start */
+            b_start: number;
+            /** B Text */
+            b_text: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
         /** StatsOut */
         StatsOut: {
             /** Cache Entries */
@@ -1061,6 +1173,25 @@ export interface components {
             models: {
                 [key: string]: number;
             };
+        };
+        /** SummaryOut */
+        SummaryOut: {
+            /** Cached */
+            cached: boolean;
+            /** Context Only */
+            context_only?: string[];
+            /** Grounded */
+            grounded: boolean;
+            /** Model Id */
+            model_id: string;
+            /** Summarizer Version */
+            summarizer_version: string;
+            /** Text */
+            text: string;
+            /** Trivial */
+            trivial: boolean;
+            /** Unsupported */
+            unsupported?: string[];
         };
         /** SyncAccepted */
         SyncAccepted: {
@@ -1156,26 +1287,26 @@ export interface components {
             /** Supported Sentences */
             supported_sentences: number;
         };
-        /**
-         * VersionOut
-         * @description One version, with both clocks and both hashes.
-         *
-         *     M4.1 draws these on a small timeline, which needs `occurred_at` as well as
-         *     `ingested_at` — the two are a different story per version, and a history
-         *     showing only when the system read something cannot say when the thing it
-         *     read was written.
-         *
-         *     The hashes are what "what changed" is answered from. `content_hash`
-         *     differing with `normalized_hash` identical is a real and common case — a
-         *     trailing newline, a line ending, a byte the normalizer discards — and it is
-         *     the difference between a version that changed the corpus and one that only
-         *     changed the file.
-         */
-        VersionOut: {
+        /** VersionOut */
+        memoryos__api__routes__evolution__VersionOut: {
+            /** Adopted */
+            adopted: boolean | null;
+            /** Bytes Changed */
+            bytes_changed: boolean | null;
+            /** Change */
+            change: string;
+            /** Characters */
+            characters: number;
+            /** Chunker Versions */
+            chunker_versions: string[];
+            /** Chunks */
+            chunks: number;
             /** Content Hash */
             content_hash: string;
             /** Deleted At */
             deleted_at: string | null;
+            /** Holds Chunks */
+            holds_chunks: boolean;
             /**
              * Id
              * Format: uuid
@@ -1188,12 +1319,18 @@ export interface components {
             ingested_at: string;
             /** Is Current */
             is_current: boolean;
+            /** Kind */
+            kind: string;
             /** Normalized Hash */
             normalized_hash: string | null;
             /** Occurred At */
             occurred_at: string | null;
             /** Occurred At Source */
             occurred_at_source: string;
+            /** Text Changed */
+            text_changed: boolean | null;
+            /** Title */
+            title: string | null;
             /** Version */
             version: number;
         };
@@ -1235,6 +1372,47 @@ export interface components {
             ordinal: number;
             /** Token Count */
             token_count: number;
+        };
+        /**
+         * VersionOut
+         * @description One version, with both clocks and both hashes.
+         *
+         *     M4.1 draws these on a small timeline, which needs `occurred_at` as well as
+         *     `ingested_at` — the two are a different story per version, and a history
+         *     showing only when the system read something cannot say when the thing it
+         *     read was written.
+         *
+         *     The hashes are what "what changed" is answered from. `content_hash`
+         *     differing with `normalized_hash` identical is a real and common case — a
+         *     trailing newline, a line ending, a byte the normalizer discards — and it is
+         *     the difference between a version that changed the corpus and one that only
+         *     changed the file.
+         */
+        memoryos__api__routes__memories__VersionOut: {
+            /** Content Hash */
+            content_hash: string;
+            /** Deleted At */
+            deleted_at: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Ingested At
+             * Format: date-time
+             */
+            ingested_at: string;
+            /** Is Current */
+            is_current: boolean;
+            /** Normalized Hash */
+            normalized_hash: string | null;
+            /** Occurred At */
+            occurred_at: string | null;
+            /** Occurred At Source */
+            occurred_at_source: string;
+            /** Version */
+            version: number;
         };
         /** ChunkOut */
         memoryos__api__routes__search__ChunkOut: {
@@ -1558,6 +1736,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_evolution_memories__memory_id__evolution_get: {
+        parameters: {
+            query?: {
+                /** @description Diff this version instead. */
+                from?: string | null;
+                /** @description …against this one. */
+                to?: string | null;
+                /** @description Generate missing summaries. Costs a model call per diff. */
+                summarize?: boolean;
+            };
+            header?: never;
+            path: {
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionOut"];
                 };
             };
             /** @description Validation Error */

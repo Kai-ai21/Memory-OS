@@ -1044,3 +1044,68 @@ Index(
     EntityRelationship.memory_id,
     EntityRelationship.extractor_version,
 )
+
+
+class ChangeSummary(Base):
+    """A generated description of what changed between two versions.
+
+    **The one cache here that cannot go stale.** Both memories are rows nothing
+    ever updates, so the diff between them is fixed and so is any description of
+    it. Everywhere else in this system a cache is a bet that the input has not
+    moved; here the input provably cannot.
+
+    Keyed on the pair rather than on the newer version, because the useful diff
+    is not always against the immediate predecessor — "what changed between v1
+    and v4" is a different question from three consecutive diffs, and both are
+    worth keeping.
+
+    `summarizer_version` is part of the key, following the M1.4 chunker and M3.1
+    extractor pattern. Improving the prompt then becomes a query — find the rows
+    at the old version, redo those — rather than emptying a table that mostly
+    contains summaries nobody has complained about.
+
+    `grounded` and `unsupported_terms` are stored as they were found, not
+    recomputed on read. The check ran against the diff *the model was shown*, and
+    a reader recomputing it against a diff rebuilt with different context
+    settings would get a different verdict for the same stored text.
+    """
+
+    __tablename__ = "change_summaries"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    from_memory_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "memories.id", name="fk_change_summaries_from_memory_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    to_memory_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "memories.id", name="fk_change_summaries_to_memory_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    summarizer_version: Mapped[str] = mapped_column(Text, nullable=False)
+    model_id: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    grounded: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    unsupported_terms: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "from_memory_id",
+            "to_memory_id",
+            "summarizer_version",
+            name="uq_change_summaries_pair_version",
+        ),
+        CheckConstraint(
+            "from_memory_id <> to_memory_id", name="ck_change_summaries_distinct_pair"
+        ),
+    )
