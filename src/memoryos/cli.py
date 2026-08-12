@@ -276,6 +276,19 @@ async def run_search(
                 rrf_k=DEFAULT_RRF_K,
             )
 
+        # Printed once, above the results, and only when something fired. A
+        # query reinterpreted as temporal changes what comes back; if the reader
+        # cannot see the interpretation, an empty result set looks like an empty
+        # corpus. Read off the result rather than off a hit, so it survives the
+        # case where a filter left nothing to read it from.
+        if result.temporal_intent is not None:
+            applied = (
+                "  [hard filter applied]"
+                if result.temporal_filter_applied
+                else "  [ranking only]"
+            )
+            print(f"read as temporal: {result.temporal_intent}{applied}\n")
+
         if not result.hits:
             print("no results")
         for rank, hit in enumerate(result.hits, start=1):

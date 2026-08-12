@@ -448,8 +448,21 @@ class ScoreBreakdown:
     graph_rank: int | None = None
     graph_score: float | None = None
     graph_path: tuple[str, ...] | None = None
+    # M4.3's temporal intent. A property of the *query* rather than of the chunk,
+    # and carried here anyway, because this dataclass is the only thing that
+    # travels from the ranker to the screen — and a query silently reinterpreted
+    # as temporal is the most confusing failure this system can produce. The
+    # results change, the reason is invisible, and the user's own words are the
+    # only thing that can explain it.
+    #
+    # `temporal_filter_applied` is separate from `temporal_intent` because they
+    # answer different questions. "Recently" is detected and changes a weight;
+    # "in August" is detected and *removes rows from consideration*. A reader who
+    # cannot see which one happened cannot tell a reordering from a truncation.
+    temporal_intent: str | None = None
+    temporal_filter_applied: bool = False
 
-    def as_dict(self) -> dict[str, float | int | str | None]:
+    def as_dict(self) -> dict[str, float | int | str | bool | None]:
         return {
             "fused": self.fused,
             "vector_rank": self.vector_rank,
@@ -467,6 +480,8 @@ class ScoreBreakdown:
             # Rendered as the route a reader would follow, because that is what it
             # is: `queue -> SKIP LOCKED -> worker`.
             "graph_path": None if self.graph_path is None else " -> ".join(self.graph_path),
+            "temporal_intent": self.temporal_intent,
+            "temporal_filter_applied": self.temporal_filter_applied,
         }
 
 
