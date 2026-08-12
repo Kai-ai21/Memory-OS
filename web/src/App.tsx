@@ -12,6 +12,7 @@ import { CorpusPage } from "./features/corpus/CorpusPage";
 import { JudgementsPage } from "./features/judgements/JudgementsPage";
 import { MemoryPage } from "./features/memory/MemoryPage";
 import { SearchPage } from "./features/search/SearchPage";
+import { TimelinePage } from "./features/timeline/TimelinePage";
 
 export function App() {
   return (
@@ -21,6 +22,7 @@ export function App() {
           <span className="meta-label text-ink">memory os</span>
           <nav className="flex items-baseline gap-4">
             <Tab to="/">search</Tab>
+            <Tab to="/timeline">timeline</Tab>
             <Tab to="/judgements">judgements</Tab>
             <Tab to="/corpus">corpus</Tab>
           </nav>
@@ -33,6 +35,7 @@ export function App() {
       <main className="flex-1">
         <Routes>
           <Route path="/" element={<SearchPage />} />
+          <Route path="/timeline" element={<TimelinePage />} />
           <Route path="/memory/:id" element={<MemoryPage />} />
           <Route path="/judgements" element={<JudgementsPage />} />
           <Route path="/corpus" element={<CorpusPage />} />

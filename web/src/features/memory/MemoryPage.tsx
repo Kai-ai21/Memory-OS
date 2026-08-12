@@ -17,8 +17,10 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { api, type MemoryChunk } from "../../api/client";
+import { DateStamp } from "../../components/DateStamp";
 import { Failure, Loading, Meta, SectionHeading, Tag } from "../../components/primitives";
 import { count, isCode, range, shortHash, timestamp } from "../../lib/format";
+import { VersionTimeline } from "./VersionTimeline";
 
 export function MemoryPage() {
   const { id = "" } = useParams();
@@ -50,9 +52,17 @@ export function MemoryPage() {
         <div className="flex flex-wrap gap-x-5 gap-y-1">
           <Meta label="source">{detail.source_name}</Meta>
           <Meta label="version">{detail.version}</Meta>
-          <Meta label="occurred">{timestamp(detail.occurred_at)}</Meta>
+          {/* The provenance rides the date rather than sitting in its own field.
+              As a separate `Meta` it read as one more attribute; attached, it
+              qualifies the number it is about, which is what it does. */}
+          <Meta label="occurred">
+            <DateStamp
+              value={detail.occurred_at}
+              provenance={detail.occurred_at_source}
+              showProvenance
+            />
+          </Meta>
           <Meta label="ingested">{timestamp(detail.ingested_at)}</Meta>
-          <Meta label="provenance">{detail.occurred_at_source}</Meta>
         </div>
         <div className="flex flex-wrap gap-x-5 gap-y-1">
           {/* Both hashes. The pair is the whole story of M1.4: different bytes
@@ -116,32 +126,25 @@ export function MemoryPage() {
       </section>
 
       <section className="flex flex-col gap-2">
-        <SectionHeading>version history</SectionHeading>
-        <ul>
-          {detail.versions.map((version) => (
-            <li
-              key={version.id}
-              className="flex flex-wrap items-baseline gap-x-4 border-b border-rule/60 py-1"
-            >
-              <span className="meta w-8 text-ink">v{version.version}</span>
-              {version.is_current ? (
-                <span className="meta text-amber">current</span>
-              ) : (
-                <span className="meta text-faint">superseded</span>
-              )}
-              {version.deleted_at ? <span className="meta text-deny">tombstoned</span> : null}
-              <span className="meta text-faint" title={version.content_hash}>
-                {shortHash(version.content_hash)}
-              </span>
-              <span className="meta text-faint">{timestamp(version.ingested_at)}</span>
-              {version.id !== detail.id ? (
-                <Link to={`/memory/${version.id}`} className="meta text-amber underline">
-                  open
+        <SectionHeading right={`${detail.versions.length} versions`}>
+          version history
+        </SectionHeading>
+        <VersionTimeline versions={detail.versions} />
+        {detail.versions.length > 1 ? (
+          <div className="flex flex-wrap gap-x-4">
+            {detail.versions
+              .filter((version) => version.id !== detail.id)
+              .map((version) => (
+                <Link
+                  key={version.id}
+                  to={`/memory/${version.id}`}
+                  className="meta text-amber underline"
+                >
+                  open v{version.version}
                 </Link>
-              ) : null}
-            </li>
-          ))}
-        </ul>
+              ))}
+          </div>
+        ) : null}
       </section>
     </div>
   );

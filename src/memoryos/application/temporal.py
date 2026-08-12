@@ -35,8 +35,9 @@ ranking layer is not touched: this milestone makes the bitemporal data legible,
 and M4.3 is where any of it is allowed to affect what retrieval returns.
 """
 
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from collections import defaultdict
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from uuid import UUID
@@ -64,11 +65,17 @@ class Bucket:
     periods that have rows draws no bar where nothing happened, which is exactly
     the shape a reader is looking for. The absence has to be plotted, not
     omitted.
+
+    `by_kind` is carried on the same bucket rather than fetched by a second
+    query for M4.1's stacked bars. One `GROUP BY` produces both, and `count` is
+    its sum by construction — a separate query for the breakdown could disagree
+    with the total by a row and there would be nothing to notice it.
     """
 
     start: datetime
     end: datetime
     count: int
+    by_kind: Mapping[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,19 +344,29 @@ async def activity_by_period(
     # form would make the histogram depend on the client's locale, which is a
     # bug that only appears on somebody else's machine.
     bucket = func.date_trunc(period.value, models.Memory.occurred_at, "UTC")
-    stmt = _in_range(select(bucket, func.count()), start, end).where(*_current_predicates())
+    stmt = _in_range(
+        select(bucket, models.Memory.kind, func.count()), start, end
+    ).where(*_current_predicates())
     if source_id is not None:
         stmt = stmt.where(models.Memory.source_id == source_id)
 
     async with sessions() as session:
-        rows = (await session.execute(stmt.group_by(bucket))).all()
+        rows = (await session.execute(stmt.group_by(bucket, models.Memory.kind))).all()
 
-    counts = {moment: count for moment, count in rows}
+    by_kind: dict[datetime, dict[str, int]] = defaultdict(dict)
+    for moment, kind, count in rows:
+        by_kind[moment][kind] = count
+
     return [
         Bucket(
             start=moment,
             end=advance(moment, period),
-            count=counts.get(moment, 0),
+            # Summed from the breakdown rather than counted again, so the total
+            # and the stack in the UI cannot disagree.
+            count=sum(by_kind.get(moment, {}).values()),
+            by_kind=dict(
+                sorted(by_kind.get(moment, {}).items(), key=lambda item: (-item[1], item[0]))
+            ),
         )
         for moment in bucket_starts(start, end, period)
     ]

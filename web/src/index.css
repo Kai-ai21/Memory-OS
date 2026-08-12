@@ -67,6 +67,28 @@
   --color-affirm: #2f6b3f;
   --color-deny: #8f3222;
 
+  /* Kind colours, for the timeline's stacked bars.
+   *
+   * This is the one place the single-accent rule bends, and it bends because
+   * here the categorical encoding *is* the content: a bar that does not say
+   * what it is made of is a count, which M4.0 already prints in a terminal. The
+   * whole reason to draw the chart is to see that a period was all code, or that
+   * the notes arrived in a burst.
+   *
+   * Kept in the same warm, desaturated register as everything else, and dark
+   * enough to hold contrast against `paper` at 2px tall. `code` gets the amber
+   * because it is the dominant kind in this corpus and the eye should land on
+   * the bulk; the highlight still owns the amber everywhere text is read, and
+   * the two never appear in the same view. */
+  --color-kind-code: #b8791a;
+  --color-kind-note: #47657a;
+  --color-kind-document: #63558a;
+  --color-kind-email: #2b7466;
+  --color-kind-commit: #8a5730;
+  --color-kind-meeting: #2f6b3f;
+  --color-kind-bookmark: #8f3222;
+  --color-kind-other: #8b8376;
+
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-prose: "Source Serif 4 Variable", "Source Serif 4", Charter, Georgia, serif;
 
@@ -238,6 +260,25 @@
     max-height: 16em;
     overflow: hidden;
     mask-image: linear-gradient(to bottom, black 78%, transparent 100%);
+  }
+
+  /* --- The gap hatch -------------------------------------------------------
+   * A period with nothing in it, drawn rather than left blank.
+   *
+   * The whole argument of M4.0's `find_gaps` is that absence is the signal, and
+   * absence rendered as absence is indistinguishable from the edge of the data
+   * or from a chart that failed to load. Diagonal rule lines say "this is a
+   * region, and it is empty" — the visual convention for a void on a drawing,
+   * borrowed because it already means that.
+   */
+  .hatch {
+    background-image: repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 4px,
+      var(--color-rule-strong) 4px,
+      var(--color-rule-strong) 5px
+    );
   }
 
   /* A key cap, for the shortcut hints that make the keyboard model visible. */

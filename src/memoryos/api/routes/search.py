@@ -143,6 +143,10 @@ class HitOut(BaseModel):
     title: str | None
     kind: str
     occurred_at: datetime | None
+    # Beside the date it qualifies. An mtime and a date an email declared are
+    # different claims, and a client that received only the timestamps could not
+    # render them differently however much it wanted to.
+    occurred_at_source: str
     score: float
     # The evidence behind the score. Chunk-level provenance is exactly what
     # Phase 2's citations need, and it is available because M1.1 split these
@@ -244,6 +248,7 @@ def to_response(
                 title=hit.title,
                 kind=hit.kind.value,
                 occurred_at=hit.occurred_at,  # type: ignore[arg-type]
+                occurred_at_source=hit.occurred_at_source.value,
                 score=hit.score,
                 matched_chunks=[
                     ChunkOut(

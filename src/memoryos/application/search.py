@@ -42,7 +42,12 @@ from memoryos.application.ports import (
 )
 from memoryos.domain.fusion import DEFAULT_RRF_K, reciprocal_rank_fusion
 from memoryos.domain.signals import recency_score
-from memoryos.domain.values import DEFAULT_SEARCH_MODE, MemoryKind, SearchMode
+from memoryos.domain.values import (
+    DEFAULT_SEARCH_MODE,
+    MemoryKind,
+    SearchMode,
+    TimeProvenance,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -84,6 +89,15 @@ FUSION_FANOUT = 3
 # fusion's.
 DEFAULT_RERANK_CANDIDATES = 25
 
+# The per-memory row the grouping step needs, in select order:
+# `(external_key, title, kind, occurred_at, occurred_at_source, source_name)`.
+#
+# Named because it is written in four places — the query, its public wrapper,
+# the tuner's `Candidates`, and the tuner's own grouping — and M4.1 had to widen
+# every one of them by hand to carry the provenance. A positional tuple spelled
+# out four times is a change that compiles in three of them.
+type MemoryMetadata = tuple[str, str | None, str, object, str, str]
+
 
 @dataclass(frozen=True, slots=True)
 class MemoryHit:
@@ -98,6 +112,11 @@ class MemoryHit:
     title: str | None
     kind: MemoryKind
     occurred_at: object
+    # How that date was derived. Carried beside it rather than looked up later,
+    # because a timestamp without its provenance is a claim whose strength the
+    # caller cannot see — and M4.1 renders a filesystem mtime differently from a
+    # date a source declared.
+    occurred_at_source: TimeProvenance
     score: float
     matched_chunks: list[ScoredChunk]
 
@@ -492,7 +511,7 @@ class SearchMemories:
 
     async def memory_metadata(
         self, memory_ids: list[UUID]
-    ) -> dict[UUID, tuple[str, str | None, str, object, str]]:
+    ) -> dict[UUID, MemoryMetadata]:
         """Public because the tuner groups chunks into memories without re-searching."""
         return await self._memory_metadata(memory_ids)
 
@@ -576,7 +595,7 @@ class SearchMemories:
             if row is None:
                 # Deleted between the index read and this lookup.
                 continue
-            external_key, title, kind, occurred_at, source_name = row
+            external_key, title, kind, occurred_at, provenance, source_name = row
             hits.append(
                 MemoryHit(
                     memory_id=memory_id,
@@ -585,6 +604,7 @@ class SearchMemories:
                     title=title,
                     kind=MemoryKind(kind),
                     occurred_at=occurred_at,
+                    occurred_at_source=TimeProvenance(provenance),
                     # Max, not mean. A long document with one perfectly
                     # relevant paragraph should outrank a short one that is
                     # vaguely on-topic throughout; mean would penalise the long
@@ -601,7 +621,7 @@ class SearchMemories:
 
     async def _memory_metadata(
         self, memory_ids: list[UUID]
-    ) -> dict[UUID, tuple[str, str | None, str, object, str]]:
+    ) -> dict[UUID, MemoryMetadata]:
         stmt = (
             select(
                 models.Memory.id,
@@ -609,6 +629,7 @@ class SearchMemories:
                 models.Memory.title,
                 models.Memory.kind,
                 models.Memory.occurred_at,
+                models.Memory.occurred_at_source,
                 models.Source.name,
             )
             .join(models.Source, models.Source.id == models.Memory.source_id)
@@ -617,7 +638,9 @@ class SearchMemories:
 
         async with self._sessions() as session:
             rows = await session.execute(stmt)
-            return {row[0]: (row[1], row[2], row[3], row[4], row[5]) for row in rows}
+            return {
+                row[0]: (row[1], row[2], row[3], row[4], row[5], row[6]) for row in rows
+            }
 
 
 def fuse(

@@ -41,6 +41,32 @@ export function timestamp(value: string | null | undefined): string {
   });
 }
 
+/**
+ * A timestamp in UTC, for anywhere it is being read against a UTC boundary.
+ *
+ * The timeline needs this and the search results do not, which is the whole
+ * distinction. `date_trunc` runs in UTC — deliberately, so the same corpus
+ * buckets the same way on every machine — and the local-zone renderer above
+ * then prints a memory in the `2026-08-07` bucket as "08 Aug 2026, 03:58"
+ * anywhere east of Greenwich. Both are correct and together they look like a
+ * bug, so the view that shows bucket boundaries shows their contents in the
+ * same zone the boundaries were computed in.
+ */
+export function timestampUtc(value: string | null | undefined): string {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString("en-GB", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+    hour12: false,
+  });
+}
+
 /** A hash, shortened for display but never for comparison. */
 export function shortHash(value: string | null | undefined, length = 12): string {
   if (!value) return "—";

@@ -38,12 +38,13 @@ from memoryos.application.search import (
     FUSION_FANOUT,
     FusionWeights,
     MemoryHit,
+    MemoryMetadata,
     SearchMemories,
     SignalTable,
     fuse,
 )
 from memoryos.domain.fusion import DEFAULT_RRF_K
-from memoryos.domain.values import MemoryKind
+from memoryos.domain.values import MemoryKind, TimeProvenance
 
 logger = structlog.get_logger(__name__)
 
@@ -87,7 +88,7 @@ class Candidates:
     vector: list[ScoredChunk]
     keyword: list[ScoredChunk]
     signals: SignalTable
-    metadata: dict[str, tuple[str, str | None, str, object, str]] = field(
+    metadata: dict[str, MemoryMetadata] = field(
         default_factory=dict
     )
     graph: GraphCandidates | None = None
@@ -244,7 +245,7 @@ def _score_one(
 
 def _group(
     chunks: Sequence[ScoredChunk],
-    metadata: dict[str, tuple[str, str | None, str, object, str]],
+    metadata: dict[str, MemoryMetadata],
 ) -> list[MemoryHit]:
     """The same chunks-to-memories collapse the search use case performs.
 
@@ -262,7 +263,7 @@ def _group(
         row = metadata.get(memory_id)
         if row is None:
             continue
-        external_key, title, kind, occurred_at, source_name = row
+        external_key, title, kind, occurred_at, provenance, source_name = row
         hits.append(
             MemoryHit(
                 memory_id=matched[0].memory_id,
@@ -271,6 +272,7 @@ def _group(
                 title=title,
                 kind=MemoryKind(kind),
                 occurred_at=occurred_at,
+                occurred_at_source=TimeProvenance(provenance),
                 score=max(chunk.score for chunk in matched),
                 matched_chunks=sorted(matched, key=lambda chunk: chunk.ordinal),
             )

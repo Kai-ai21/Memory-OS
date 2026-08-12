@@ -12,7 +12,7 @@ from memoryos.adapters.db.vector_store import NotNormalized, PgVectorStore, _pre
 from memoryos.application.ports import ScoredChunk, SearchFilters
 from memoryos.application.search import MemoryHit, _ranking
 from memoryos.domain.ids import new_id
-from memoryos.domain.values import MemoryKind
+from memoryos.domain.values import MemoryKind, TimeProvenance
 from tests.support.fakes import FakeEmbedder
 
 
@@ -36,6 +36,7 @@ def hit(chunks: list[ScoredChunk]) -> MemoryHit:
         title=None,
         kind=MemoryKind.NOTE,
         occurred_at=datetime(2024, 1, 1, tzinfo=UTC),
+        occurred_at_source=TimeProvenance.FILESYSTEM,
         score=max(c.score for c in chunks),
         matched_chunks=sorted(chunks, key=lambda c: c.ordinal),
     )

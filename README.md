@@ -14,7 +14,8 @@ M2.5 (citations and explainability) and M2.6 (grounded answers). **Phase 2 compl
 M3.2 (entity resolution), M3.3 (typed relationships), M3.4 (projection sync, rebuild and
 divergence detection) and M3.5 (graph-augmented retrieval, measured and shipped at weight
 zero). See [Graph](#graph) and [Graph-augmented retrieval](#graph-augmented-retrieval).
-**Phase 4 in progress**: M4.0 (the temporal query layer). See [Time](#time).
+**Phase 4 in progress**: M4.0 (the temporal query layer) and M4.1 (the timeline view).
+See [Time](#time).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -1441,6 +1442,8 @@ memoryos gaps --min-days 14                # silences with activity either side
 memoryos as-of 2026-08-10T16:25:00Z        # what the system had ingested by then
 ```
 
+The same layer has a view in the UI — see [The timeline view](#the-timeline-view).
+
 **Two clocks, and every question here is about which one.** `occurred_at` is when the thing
 happened in the world; `ingested_at` is when this system learned about it. `memories_in_range`,
 `activity_by_period` and `find_gaps` read the first — it is the clock a person means by "when".
@@ -1617,6 +1620,85 @@ index can improve a query that has no rows to skip.
 
 This is the M1.6 lesson applied a second time. An index is not used because it exists, and the
 planner is usually right about that.
+
+### The timeline view
+
+M4.1 puts the temporal layer on screen. Three endpoints over `application.temporal` and nothing
+else — `/timeline`, `/memories/at`, `/gaps` — and a `timeline` tab beside search.
+
+```bash
+make dev                                   # API on :8000, UI on :5173
+open http://localhost:5173/timeline?period=day
+```
+
+**No chart library.** The dependency would be several hundred kilobytes to draw rectangles whose
+heights are a division, and it would bring its own opinions about typography, tooltips and colour
+that would then have to be fought. What is needed is one flex row, one percentage per bar and a
+`<button>` — which is also how the chart ends up keyboard-navigable for free (arrow keys walk the
+periods, Home/End jump to the ends, enter opens one).
+
+Three things the chart says that `memoryos timeline` cannot:
+
+| | |
+| --- | --- |
+| **stacked by kind** | "Forty memories" and "forty memories that are all code" are different facts, and only one of them is on screen in a terminal. |
+| **empty periods hatched** | `find_gaps` exists on the argument that absence is the signal. An absence drawn as absence is indistinguishable from the edge of the data or from a chart that failed to load. |
+| **gaps as objects** | In their own lane, positioned by real time rather than snapped to bucket edges — a gap running from the 7th to the 46th does not begin where a bar begins. |
+
+Bars span their period's full share of the axis, so the chart is a real time axis rather than a
+row of evenly-spaced columns, and the gap lane below lines up with the hollows it explains. The
+fills are washed to 70%: at full strength a wide bar is a field of saturated colour, which is a
+dashboard, and this interface spends its one accent on the matched-span highlight.
+
+### Provenance reaches the surface
+
+Every date in the UI now carries how it was derived. `DateStamp` marks anything inferred with a
+`~`, anything undated with a `?`, mutes both, and explains itself on hover; **a stated date gets
+no mark at all**, because marking every date makes the mark invisible.
+
+```
+filesystem~  162 (100.0%)   undated?  0
+
+Every date here is inferred rather than stated. Nothing in this corpus declared when it
+happened, so the chart below shows when files were last written to this disk — which is
+not the same as when the work happened.
+```
+
+That caption is not decoration: it changes what every bar under it means, and it sits above the
+chart rather than behind a tooltip for that reason. The tiers are in `web/src/lib/provenance.ts`
+— `declared` and `parsed` are claims the source made, `filesystem` and `inferred` are claims we
+made about it, and an unrecognised value is treated as the lower tier rather than the higher one.
+
+This is why `occurred_at_source` was added to the search hit as well. A client that received only
+the timestamps could not render them differently however much it wanted to.
+
+### Versions on a rail
+
+The memory detail page draws its versions rather than listing them: a hollow tick where the
+version occurred, a filled one where it was ingested, and **the rule between them is the lag**
+that `out_of_order` measures, made visible per item. Five revisions in an hour and five over a
+year are the same five rows in a table and two obviously different pictures here.
+
+What changed is read off the two hashes the corpus already stores. `content_hash` differing with
+`normalized_hash` identical — a trailing newline, a line ending, a byte the normalizer discards —
+renders as **"bytes only"** rather than as "changed", which is the difference between a version
+that changed the corpus and one that only changed the file.
+
+### Two bugs that only running it would find
+
+Both were correct code producing a misleading screen, which is the class of defect a UI milestone
+exists to catch.
+
+**The bucket boundaries are UTC and the timestamps were local.** `date_trunc` runs in UTC
+deliberately, so the same corpus buckets identically on every machine; `format.timestamp` renders
+in the reader's zone deliberately, so a timestamp can be correlated against a log line. Together,
+a bar labelled `2026-08-07` listed memories dated `08 Aug 2026, 03:58`, and that reads as an
+off-by-one in the bucketing. Views that show bucket boundaries now show their contents in the
+zone the boundaries were computed in, and the window is labelled `(utc)`.
+
+**The count labels floated at the plot's ceiling.** Absolutely positioned against the full-height
+button rather than against the bar, so every number had to be matched to its bar by eye — which
+is exactly the reading error the number was added to remove.
 
 ## Migrations
 

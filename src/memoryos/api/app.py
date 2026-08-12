@@ -12,6 +12,7 @@ from memoryos.api.routes import (
     search,
     sources,
     stats,
+    timeline,
 )
 from memoryos.config import Settings, get_settings
 from memoryos.container import Container
@@ -39,6 +40,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(sources.router)
     app.include_router(search.router)
+    # Before `memories`, and it has to be. Routes are matched in registration
+    # order, so `/memories/{memory_id}` would claim `/memories/at` first and
+    # answer 422 for a UUID that was never meant to be one. A literal path
+    # segment must be registered ahead of the parameterised one that shadows it.
+    app.include_router(timeline.router)
     app.include_router(memories.router)
     app.include_router(stats.router)
     app.include_router(judgements.router)
