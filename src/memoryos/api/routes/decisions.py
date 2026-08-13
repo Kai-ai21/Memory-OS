@@ -21,11 +21,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
-from memoryos.application import decision_suggest, decisions
+from memoryos.application import decision_suggest, decisions, outcome_suggest, outcomes
 from memoryos.container import Container
 from memoryos.domain.values import (
     DecisionStatus,
+    EvidenceKind,
     EvidenceRelation,
+    OutcomeVerdict,
     SuggestionStatus,
     TimeProvenance,
 )
@@ -144,6 +146,44 @@ class DecisionSummaryOut(BaseModel):
     evidence: int
 
 
+class OutcomeEvidenceOut(BaseModel):
+    id: UUID
+    memory_id: UUID
+    chunk_id: UUID | None
+    source_name: str
+    external_key: str
+    chunk_ordinal: int | None
+    # A snapshot of the evidence memory's clock at link time, not a join. The
+    # gap between it and the decision's date is the claim being made.
+    occurred_at: datetime | None
+
+
+class OutcomeOut(BaseModel):
+    id: UUID
+    description: str
+    verdict: OutcomeVerdict
+    observed_at: datetime
+    observed_at_source: TimeProvenance
+    # Testimony or a model's reading. Sent to the client on every outcome
+    # because an interface that rendered them identically would be asserting
+    # they are the same kind of claim.
+    evidence_kind: EvidenceKind
+    confidence: float | None
+    created_at: datetime
+    evidence: list[OutcomeEvidenceOut]
+
+
+class OutcomeIn(BaseModel):
+    description: str = Field(min_length=1)
+    verdict: OutcomeVerdict
+    observed_at: datetime | None = None
+    evidence: list[EvidenceIn] = Field(default_factory=list)
+    # No `confidence` and no `evidence_kind`. This route is the declared path:
+    # it records what somebody observed, at confidence 1.0, because saying you
+    # observed something is what certainty about an observation means. A reading
+    # you are unsure about belongs in the suggestion queue.
+
+
 class DecisionDetailOut(BaseModel):
     id: UUID
     question: str
@@ -159,6 +199,47 @@ class DecisionDetailOut(BaseModel):
     options: list[OptionOut]
     assumptions: list[AssumptionOut]
     evidence: list[EvidenceOut]
+    outcomes: list[OutcomeOut]
+
+
+class OutcomeSuggestionOut(BaseModel):
+    id: UUID
+    decision_id: UUID
+    # The decision travels with the candidate. "Is this an outcome" is not a
+    # question anybody can answer without both on screen.
+    decision_question: str
+    decision_decided_at: datetime
+    draft: dict[str, Any]
+    source_text: str
+    source_name: str
+    external_key: str
+    candidate_occurred_at: datetime
+    # The temporal claim, stated rather than folded into a score.
+    gap_days: float
+    window_days: float
+    shared_entities: list[str]
+    # 'applied' or 'unavailable' — whether the entity test could be run at all.
+    entity_filter: str
+    status: SuggestionStatus
+    model_id: str
+    suggested_at: datetime
+    reviewed_at: datetime | None
+    outcome_id: UUID | None
+
+
+class SuccessRateOut(BaseModel):
+    worked: int
+    failed: int
+    mixed: int
+    # Reported beside the rate rather than inside it, and `undecided` beside
+    # that: a decision it is too soon to judge and a decision nobody has looked
+    # at are different facts.
+    too_early: int
+    undecided: int
+    resolved: int
+    # None rather than 0.0 when nothing is resolved — zero would read as
+    # "everything failed", which on this corpus is the opposite of the truth.
+    rate: float | None
 
 
 class SuggestionOut(BaseModel):
@@ -371,13 +452,147 @@ async def reject_suggestion(suggestion_id: UUID, container: ContainerDep) -> Non
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
+@router.get("/outcomes/suggestions", response_model=list[OutcomeSuggestionOut])
+async def list_outcome_suggestions(
+    container: ContainerDep,
+    suggestion_status: Annotated[
+        SuggestionStatus | None, Query(alias="status")
+    ] = SuggestionStatus.PENDING,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> list[OutcomeSuggestionOut]:
+    """The outcome review queue, closest temporal gap first."""
+    rows = await outcome_suggest.list_suggestions(
+        container.database.session_factory, status=suggestion_status, limit=limit
+    )
+    return [
+        OutcomeSuggestionOut(
+            id=row.id,
+            decision_id=row.decision_id,
+            decision_question=row.decision_question,
+            decision_decided_at=row.decision_decided_at,
+            draft=row.draft.as_dict(),
+            source_text=row.source_text,
+            source_name=row.source_name,
+            external_key=row.external_key,
+            candidate_occurred_at=row.candidate_occurred_at,
+            gap_days=row.gap_days,
+            window_days=row.window_days,
+            shared_entities=row.shared_entities,
+            entity_filter=row.entity_filter,
+            status=row.status,
+            model_id=row.model_id,
+            suggested_at=row.suggested_at,
+            reviewed_at=row.reviewed_at,
+            outcome_id=row.outcome_id,
+        )
+        for row in rows
+    ]
+
+
+@router.post(
+    "/outcomes/suggestions/{suggestion_id}/accept",
+    response_model=DecisionOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def accept_outcome_suggestion(
+    suggestion_id: UUID, container: ContainerDep
+) -> DecisionOut:
+    """Write the outcome as `inferred`, keeping the candidate as its evidence.
+
+    Never `declared`, whoever accepted it. Accepting means the reading is worth
+    keeping, not that anybody watched it happen — and an accepted suggestion
+    promoted to testimony would be indistinguishable from an observation to
+    M5.3, which is the one thing `evidence_kind` exists to prevent.
+    """
+    try:
+        outcome_id = await outcome_suggest.accept(
+            container.database.session_factory, suggestion_id
+        )
+    except decisions.UnknownDecision as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except outcome_suggest.AlreadyReviewed as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except outcomes.InvalidOutcome as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    return DecisionOut(id=outcome_id)
+
+
+@router.post(
+    "/outcomes/suggestions/{suggestion_id}/reject",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def reject_outcome_suggestion(
+    suggestion_id: UUID, container: ContainerDep
+) -> None:
+    try:
+        await outcome_suggest.reject(container.database.session_factory, suggestion_id)
+    except decisions.UnknownDecision as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except outcome_suggest.AlreadyReviewed as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
+@router.get("/outcomes/rate", response_model=SuccessRateOut)
+async def get_success_rate(container: ContainerDep) -> SuccessRateOut:
+    """How decisions turned out, with `too_early` outside the rate."""
+    rate = await outcomes.success_rate(container.database.session_factory)
+    return SuccessRateOut(
+        worked=rate.worked,
+        failed=rate.failed,
+        mixed=rate.mixed,
+        too_early=rate.too_early,
+        undecided=rate.undecided,
+        resolved=rate.resolved,
+        rate=rate.rate,
+    )
+
+
 @router.get("/decisions/{decision_id}", response_model=DecisionDetailOut)
 async def show_decision(decision_id: UUID, container: ContainerDep) -> DecisionDetailOut:
     try:
         detail = await decisions.show(container.database.session_factory, decision_id)
     except decisions.UnknownDecision as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
-    return _detail_out(detail)
+    recorded = await outcomes.for_decision(
+        container.database.session_factory, decision_id
+    )
+    return _detail_out(detail, recorded)
+
+
+@router.post(
+    "/decisions/{decision_id}/outcomes",
+    response_model=DecisionOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_outcome(
+    decision_id: UUID, body: OutcomeIn, container: ContainerDep
+) -> DecisionOut:
+    """Record an observed outcome. Declared, confidence 1.0."""
+    try:
+        outcome_id = await outcomes.record(
+            container.database.session_factory,
+            decision_id,
+            outcomes.OutcomeDraft(
+                description=body.description,
+                verdict=body.verdict,
+                evidence=tuple(
+                    outcomes.OutcomeEvidenceInput(
+                        source_name=item.source_name,
+                        external_key=item.external_key,
+                        chunk_ordinal=item.chunk_ordinal,
+                    )
+                    for item in body.evidence
+                ),
+            ),
+            observed_at=body.observed_at or _now(),
+            observed_at_source=TimeProvenance.DECLARED,
+            evidence_kind=EvidenceKind.DECLARED,
+        )
+    except decisions.UnknownDecision as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except (outcomes.InvalidOutcome, outcomes.UnresolvedEvidence) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    return DecisionOut(id=outcome_id)
 
 
 @router.patch("/decisions/{decision_id}", response_model=DecisionDetailOut)
@@ -422,7 +637,8 @@ async def edit_decision(
     except decisions.InvalidDecision as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     return _detail_out(
-        await decisions.show(container.database.session_factory, decision_id)
+        await decisions.show(container.database.session_factory, decision_id),
+        await outcomes.for_decision(container.database.session_factory, decision_id),
     )
 
 
@@ -451,7 +667,9 @@ async def link_evidence(
     return DecisionOut(id=evidence_id)
 
 
-def _detail_out(detail: decisions.DecisionDetail) -> DecisionDetailOut:
+def _detail_out(
+    detail: decisions.DecisionDetail, recorded: list[outcomes.OutcomeRow]
+) -> DecisionDetailOut:
     return DecisionDetailOut(
         id=detail.id,
         question=detail.question,
@@ -494,5 +712,30 @@ def _detail_out(detail: decisions.DecisionDetail) -> DecisionDetailOut:
                 relation=item.relation,
             )
             for item in detail.evidence
+        ],
+        outcomes=[
+            OutcomeOut(
+                id=outcome.id,
+                description=outcome.description,
+                verdict=outcome.verdict,
+                observed_at=outcome.observed_at,
+                observed_at_source=outcome.observed_at_source,
+                evidence_kind=outcome.evidence_kind,
+                confidence=outcome.confidence,
+                created_at=outcome.created_at,
+                evidence=[
+                    OutcomeEvidenceOut(
+                        id=item.id,
+                        memory_id=item.memory_id,
+                        chunk_id=item.chunk_id,
+                        source_name=item.source_name,
+                        external_key=item.external_key,
+                        chunk_ordinal=item.chunk_ordinal,
+                        occurred_at=item.occurred_at,
+                    )
+                    for item in outcome.evidence
+                ],
+            )
+            for outcome in recorded
         ],
     )

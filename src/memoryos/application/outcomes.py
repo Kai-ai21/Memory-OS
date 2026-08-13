@@ -97,6 +97,13 @@ class OutcomeDraft:
     # The model's own account of why it thinks this is an outcome. Empty for a
     # manual one, where the description is the account.
     rationale: str | None = None
+    # How sure whoever *proposed* this draft was. Deliberately not called
+    # `confidence`: the column on `decision_outcomes` is what the stored record
+    # claims, and `record` takes it as an argument so an inferred outcome cannot
+    # be written with a declared one's certainty. This is the judgement's own
+    # number, travelling with the draft so that accepting carries it through
+    # rather than losing it and defaulting to nothing.
+    judged_confidence: float | None = None
     evidence: tuple[OutcomeEvidenceInput, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
@@ -105,6 +112,7 @@ class OutcomeDraft:
             "description": self.description,
             "verdict": self.verdict.value,
             "rationale": self.rationale,
+            "judged_confidence": self.judged_confidence,
         }
 
     @classmethod
@@ -118,10 +126,12 @@ class OutcomeDraft:
                 f"{raw!r} is not a verdict; expected one of {allowed}"
             ) from exc
         rationale = payload.get("rationale")
+        judged = payload.get("judged_confidence")
         return cls(
             description=str(payload.get("description") or ""),
             verdict=verdict,
             rationale=str(rationale).strip() or None if rationale else None,
+            judged_confidence=None if judged is None else float(judged),
         )
 
 

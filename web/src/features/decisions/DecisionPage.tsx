@@ -17,7 +17,12 @@
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
-import { api, type DecisionAssumption, type DecisionEvidence } from "../../api/client";
+import {
+  api,
+  type DecisionAssumption,
+  type DecisionEvidence,
+  type Outcome,
+} from "../../api/client";
 import { DateStamp } from "../../components/DateStamp";
 import { Failure, Loading, Meta, SectionHeading, Tag } from "../../components/primitives";
 
@@ -123,6 +128,30 @@ export function DecisionPage() {
       </section>
 
       <section className="flex flex-col gap-2">
+        <SectionHeading right={`${row.outcomes.length}`}>
+          outcomes — what happened
+        </SectionHeading>
+        {row.outcomes.length === 0 ? (
+          <p className="meta max-w-prose leading-relaxed text-faint">
+            Nothing recorded. That is not the same as <code className="kbd">too_early</code>,
+            which is a verdict somebody reached by looking — this is a decision nobody has
+            looked at. Record one with{" "}
+            <code className="kbd">memoryos outcome &lt;id&gt; --verdict …</code>, or propose
+            candidates with <code className="kbd">memoryos outcomes suggest</code>.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {/* Oldest first: the sequence is the information. "Worked, then
+                failed" and "failed, then worked" are different stories, and
+                reverse order would make the second look like the first. */}
+            {row.outcomes.map((outcome) => (
+              <OutcomeRow key={outcome.id} outcome={outcome} />
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-2">
         <SectionHeading right={`${row.evidence.length}`}>evidence</SectionHeading>
         {row.evidence.length === 0 ? (
           <p className="meta text-faint">
@@ -160,6 +189,62 @@ function AssumptionRow({ assumption }: { assumption: DecisionAssumption }) {
       <span className="meta shrink-0 text-faint">
         {assumption.confidence === null ? "—" : assumption.confidence.toFixed(2)}
       </span>
+    </li>
+  );
+}
+
+/** The four verdicts, and the one that is deliberately not a colour. */
+const VERDICT_TONE: Record<string, string> = {
+  worked: "text-affirm",
+  failed: "text-deny",
+  mixed: "text-amber",
+  // Neutral on purpose. `too_early` is not a lukewarm result, it is the absence
+  // of one, and giving it a verdict colour would make a corpus of unresolved
+  // decisions read as a corpus of middling ones.
+  too_early: "text-faint",
+};
+
+function OutcomeRow({ outcome }: { outcome: Outcome }) {
+  const inferred = outcome.evidence_kind === "inferred";
+  return (
+    <li className="border-l-2 border-rule pl-3">
+      <div className="flex flex-wrap items-baseline gap-3">
+        <span className={`meta-label ${VERDICT_TONE[outcome.verdict] ?? "text-muted"}`}>
+          {outcome.verdict}
+        </span>
+        {/* Shown on every outcome, not only inferred ones. A reader scanning a
+            list has to be able to see which of these somebody watched happen —
+            testimony and a model's reading are different kinds of claim, and
+            rendering them identically asserts they are not. */}
+        <span
+          className={`meta border px-1 ${
+            inferred ? "border-rule text-faint" : "border-edge text-amber"
+          }`}
+          title={
+            inferred
+              ? "inferred: a memory that occurred afterwards, judged by a model and accepted in review"
+              : "declared: somebody observed this happen"
+          }
+        >
+          {outcome.evidence_kind}
+        </span>
+        <DateStamp value={outcome.observed_at} provenance={outcome.observed_at_source} />
+        {outcome.confidence !== null ? (
+          <span className="meta text-faint">{outcome.confidence.toFixed(2)}</span>
+        ) : null}
+      </div>
+      <p className="prose-content mt-0.5 max-w-prose text-sm text-ink">
+        {outcome.description}
+      </p>
+      {outcome.evidence.map((item) => (
+        <Link
+          key={item.id}
+          className="meta text-amber underline"
+          to={`/memory/${item.memory_id}`}
+        >
+          {item.source_name}:{item.external_key}
+        </Link>
+      ))}
     </li>
   );
 }

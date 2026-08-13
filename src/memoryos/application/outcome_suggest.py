@@ -539,6 +539,7 @@ class SuggestOutcomes:
             description=description,
             verdict=verdict,
             rationale=(parsed.rationale or "").strip() or None,
+            judged_confidence=parsed.confidence,
         )
 
     async def _with_backoff(self, system: str, user: str) -> str:
@@ -761,7 +762,7 @@ async def accept(
         source_name = row.source_name
         external_key = row.external_key
         observed_at = row.candidate_occurred_at
-        stated = float(row.draft.get("confidence") or 0.0) if row.draft else 0.0
+        stated = draft.judged_confidence or 0.0
         provenance = await _provenance_of(session, source_name, external_key)
 
     outcome_id = await record(

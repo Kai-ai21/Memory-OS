@@ -147,6 +147,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/decisions/{decision_id}/outcomes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Outcome
+         * @description Record an observed outcome. Declared, confidence 1.0.
+         */
+        post: operations["create_outcome_decisions__decision_id__outcomes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/doctor": {
         parameters: {
             query?: never;
@@ -350,6 +370,88 @@ export interface paths {
         get: operations["get_evolution_memories__memory_id__evolution_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/outcomes/rate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Success Rate
+         * @description How decisions turned out, with `too_early` outside the rate.
+         */
+        get: operations["get_success_rate_outcomes_rate_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/outcomes/suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Outcome Suggestions
+         * @description The outcome review queue, closest temporal gap first.
+         */
+        get: operations["list_outcome_suggestions_outcomes_suggestions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/outcomes/suggestions/{suggestion_id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Outcome Suggestion
+         * @description Write the outcome as `inferred`, keeping the candidate as its evidence.
+         *
+         *     Never `declared`, whoever accepted it. Accepting means the reading is worth
+         *     keeping, not that anybody watched it happen — and an accepted suggestion
+         *     promoted to testimony would be indistinguishable from an observation to
+         *     M5.3, which is the one thing `evidence_kind` exists to prevent.
+         */
+        post: operations["accept_outcome_suggestion_outcomes_suggestions__suggestion_id__accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/outcomes/suggestions/{suggestion_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject Outcome Suggestion */
+        post: operations["reject_outcome_suggestion_outcomes_suggestions__suggestion_id__reject_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -772,6 +874,8 @@ export interface components {
             id: string;
             /** Options */
             options: components["schemas"]["OptionOut"][];
+            /** Outcomes */
+            outcomes: components["schemas"]["OutcomeOut"][];
             /** Question */
             question: string;
             /** Reasoning */
@@ -937,6 +1041,23 @@ export interface components {
             /** Source Name */
             source_name: string;
         };
+        /**
+         * EvidenceKind
+         * @description Whether an outcome was observed by a person or inferred by the system.
+         *
+         *     Not the same distinction as `TimeProvenance.DECLARED`/`INFERRED`, which is
+         *     about how a *date* was arrived at. This is about the claim itself: whether
+         *     somebody watched the thing happen, or whether a language model read a
+         *     memory that occurred afterwards and judged it to be a consequence.
+         *
+         *     They are not equally trustworthy and nothing downstream may treat them as
+         *     though they were. A declared outcome is testimony; an inferred one is a
+         *     correlation in time plus a model's opinion, and M5.3 has to weight them
+         *     differently or its patterns will be built mostly on the cheaper kind,
+         *     because the cheaper kind is the one that scales.
+         * @enum {string}
+         */
+        EvidenceKind: "declared" | "inferred";
         /** EvidenceOut */
         EvidenceOut: {
             /** Chunk Id */
@@ -1313,6 +1434,142 @@ export interface components {
             /** Was Chosen */
             was_chosen: boolean;
         };
+        /** OutcomeEvidenceOut */
+        OutcomeEvidenceOut: {
+            /** Chunk Id */
+            chunk_id: string | null;
+            /** Chunk Ordinal */
+            chunk_ordinal: number | null;
+            /** External Key */
+            external_key: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Memory Id
+             * Format: uuid
+             */
+            memory_id: string;
+            /** Occurred At */
+            occurred_at: string | null;
+            /** Source Name */
+            source_name: string;
+        };
+        /** OutcomeIn */
+        OutcomeIn: {
+            /** Description */
+            description: string;
+            /** Evidence */
+            evidence?: components["schemas"]["EvidenceIn"][];
+            /** Observed At */
+            observed_at?: string | null;
+            verdict: components["schemas"]["OutcomeVerdict"];
+        };
+        /** OutcomeOut */
+        OutcomeOut: {
+            /** Confidence */
+            confidence: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Description */
+            description: string;
+            /** Evidence */
+            evidence: components["schemas"]["OutcomeEvidenceOut"][];
+            evidence_kind: components["schemas"]["EvidenceKind"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            observed_at_source: components["schemas"]["TimeProvenance"];
+            verdict: components["schemas"]["OutcomeVerdict"];
+        };
+        /** OutcomeSuggestionOut */
+        OutcomeSuggestionOut: {
+            /**
+             * Candidate Occurred At
+             * Format: date-time
+             */
+            candidate_occurred_at: string;
+            /**
+             * Decision Decided At
+             * Format: date-time
+             */
+            decision_decided_at: string;
+            /**
+             * Decision Id
+             * Format: uuid
+             */
+            decision_id: string;
+            /** Decision Question */
+            decision_question: string;
+            /** Draft */
+            draft: {
+                [key: string]: unknown;
+            };
+            /** Entity Filter */
+            entity_filter: string;
+            /** External Key */
+            external_key: string;
+            /** Gap Days */
+            gap_days: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Model Id */
+            model_id: string;
+            /** Outcome Id */
+            outcome_id: string | null;
+            /** Reviewed At */
+            reviewed_at: string | null;
+            /** Shared Entities */
+            shared_entities: string[];
+            /** Source Name */
+            source_name: string;
+            /** Source Text */
+            source_text: string;
+            status: components["schemas"]["SuggestionStatus"];
+            /**
+             * Suggested At
+             * Format: date-time
+             */
+            suggested_at: string;
+            /** Window Days */
+            window_days: number;
+        };
+        /**
+         * OutcomeVerdict
+         * @description What actually happened after a decision.
+         *
+         *     **`TOO_EARLY` is a verdict, not a gap.** Most decisions in a young project
+         *     have no outcome yet, and the difference between "we looked and it is too
+         *     soon to say" and "nobody has looked" is the difference between an honest
+         *     corpus and one with holes in it. Recording it explicitly is also what stops
+         *     a success rate from being computed over whatever happens to have been
+         *     judged: `too_early` is excluded from the denominator, so a project with two
+         *     successes and thirty unresolved decisions reports 100% of two rather than a
+         *     number that sounds like a track record.
+         *
+         *     `MIXED` earns its place for the same reason `Verdict.MISSING` does in M2.0a:
+         *     it is the answer that cannot be inferred from the other two. A decision that
+         *     achieved what it was for and cost something unforeseen is not half a success
+         *     and not a failure, and forcing it into either loses the only part M5.3 could
+         *     learn from.
+         * @enum {string}
+         */
+        OutcomeVerdict: "worked" | "failed" | "mixed" | "too_early";
         /**
          * Period
          * @description The calendar grain an activity histogram is bucketed at.
@@ -1537,6 +1794,23 @@ export interface components {
             models: {
                 [key: string]: number;
             };
+        };
+        /** SuccessRateOut */
+        SuccessRateOut: {
+            /** Failed */
+            failed: number;
+            /** Mixed */
+            mixed: number;
+            /** Rate */
+            rate: number | null;
+            /** Resolved */
+            resolved: number;
+            /** Too Early */
+            too_early: number;
+            /** Undecided */
+            undecided: number;
+            /** Worked */
+            worked: number;
         };
         /** SuggestionOut */
         SuggestionOut: {
@@ -2163,6 +2437,41 @@ export interface operations {
             };
         };
     };
+    create_outcome_decisions__decision_id__outcomes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OutcomeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_doctor_doctor_get: {
         parameters: {
             query?: never;
@@ -2459,6 +2768,118 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["EvolutionOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_success_rate_outcomes_rate_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuccessRateOut"];
+                };
+            };
+        };
+    };
+    list_outcome_suggestions_outcomes_suggestions_get: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["SuggestionStatus"] | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutcomeSuggestionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_outcome_suggestion_outcomes_suggestions__suggestion_id__accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_outcome_suggestion_outcomes_suggestions__suggestion_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

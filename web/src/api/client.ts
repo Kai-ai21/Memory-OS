@@ -144,6 +144,12 @@ export type DecisionEditIn =
 export type DecisionStatus = NonNullable<DecisionSummary["status"]>;
 export type EvidenceRelation = DecisionEvidence["relation"];
 export type Suggestion = Ok<paths["/decisions/suggestions"]["get"]>[number];
+export type Outcome = DecisionDetail["outcomes"][number];
+export type OutcomeVerdict = Outcome["verdict"];
+export type OutcomeIn =
+  paths["/decisions/{decision_id}/outcomes"]["post"]["requestBody"]["content"]["application/json"];
+export type OutcomeSuggestion = Ok<paths["/outcomes/suggestions"]["get"]>[number];
+export type SuccessRate = Ok<paths["/outcomes/rate"]["get"]>;
 
 export interface SearchArgs {
   q: string;
@@ -255,6 +261,23 @@ export const api = {
 
   rejectSuggestion: (id: string) =>
     request<null>(`/decisions/suggestions/${id}/reject`, { method: "POST" }),
+
+  recordOutcome: (decisionId: string, body: OutcomeIn) =>
+    request<{ id: string }>(`/decisions/${decisionId}/outcomes`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  outcomeSuggestions: (status: OutcomeSuggestion["status"] = "pending") =>
+    request<OutcomeSuggestion[]>(`/outcomes/suggestions?status=${status}`),
+
+  acceptOutcomeSuggestion: (id: string) =>
+    request<{ id: string }>(`/outcomes/suggestions/${id}/accept`, { method: "POST" }),
+
+  rejectOutcomeSuggestion: (id: string) =>
+    request<null>(`/outcomes/suggestions/${id}/reject`, { method: "POST" }),
+
+  successRate: () => request<SuccessRate>("/outcomes/rate"),
 };
 
 export interface TimelineArgs {
