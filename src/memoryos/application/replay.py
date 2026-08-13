@@ -134,6 +134,14 @@ USER_AUTHORED_TABLES: frozenset[str] = frozenset(
         "decision_outcomes",
         "outcome_evidence",
         "outcome_suggestions",
+        # M5.2's three. An evaluation is somebody's judgement about whether a
+        # belief held; a group is somebody's judgement that two beliefs are the
+        # same one. Neither is in the log. `assumption_groups` and
+        # `assumption_group_candidates` reach `decision_assumptions` rather than
+        # anything derived, so unlike the evidence tables they need no snapshot.
+        "assumption_groups",
+        "assumption_group_candidates",
+        "assumption_evidence",
     }
 )
 
@@ -145,7 +153,11 @@ USER_AUTHORED_TABLES: frozenset[str] = frozenset(
 # vanish in a cascade nobody watched and the decisions they belonged to are left
 # looking as though nobody ever cited anything. A test asserts every table with
 # an inbound foreign key into `memories` appears here.
-EVIDENCE_TABLES: tuple[str, ...] = ("decision_evidence", "outcome_evidence")
+EVIDENCE_TABLES: tuple[str, ...] = (
+    "decision_evidence",
+    "outcome_evidence",
+    "assumption_evidence",
+)
 
 # Per table: the column naming what the evidence belongs to, and the columns
 # carried across a rebuild without being interpreted here.
@@ -160,6 +172,7 @@ EVIDENCE_TABLES: tuple[str, ...] = ("decision_evidence", "outcome_evidence")
 _EVIDENCE_SHAPE: dict[str, tuple[str, tuple[str, ...]]] = {
     "decision_evidence": ("decision_id", ("relation", "linked_at")),
     "outcome_evidence": ("outcome_id", ("occurred_at", "linked_at")),
+    "assumption_evidence": ("assumption_id", ("occurred_at", "linked_at")),
 }
 
 # Reconstructible from the tables above plus the blob store. Ordered
