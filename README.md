@@ -17,6 +17,10 @@ zero). See [Graph](#graph) and [Graph-augmented retrieval](#graph-augmented-retr
 **Phase 4 complete**: M4.0 (the temporal query layer), M4.1 (the timeline view),
 M4.2 (evolution and change detection) and M4.3 (time-aware retrieval, measured).
 See [Time](#time) and the [Phase 4 retrospective](#phase-4-retrospective).
+**Phase 5 begun**: M5.0 (the decision schema and capture) — what was decided,
+what else was considered, why, and what had to be true. See
+[Decisions](#decisions), which opens with the measurement of how little
+decision-shaped content this corpus actually holds.
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -93,12 +97,17 @@ Configuration is read once at the edge (`memoryos.config`). Nothing deeper in th
 
 ## Data model
 
-Seven tables, split into two groups that matter more than the count. `ingestion_events`,
-`raw_artifacts` and `sources` are the source of truth and are never truncated. `memories`,
-`memory_chunks`, `jobs` and `embedding_cache` are derived, and M1.7 rebuilds them from the first
-group plus the blob store. The split is declared as data in
+Seven tables at M1.1, split into two groups that matter more than the count.
+`ingestion_events`, `raw_artifacts` and `sources` are the source of truth and are never
+truncated. `memories`, `memory_chunks`, `jobs` and `embedding_cache` are derived, and M1.7
+rebuilds them from the first group plus the blob store. The split is declared as data in
 [`application/replay.py`](src/memoryos/application/replay.py), and a test fails if a new table is
 not classified.
+
+Later phases added a third group rather than widening either of these. `query_judgements`
+(M2.0a) and the five decision tables (M5.0) are **user-authored**: neither rebuildable nor
+ingestion input, never truncated and never written by a replay. See
+[Replay](#replay) and [Decisions](#decisions).
 
 | Table              | Holds                                                              |
 | ------------------ | ------------------------------------------------------------------ |
@@ -109,6 +118,12 @@ not classified.
 | `memory_chunks`    | Retrievable spans with offsets and a 384-dimension embedding slot.  |
 | `jobs`             | Durable work queue. Derived: a rebuild empties it.                  |
 | `embedding_cache`  | Vectors keyed by (model, role, text). Content-addressed memoisation. |
+| `query_judgements` | M2.0a. A human's verdict on one result for one query. User-authored. |
+| `decisions`        | M5.0. What was decided, why, and how sure. User-authored.           |
+| `decision_options` | What else was on the table, and why each alternative lost.          |
+| `decision_assumptions` | What had to be true. `held` is written by M5.2, null until then. |
+| `decision_evidence` | Memories that informed, record, or contradict a decision.          |
+| `decision_suggestions` | The review queue. A draft is not a decision until accepted.     |
 
 Two design points carry the most weight:
 
@@ -2031,6 +2046,212 @@ The honest summary of Phase 4: the modelling decision was right, the query layer
 correct, and the corpus cannot exercise it. Those are three separate statements and
 the third does not undermine the first two.
 
+## Decisions
+
+M5.0 records what was decided, what else was considered, why, and **what had to be
+true**. Four tables plus a review queue, and one rule with an opinion in it.
+
+```bash
+memoryos decide --interactive             # the primary path
+memoryos decisions list [--status open]
+memoryos decisions show <id>
+memoryos decisions edit <id> --status settled
+memoryos decisions link <id> --evidence self:README.md#8::records
+memoryos decisions suggest --limit 10     # propose drafts; commits nothing
+memoryos decisions review                 # the queue, with source passages
+memoryos decisions accept <id>
+memoryos decisions reject <id>
+```
+
+### What the corpus actually contained
+
+Phase 5 needs data the first four phases never collected, so the first thing M5.0
+did was measure how much of it was already there. Eight decision-shaped queries
+through the ordinary hybrid search surfaced 40 distinct memories. A lexical
+census over the 142 memories that have chunks found 105 containing a comparative
+construction — `rather than`, `instead of`, `trade-off` — and 67 containing one
+in the same chunk as a reason. Sampling 28 of those 67 by hand, roughly a quarter
+were genuinely decision-shaped and the rest were incidental prose.
+
+**The number that matters is the other one: zero.** Not one memory in the corpus
+contains `we chose`, `we decided` or `the decision to`. Fifteen mention an
+assumption and none of them means an assumption a decision rested on. No memory
+records a confidence, an expected outcome, or a date on which anything was
+decided.
+
+So this corpus is dense in *rationale* and empty of *decision records*, and those
+are different things. A docstring saying "a table rather than a broker, for two
+reasons" names an alternative and gives a reason; it does not say who decided,
+when, how sure they were, what they expected, or what they were assuming. Four of
+those six fields are what M5.1 and M5.2 read.
+
+**That makes M5.0 a capture problem, not an extraction problem**, and the whole
+shape of this milestone follows from it: `decide` is the primary path, `suggest`
+is assistive, and every suggestion goes to a queue. The five ADR-shaped sections
+of this README — `Hybrid, and why RRF`, `Ranking signals, and why they are off`,
+`What it measured, and why the weight ships at zero`, `No index was added, and
+the M1.1 index is why`, and the Phase 4 retrospective — are the only passages in
+the corpus that come close to a complete record, and even they carry no
+confidence.
+
+### A decision has alternatives, or it is a description
+
+`decisions.record` refuses a decision with no rejected option. "We used Postgres"
+is a statement in the present tense: there is no counterfactual in it, so no
+later outcome can say whether it was right. The rule can only be enforced at
+capture — afterwards nothing distinguishes a record whose alternatives were never
+written down from one that genuinely had none, and M5.1 would then find that
+every decision worked, there having been no other answer to compare against.
+
+The chosen option is written from `chosen` rather than taken from the caller's
+list, so the two cannot disagree, and an option whose text equals the choice is
+the winner rather than an alternative — which closes the obvious way around the
+rule.
+
+### Assumptions are the load-bearing table
+
+An outcome says a decision worked or it did not: one bit, about one decision,
+generalising to nothing. An assumption says *why*, and assumptions repeat across
+decisions that have nothing else in common. "Deployment will take two days"
+failing six times is a pattern with a name and a fix; six unrelated bad projects
+is noise with a mood.
+
+`held` and `evaluated_at` are declared now and stay null until M5.2, for the
+reason M1.1 declared `occurred_at` six milestones before anything read it. **NULL
+means "not yet judged" and is deliberately not `false`** — a system that could
+not tell an unevaluated assumption from a broken one would report every new
+decision as built on sand.
+
+`decide --interactive` asks for them explicitly, one at a time, and allows
+"none". That prompt is doing real work rather than filling a form: asked for
+"your assumptions" in one field people write one sentence; asked the same
+question five times they produce the third and fourth, which are the ones they
+had not noticed they were making.
+
+### `decided_at_source` is M1.1's rule, unchanged
+
+A date somebody typed is `declared`; a date read out of a document is `parsed`; a
+date taken from a file's mtime is `filesystem`. Phase 4's weighting applies, and
+`decisions list` marks anything that is not `declared` with a `~`, exactly as
+M4.1's timeline does. The twelve seeded decisions are all `parsed` — read out of
+the milestone each belongs to — because nobody wrote the date down at the time.
+Unlike `memories.occurred_at` the column is NOT NULL, so M1.1's null-pairing rule
+becomes a prohibition instead: a CHECK forbids `unknown` outright.
+
+### Suggestions are never auto-committed
+
+`decisions suggest` uses the configured `LanguageModel` to propose drafts. It
+writes to `decision_suggestions` and never to `decisions`, and that is the whole
+safety property.
+
+A model asked to find decisions in explanatory prose will find them, because
+prose that explains a choice is shaped exactly like a record of one. What it
+cannot find is the half that makes the record worth having — the confidence
+somebody held, what they expected, what they were assuming — and asked for those
+anyway it produces them, fluently and inventively. That row then becomes a
+pattern in M5.3 and a reflection in M5.4, and the resulting claim about how
+somebody makes decisions is both plausible and unfalsifiable, because the
+evidence for it is a sentence a model wrote.
+
+So the prompt is told to leave `confidence`, `expected_outcome` and `assumptions`
+empty unless the passage states them, the review UI prints "not stated" rather
+than a blank, and every draft carries the passage it came from. **The queue shows
+the passage beside the draft at every width**, because a draft alone always reads
+well — accepting has to be a judgement about evidence rather than about
+plausibility.
+
+Accepting links the passage as `records`, not `informed`. A design discussion
+informed a decision and existed before it; an ADR records it and exists after.
+M5.1 needs that ordering, and a pass that marked its own source as an input would
+make every extracted decision look as though it had been argued for in advance.
+
+**Measured on this corpus.** 25 passages examined, 25 model calls, 8 drafts
+queued, 0 unparseable. Of the 8, **4 were worth accepting** — a 50% false-positive
+rate among drafts that had already passed the module's own no-alternatives
+filter. The four rejected failed in three distinct ways, and all three are worth
+naming because they are what a reviewer is actually looking for:
+
+- **A negated choice presented as an alternative.** The shadow-schema foreign-key
+  draft offered "Not following derived table references into the shadow schema"
+  as the option considered. That is the choice with a `not` in front of it, which
+  is a counterfactual nobody weighed.
+- **A circular rejection.** An evaluation draft rejected "a guess" because "it is
+  not as reliable as an extra search at a wider k" — the reason restates the
+  choice.
+- **Two passages conflated into one decision.** A README chunk contains both the
+  oversized-section rule and the chunk-adoption rule; the draft took the question
+  from one and the rejection from the other, producing a record whose reason has
+  nothing to do with its question.
+
+And the prediction that held exactly: of 8 drafts, **0 carried a confidence** and
+**1 carried an assumption**. The model did not invent them because it was told
+not to, and there was nothing in the corpus to find.
+
+### Evidence, and the constraint it collided with
+
+`decision_evidence` links a decision to the memories that informed it, record it,
+or contradict it. Its foreign keys into `memories` and `memory_chunks` cascade,
+deliberately: a link to a document that no longer exists is a citation to
+nothing, and M2.5 spent a milestone making sure a citation always resolves. So
+deleting a memory takes its evidence and leaves the decision, which is the right
+outcome — a decision is not made false by losing a piece of the evidence for it.
+
+That has two consequences the schema was designed around rather than discovering.
+
+**A full replay truncates `memories`, so `TRUNCATE ... CASCADE` takes this whole
+table.** Exactly the trap M1.7 found when the golden set was specified with a
+foreign key. The row does not survive; the *link* does. Every row also carries
+`(source_name, external_key, chunk_ordinal)`, and `ReplayCorpus._preserve_evidence`
+reads the links out before the truncation and re-links them against the rebuilt
+corpus afterwards. Measured on this corpus: 30 links preserved, 30 re-linked, 0
+dropped, and `decisions list` byte-identical before and after
+`replay --from-beginning`.
+
+**And the shadow swap broke.** `decision_evidence` is the first table outside the
+derived set to reference something inside it, so `DROP TABLE public.memories` in
+`swap_in` now fails on a dependency that has nothing to do with the rebuild.
+`DROP TABLE ... CASCADE` would make the error go away by taking the constraints
+with it, silently, leaving a live schema that no longer matches the models and an
+`alembic check` that fails on the next run. The swap lifts the inbound
+constraints off by name and puts them back by definition instead — read off
+`Base.metadata` rather than listed by hand, because a hand-kept list goes stale
+the first time somebody adds a table and the failure would be a `DROP TABLE`
+refusing in the middle of a swap.
+
+### Classification
+
+All five tables are `USER_AUTHORED`, joining `query_judgements`. No amount of
+replaying the log produces somebody's account of a choice they made.
+`decision_suggestions` is here rather than in the derived set even though a model
+wrote its drafts, because the row also carries a person's accept or reject — and,
+unlike `entity_merges`, it has no foreign key forcing the classification: its
+provenance is a natural key plus id snapshots, so it can be classified by
+argument.
+
+### The twelve seeded decisions
+
+`scripts/seed_decisions.py` records twelve real choices from this project's
+history — pgvector over FAISS, the Postgres queue over Celery, the bge model swap
+and the chunk-offset fix, Groq over Gemini, chunk adoption over per-version
+chunking, Neo4j over recursive CTEs, RRF over a weighted sum, ranking signals
+shipped at weight zero, graph expansion shipped at weight zero, the golden set's
+natural key, and the layering rule left partly unenforced — with the alternatives
+that were actually weighed and 35 assumptions between them.
+
+**Their confidences are reconstructions and the script says so.** The corpus
+records no confidence for any of them, because nobody wrote one down; the numbers
+are what the person who made the call believes they believed. That matters
+because it is precisely what M5.2 measures, and a calibration scored against a
+number invented afterwards is a calibration of hindsight. Every decision recorded
+from here on goes through `decide`, where the number is captured before the
+answer is known.
+
+Two of the twelve carry no evidence at all — the Neo4j and graph-expansion ones —
+because the corpus is a snapshot taken before Phase 3 and does not contain the
+files those decisions are about. That is left as it is rather than papered over
+with a nearby file: a decision with no evidence is a real state, the schema
+allows it, and the detail view says so.
+
 ## Migrations
 
 ```bash
@@ -2092,6 +2313,19 @@ hash.
 | `POST /judgements`         | Record a verdict. Re-judging replaces.                      |
 | `GET /judgements`          | One row per judged query, with verdict counts.              |
 | `GET /judgements/export`   | The golden set, ids re-resolved. M2.0's input.              |
+| `POST /decisions`          | Record a decision. Refused if it names no alternative.      |
+| `GET /decisions`           | Every decision, with its option/assumption/evidence counts. |
+| `GET /decisions/{id}`      | One decision, with everything hanging off it.               |
+| `PATCH /decisions/{id}`    | Amend one. Not `confidence`, and not `decided_at`.          |
+| `POST /decisions/{id}/evidence` | Link a memory, by its natural key.                     |
+| `GET /decisions/suggestions` | The review queue, each draft beside its source passage.   |
+| `POST /decisions/suggestions/{id}/accept` | Write a decision from a draft.         |
+| `POST /decisions/suggestions/{id}/reject` | Mark a draft as not a decision.        |
+
+There is deliberately no `POST /decisions/suggest`. Running the extractor costs a model call
+per passage, and an endpoint that spends money is one an over-eager client can spend a daily
+quota on before anybody notices — the same judgement `/memories/{id}/evolution` makes about
+generating summaries on a GET. It is a CLI command.
 
 `POST /sources/{id}/sync` enqueues and never runs the sync inline. A large directory takes
 minutes to walk; doing it in the request would blow the HTTP timeout, and whatever it managed

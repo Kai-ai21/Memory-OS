@@ -27,6 +27,7 @@ the two scores are not on comparable scales", and a draft with all six filled in
 from that same passage would be the failure this design exists to prevent.
 """
 
+import asyncio
 import json
 import re
 from collections.abc import Sequence
@@ -51,7 +52,9 @@ from memoryos.application.decisions import (
     record,
 )
 from memoryos.application.ports import LanguageModel
+from memoryos.domain.backoff import wait_for
 from memoryos.domain.ids import new_id
+from memoryos.domain.jobs import TransientError
 from memoryos.domain.values import (
     DecisionStatus,
     EvidenceRelation,
@@ -66,6 +69,12 @@ logger = structlog.get_logger(__name__)
 # extractor version, so improving the prompt is a query over the queue rather
 # than a truncation of it.
 PROMPT_VERSION = "v1"
+
+# Waits for one passage before it is given up on. Matches the entity extractor's
+# budget, and for the same reason: the binding constraint on this corpus is a
+# per-minute token window, and a run that died on the first 429 would have
+# already queued half its work.
+_MAX_ATTEMPTS = 6
 
 # One chunk per request. Unlike entity extraction this is not run over the whole
 # corpus — it is a targeted pass a person invokes with a limit — so the batching
@@ -324,7 +333,7 @@ class SuggestDecisions:
         for attempt in range(2):
             system = _SYSTEM if attempt == 0 else _SYSTEM + _RETRY_REMINDER
             report.calls += 1
-            raw = await self._model.complete(system, user, max_tokens=self._max_tokens)
+            raw = await self._with_backoff(system, user)
             parsed = _parse(raw)
             if parsed is not None:
                 return self._validated(parsed, report)
@@ -335,6 +344,33 @@ class SuggestDecisions:
             ordinal=passage.ordinal,
         )
         return []
+
+    async def _with_backoff(self, system: str, user: str) -> str:
+        """One passage, waiting out a rate limit rather than losing the run.
+
+        The same lesson M3.3 learned and M3.1 was fixed to match: a free tier
+        bound at twelve thousand tokens per minute will refuse a passage
+        mid-pass, and without this the whole command dies on the first 429
+        having already queued half its work. Retried at passage granularity so
+        a wait never re-sends a passage that already succeeded.
+
+        `PermanentError` is not caught, deliberately. An unparseable response
+        has its own retry above, and a safety block will block again.
+        """
+        for attempt in range(_MAX_ATTEMPTS):
+            try:
+                return await self._model.complete(
+                    system, user, max_tokens=self._max_tokens
+                )
+            except TransientError as exc:
+                if attempt == _MAX_ATTEMPTS - 1:
+                    raise
+                # The provider's own number when it gave one: a token-per-minute
+                # window slides, and Groq says how far.
+                delay = wait_for(exc, attempt)
+                logger.info("decisions.suggest_rate_limited", waiting_seconds=round(delay))
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
 
     def _validated(
         self, response: _Response, report: SuggestReport
