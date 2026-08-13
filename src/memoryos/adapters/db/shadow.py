@@ -69,7 +69,12 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.schema import CreateSchema, DropSchema, ForeignKeyConstraint
+from sqlalchemy.schema import (
+    AddConstraint,
+    CreateSchema,
+    DropSchema,
+    ForeignKeyConstraint,
+)
 
 from memoryos.adapters.db.models import Base
 from memoryos.application.ports import ShadowWorkspace
@@ -150,9 +155,39 @@ class PostgresShadowSchema(ShadowWorkspace):
         logger.info("shadow.indexes_built", indexes=sorted(_DEFERRED_INDEXES))
 
     async def swap_in(self) -> None:
-        """Replace the live derived tables with the workspace's, in one transaction."""
+        """Replace the live derived tables with the workspace's, in one transaction.
+
+        The inbound foreign keys are lifted off and put back around the swap.
+        Until M5.0 there were none, and the drops below worked because nothing
+        outside the derived set referenced anything inside it. `decision_evidence`
+        is the first table to break that: it is user-authored, it is not copied
+        into the workspace, and it holds an ON DELETE CASCADE reference into
+        `memories` — so `DROP TABLE public.memories` fails on a dependency that
+        has nothing to do with this rebuild.
+
+        `DROP TABLE ... CASCADE` would make the error go away and take the
+        constraints with it, silently, leaving a live schema that no longer
+        matches the models and an `alembic check` that fails on the next run.
+        Dropping them by name and re-adding them by definition keeps the schema
+        exactly where it was, and fails loudly if a constraint cannot be
+        restored.
+
+        Re-adding validates, so the referencing rows must already be gone.
+        `ReplayCorpus._preserve_evidence` empties that table before the rebuild
+        starts and re-links it from natural keys afterwards, which is the only
+        ordering in which both halves are true: the constraint comes back, and
+        the decisions keep their provenance.
+        """
+        inbound = _inbound_foreign_keys()
         engine = await self._live_engine()
         async with engine.begin() as connection:
+            for table, constraint in inbound:
+                await connection.execute(
+                    text(
+                        f'ALTER TABLE {LIVE_SCHEMA}."{table}" '
+                        f'DROP CONSTRAINT IF EXISTS "{constraint.name}"'
+                    )
+                )
             # Child before parent, so no foreign key is left pointing at a table
             # that is going away.
             for name in SHADOW_TABLES:
@@ -164,8 +199,14 @@ class PostgresShadowSchema(ShadowWorkspace):
                 await connection.execute(
                     text(f'ALTER TABLE {SHADOW_SCHEMA}."{name}" SET SCHEMA {LIVE_SCHEMA}')
                 )
+            for _table, constraint in inbound:
+                await connection.execute(AddConstraint(constraint))
             await connection.execute(DropSchema(SHADOW_SCHEMA, if_exists=True))
-        logger.info("shadow.swapped_in", tables=list(SHADOW_TABLES))
+        logger.info(
+            "shadow.swapped_in",
+            tables=list(SHADOW_TABLES),
+            constraints_restored=[constraint.name for _, constraint in inbound],
+        )
         # Terminal: both pools go, rather than being left open for the lifetime
         # of whatever built this. A replay per hour otherwise accumulates a
         # connection pool per hour.
@@ -275,6 +316,36 @@ def _shadow_metadata() -> MetaData:
             shadow, schema=SHADOW_SCHEMA, referred_schema_fn=referred_schema
         )
     return shadow
+
+
+def _inbound_foreign_keys() -> list[tuple[str, ForeignKeyConstraint]]:
+    """Constraints from tables the workspace does not own into tables it replaces.
+
+    Read off the real metadata rather than listed by hand, for the reason
+    `_shadow_metadata` is copied rather than written out: a hand-kept list goes
+    stale the first time somebody adds a table, and the failure would be a
+    `DROP TABLE` refusing in the middle of a swap.
+
+    Returned in metadata order and applied in that order both ways, which is
+    enough here because every one of these is a leaf: the referencing tables are
+    user-authored and nothing references *them*.
+    """
+    shadowed = set(SHADOW_TABLES)
+    found: list[tuple[str, ForeignKeyConstraint]] = []
+    for table in Base.metadata.sorted_tables:
+        if table.name in shadowed:
+            continue
+        for constraint in table.constraints:
+            if not isinstance(constraint, ForeignKeyConstraint):
+                continue
+            if constraint.referred_table.name in shadowed:
+                found.append((table.name, constraint))
+    return found
+
+
+def inbound_foreign_key_names() -> list[str]:
+    """Exposed for the test that asserts the swap knows about them."""
+    return [str(constraint.name) for _, constraint in _inbound_foreign_keys()]
 
 
 def _shadow_only(metadata: MetaData) -> list[Table]:

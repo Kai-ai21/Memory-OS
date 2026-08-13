@@ -27,6 +27,8 @@ from memoryos.adapters.extraction.llm import ExtractionStats
 from memoryos.adapters.graph.schema import SCHEMA_VERSION
 from memoryos.adapters.llm.errors import MissingApiKey
 from memoryos.application import (
+    decision_suggest,
+    decisions,
     evolution,
     graph_projection,
     graph_sync,
@@ -85,11 +87,15 @@ from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobStatus, JobType, PermanentError, TransientError
 from memoryos.domain.values import (
     DEFAULT_SEARCH_MODE,
+    DecisionStatus,
+    EvidenceRelation,
     MergeStatus,
     MergeStrategy,
     Period,
     SearchMode,
     SourceKind,
+    SuggestionStatus,
+    TimeProvenance,
 )
 from memoryos.logging import configure_logging
 
@@ -1744,6 +1750,484 @@ async def run_sync(settings: Settings, *, name: str, full: bool) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# Decisions
+# --------------------------------------------------------------------------
+
+
+def _prompt(question: str, *, default: str = "") -> str:
+    """One line from the person at the terminal.
+
+    A thin wrapper so the interactive capture reads as a conversation in the
+    source, and so the whole of it can be driven from a test by patching one
+    function rather than by faking a terminal.
+    """
+    suffix = f" [{default}]" if default else ""
+    answer = input(f"{question}{suffix}: ").strip()
+    return answer or default
+
+
+def _prompt_list(question: str, *, allow_none: bool = True) -> list[str]:
+    """Repeated answers to the same question, one at a time, ending on a blank.
+
+    One at a time rather than a comma-separated line, and that is the whole
+    reason `--interactive` exists rather than more flags. Asked for "your
+    assumptions" in one field, people write one sentence; asked the same
+    question five times, they produce the third and fourth ones, which are the
+    ones they had not noticed they were making.
+    """
+    answers: list[str] = []
+    while True:
+        answer = input(f"{question} (blank to finish): ").strip()
+        if not answer:
+            break
+        answers.append(answer)
+    if not answers and not allow_none:
+        print("  (none recorded)")
+    return answers
+
+
+def _prompt_confidence(question: str) -> float | None:
+    """A probability, or nothing. An unanswerable question gets no answer.
+
+    Refusing to default is the point. Zero and 0.5 are both real claims, and a
+    field silently filled with either would make the calibration M5.2 measures
+    a measurement of this function.
+    """
+    while True:
+        raw = input(f"{question} (0-1, blank to skip): ").strip()
+        if not raw:
+            return None
+        try:
+            value = float(raw)
+        except ValueError:
+            print("  a number between 0 and 1, or blank")
+            continue
+        if 0.0 <= value <= 1.0:
+            return value
+        print("  a number between 0 and 1, or blank")
+
+
+def _interactive(draft: decisions.DecisionDraft) -> decisions.DecisionDraft:
+    """Fill in everything the flags did not, one question at a time.
+
+    The order is deliberate: alternatives before reasoning, because naming what
+    lost changes what somebody writes about why the winner won; assumptions
+    last, because they are the hardest and asking for them first stops people
+    finishing the form at all.
+    """
+    question = draft.question or _prompt("What was being decided")
+    chosen = draft.chosen or _prompt("What was chosen")
+
+    print("\nWhat else was on the table? Each one, then why it lost.")
+    options = list(draft.options)
+    while True:
+        description = input("  option (blank to finish): ").strip()
+        if not description:
+            break
+        why = input("    rejected because: ").strip() or None
+        options.append(decisions.OptionInput(description=description, rejected_because=why))
+
+    reasoning = draft.reasoning or _prompt("\nWhy this one") or None
+    confidence = (
+        draft.confidence
+        if draft.confidence is not None
+        else _prompt_confidence("How confident are you, right now")
+    )
+    expected = draft.expected_outcome or _prompt("What do you expect to happen") or None
+
+    print(
+        "\nWhat has to be true for this to be the right call? One at a time.\n"
+        "  ('none' is an answer — a decision that rests on nothing is a finding.)"
+    )
+    statements = _prompt_list("  assumption")
+    assumptions = [decisions.AssumptionInput(statement=text) for text in statements]
+
+    return decisions.DecisionDraft(
+        question=question,
+        chosen=chosen,
+        reasoning=reasoning,
+        confidence=confidence,
+        expected_outcome=expected,
+        options=tuple(options),
+        assumptions=tuple(assumptions),
+        evidence=draft.evidence,
+    )
+
+
+async def run_decide(
+    settings: Settings,
+    *,
+    question: str,
+    chosen: str,
+    reasoning: str | None,
+    confidence: float | None,
+    expected: str | None,
+    options: list[str],
+    assumptions: list[str],
+    evidence: list[str],
+    decided: str | None,
+    interactive: bool,
+) -> int:
+    """Record one decision by hand. The primary path, and deliberately so.
+
+    An `--option` may carry its rejection after a `::` — `--option "Celery::a
+    broker cannot share the transaction"` — which keeps the alternative and the
+    reason it lost in one argument. Splitting them across two flags would let a
+    reason be attached to the wrong option by miscounting.
+    """
+    draft = decisions.DecisionDraft(
+        question=question,
+        chosen=chosen,
+        reasoning=reasoning,
+        confidence=confidence,
+        expected_outcome=expected,
+        options=tuple(_parse_option(value) for value in options),
+        assumptions=tuple(
+            decisions.AssumptionInput(statement=value) for value in assumptions
+        ),
+        evidence=tuple(_parse_evidence(value) for value in evidence),
+    )
+    if interactive:
+        draft = _interactive(draft)
+
+    # `declared` when a date was typed, `declared` when it defaults to now: both
+    # are a person asserting when this happened, which is exactly what M1.1's
+    # `declared` means. Nothing here reads a file's mtime, so no other
+    # provenance is reachable from this command.
+    when = parse_moment(decided, name="--decided") if decided else datetime.now(UTC)
+
+    container = Container.build(settings)
+    try:
+        decision_id = await decisions.record(
+            container.database.session_factory,
+            draft,
+            decided_at=when,
+            decided_at_source=TimeProvenance.DECLARED,
+        )
+    except decisions.InvalidDecision as exc:
+        print(f"refused: {exc}")
+        return 1
+    except decisions.UnresolvedEvidence as exc:
+        print(f"refused: {exc}")
+        return 1
+    finally:
+        await container.dispose()
+
+    print(f"recorded {decision_id}")
+    return 0
+
+
+def _parse_option(value: str) -> decisions.OptionInput:
+    description, _, why = value.partition("::")
+    return decisions.OptionInput(
+        description=description.strip(), rejected_because=why.strip() or None
+    )
+
+
+def _parse_evidence(value: str) -> decisions.EvidenceInput:
+    """`source:path[#ordinal][::relation]` — the natural key, as a person types it."""
+    body, _, relation = value.partition("::")
+    locator, _, ordinal = body.partition("#")
+    source_name, _, external_key = locator.partition(":")
+    if not source_name or not external_key:
+        raise SystemExit(
+            f"evidence must look like source:path[#chunk][::relation], got {value!r}"
+        )
+    try:
+        chosen_relation = (
+            EvidenceRelation(relation.strip()) if relation.strip() else EvidenceRelation.INFORMED
+        )
+    except ValueError as exc:
+        allowed = ", ".join(member.value for member in EvidenceRelation)
+        raise SystemExit(f"relation must be one of {allowed}") from exc
+    return decisions.EvidenceInput(
+        source_name=source_name.strip(),
+        external_key=external_key.strip(),
+        relation=chosen_relation,
+        chunk_ordinal=int(ordinal) if ordinal.strip() else None,
+    )
+
+
+async def run_decisions_list(
+    settings: Settings, *, status: str | None, limit: int
+) -> int:
+    container = Container.build(settings)
+    try:
+        rows = await decisions.list_decisions(
+            container.database.session_factory,
+            status=DecisionStatus(status) if status else None,
+            limit=limit,
+        )
+    finally:
+        await container.dispose()
+
+    if not rows:
+        print("no decisions recorded")
+        return 0
+
+    print(f"{len(rows)} decision(s)\n")
+    for row in rows:
+        confidence = "  —  " if row.confidence is None else f"{row.confidence:.2f}"
+        # The date carries its provenance the way M4.1's timeline does: a `~`
+        # for anything that was not asserted by a person.
+        marker = "" if row.decided_at_source is TimeProvenance.DECLARED else "~"
+        print(f"{row.id}  {row.status.value:8} conf {confidence}  {marker}{_stamp(row.decided_at)}")
+        print(f"     {row.question}")
+        print(f"     → {row.chosen}")
+        # The counts are the point of the list. A decision with no assumptions
+        # is one M5.2 has nothing to evaluate.
+        print(
+            f"     {row.options} options   {row.assumptions} assumptions   "
+            f"{row.evidence} evidence\n"
+        )
+    return 0
+
+
+async def run_decisions_show(settings: Settings, *, decision_id: str) -> int:
+    container = Container.build(settings)
+    try:
+        detail = await decisions.show(
+            container.database.session_factory, UUID(decision_id)
+        )
+    except decisions.UnknownDecision as exc:
+        print(str(exc))
+        return 1
+    finally:
+        await container.dispose()
+
+    marker = "" if detail.decided_at_source is TimeProvenance.DECLARED else "~"
+    print(f"{detail.question}\n")
+    print(f"  chosen      {detail.chosen}")
+    print(f"  status      {detail.status.value}")
+    print(
+        f"  decided     {marker}{_stamp(detail.decided_at)}  "
+        f"({detail.decided_at_source.value})"
+    )
+    if detail.confidence is not None:
+        print(f"  confidence  {detail.confidence:.2f} at the time")
+    if detail.reasoning:
+        print(f"\n  why         {detail.reasoning}")
+    if detail.expected_outcome:
+        print(f"  expected    {detail.expected_outcome}")
+
+    print("\n  options")
+    for option in detail.options:
+        mark = "✓" if option.was_chosen else "·"
+        print(f"    {mark} {option.description}")
+        if option.rejected_because:
+            print(f"        rejected: {option.rejected_because}")
+
+    print("\n  assumptions")
+    if not detail.assumptions:
+        # Said out loud rather than left as an empty heading. This is the field
+        # M5.2 evaluates, so its absence is the most important thing on screen.
+        print("    none recorded — nothing here for M5.2 to evaluate")
+    for assumption in detail.assumptions:
+        held = "?" if assumption.held is None else ("held" if assumption.held else "broke")
+        confidence = "" if assumption.confidence is None else f" ({assumption.confidence:.2f})"
+        print(f"    [{held}] {assumption.statement}{confidence}")
+
+    print("\n  evidence")
+    if not detail.evidence:
+        print("    none linked")
+    for item in detail.evidence:
+        where = (
+            f"{item.external_key}#{item.chunk_ordinal}"
+            if item.chunk_ordinal is not None
+            else item.external_key
+        )
+        print(f"    {item.relation.value:11} {item.source_name}:{where}")
+    return 0
+
+
+async def run_decisions_edit(
+    settings: Settings,
+    *,
+    decision_id: str,
+    question: str | None,
+    chosen: str | None,
+    reasoning: str | None,
+    expected: str | None,
+    status: str | None,
+    options: list[str],
+    assumptions: list[str],
+) -> int:
+    container = Container.build(settings)
+    try:
+        await decisions.edit(
+            container.database.session_factory,
+            UUID(decision_id),
+            decisions.DecisionEdit(
+                question=question,
+                chosen=chosen,
+                reasoning=reasoning,
+                expected_outcome=expected,
+                status=DecisionStatus(status) if status else None,
+                options=(
+                    tuple(_parse_option(value) for value in options) if options else None
+                ),
+                assumptions=(
+                    tuple(
+                        decisions.AssumptionInput(statement=value)
+                        for value in assumptions
+                    )
+                    if assumptions
+                    else None
+                ),
+            ),
+        )
+    except decisions.UnknownDecision as exc:
+        print(str(exc))
+        return 1
+    except decisions.InvalidDecision as exc:
+        print(f"refused: {exc}")
+        return 1
+    finally:
+        await container.dispose()
+    print(f"updated {decision_id}")
+    return 0
+
+
+async def run_decisions_link(
+    settings: Settings, *, decision_id: str, evidence: list[str]
+) -> int:
+    container = Container.build(settings)
+    linked = 0
+    try:
+        for value in evidence:
+            try:
+                await decisions.link_evidence(
+                    container.database.session_factory,
+                    UUID(decision_id),
+                    _parse_evidence(value),
+                )
+            except decisions.UnresolvedEvidence as exc:
+                print(f"skipped: {exc}")
+                continue
+            linked += 1
+    except decisions.UnknownDecision as exc:
+        print(str(exc))
+        return 1
+    finally:
+        await container.dispose()
+    print(f"linked {linked} of {len(evidence)}")
+    return 0
+
+
+async def run_decisions_suggest(
+    settings: Settings, *, source: str | None, limit: int
+) -> int:
+    """Propose drafts from the corpus. Never writes a decision."""
+    container = Container.build(settings)
+    try:
+        suggest = decision_suggest.SuggestDecisions(
+            container.database.session_factory, container.language_model()
+        )
+        report = await suggest(source=source, limit=limit)
+    except MissingApiKey as exc:
+        print(str(exc))
+        return 1
+    finally:
+        await container.dispose()
+
+    print(f"passages examined: {report.passages}")
+    print(f"model calls:       {report.calls}")
+    print(f"queued for review: {report.proposed}")
+    # Both refusals are reported because both are the extractor being wrong in
+    # ways a reviewer would otherwise have to find by hand.
+    print(f"refused (no alternatives): {report.rejected_no_alternatives}")
+    print(f"unparseable responses:     {report.unparseable}")
+    print(f"already queued:            {report.duplicates}")
+    if report.proposed:
+        print("\nNothing has been committed. Review with `memoryos decisions review`.")
+    return 0
+
+
+async def run_decisions_review(
+    settings: Settings, *, status: str | None, limit: int, show_passage: bool
+) -> int:
+    container = Container.build(settings)
+    try:
+        rows = await decision_suggest.list_suggestions(
+            container.database.session_factory,
+            status=SuggestionStatus(status) if status else None,
+            limit=limit,
+        )
+    finally:
+        await container.dispose()
+
+    if not rows:
+        print("nothing in the review queue")
+        return 0
+
+    totals = decision_suggest.summarise_drafts(rows)
+    print(
+        f"{len(rows)} suggestion(s)   "
+        f"{totals['with_reasoning']} with reasoning   "
+        f"{totals['with_confidence']} with confidence   "
+        f"{totals['with_assumptions']} with assumptions\n"
+    )
+    for row in rows:
+        where = (
+            f"{row.external_key}#{row.chunk_ordinal}"
+            if row.chunk_ordinal is not None
+            else row.external_key
+        )
+        print(f"{row.id}  {row.status.value}  {row.source_name}:{where}")
+        print(f"     Q  {row.draft.question}")
+        print(f"     →  {row.draft.chosen}")
+        for option in row.draft.options:
+            print(f"     ·  {option.description}")
+            if option.rejected_because:
+                print(f"           rejected: {option.rejected_because}")
+        if row.draft.reasoning:
+            print(f"     why {row.draft.reasoning}")
+        if show_passage:
+            # The passage beside the draft, which is the whole point of the
+            # queue: accepting has to be a judgement about evidence rather than
+            # about how well the draft reads.
+            excerpt = " ".join(row.source_text.split())[:400]
+            print(f"     ┃  {excerpt}")
+        print()
+    print("Accept with `decisions accept <id>`, reject with `decisions reject <id>`.")
+    return 0
+
+
+async def run_decisions_accept(settings: Settings, *, suggestion_id: str) -> int:
+    container = Container.build(settings)
+    try:
+        decision_id = await decision_suggest.accept(
+            container.database.session_factory, UUID(suggestion_id)
+        )
+    except (decisions.UnknownDecision, decision_suggest.AlreadyReviewed) as exc:
+        print(str(exc))
+        return 1
+    except decisions.InvalidDecision as exc:
+        print(f"refused: {exc}")
+        return 1
+    finally:
+        await container.dispose()
+    print(f"recorded {decision_id}")
+    print("Review it with `decisions show`; confidence and assumptions are yours to add.")
+    return 0
+
+
+async def run_decisions_reject(settings: Settings, *, suggestion_id: str) -> int:
+    container = Container.build(settings)
+    try:
+        await decision_suggest.reject(
+            container.database.session_factory, UUID(suggestion_id)
+        )
+    except (decisions.UnknownDecision, decision_suggest.AlreadyReviewed) as exc:
+        print(str(exc))
+        return 1
+    finally:
+        await container.dispose()
+    print("rejected; the passage will not be proposed again")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="memoryos", description="Memory Intelligence OS")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1957,6 +2441,156 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="regenerate cached summaries instead of reading them",
     )
+
+    decide = commands.add_parser(
+        "decide", help="record a decision: what was chosen, what else, and why"
+    )
+    decide.add_argument("--question", default="", help="what was being decided")
+    decide.add_argument("--chosen", default="", help="what was picked")
+    decide.add_argument("--reasoning", help="why")
+    decide.add_argument(
+        "--confidence",
+        type=float,
+        help="how confident you are right now, 0 to 1. Never refreshed later",
+    )
+    decide.add_argument("--expected", help="what you expect to happen")
+    decide.add_argument(
+        "--option",
+        dest="options",
+        action="append",
+        default=[],
+        metavar="TEXT[::WHY]",
+        help=(
+            "an alternative that was considered, optionally with the reason it "
+            "lost after '::'. At least one is required: a decision with no "
+            "alternatives is a description"
+        ),
+    )
+    decide.add_argument(
+        "--assumption",
+        dest="assumptions",
+        action="append",
+        default=[],
+        metavar="TEXT",
+        help="something that has to be true for this to be right; repeatable",
+    )
+    decide.add_argument(
+        "--evidence",
+        dest="evidence",
+        action="append",
+        default=[],
+        metavar="SOURCE:PATH[#CHUNK][::RELATION]",
+        help=(
+            "a memory that informed it, records it, or contradicts it; "
+            "relation defaults to 'informed'"
+        ),
+    )
+    decide.add_argument(
+        "--decided", help="ISO date or timestamp; defaults to now, provenance 'declared'"
+    )
+    decide.add_argument(
+        "--interactive",
+        action="store_true",
+        help=(
+            "ask for options, reasoning, confidence, expected outcome and "
+            "assumptions one at a time"
+        ),
+    )
+
+    decisions_parser = commands.add_parser(
+        "decisions", help="list, inspect, edit and review decisions"
+    )
+    decisions_commands = decisions_parser.add_subparsers(
+        dest="decisions_command", required=True
+    )
+
+    decisions_list = decisions_commands.add_parser("list", help="every decision, newest first")
+    decisions_list.add_argument(
+        "--status", choices=[value.value for value in DecisionStatus]
+    )
+    decisions_list.add_argument("--limit", type=int, default=100)
+
+    decisions_show = decisions_commands.add_parser(
+        "show", help="one decision, with its options, assumptions and evidence"
+    )
+    decisions_show.add_argument("decision_id")
+
+    decisions_edit = decisions_commands.add_parser("edit", help="amend one decision")
+    decisions_edit.add_argument("decision_id")
+    decisions_edit.add_argument("--question")
+    decisions_edit.add_argument("--chosen")
+    decisions_edit.add_argument("--reasoning")
+    decisions_edit.add_argument("--expected")
+    decisions_edit.add_argument(
+        "--status", choices=[value.value for value in DecisionStatus]
+    )
+    decisions_edit.add_argument(
+        "--option",
+        dest="options",
+        action="append",
+        default=[],
+        metavar="TEXT[::WHY]",
+        help="replaces the whole option list when given",
+    )
+    decisions_edit.add_argument(
+        "--assumption",
+        dest="assumptions",
+        action="append",
+        default=[],
+        metavar="TEXT",
+        help="replaces the whole assumption list when given",
+    )
+    # Deliberately no `--confidence` and no `--decided`. Both are records of
+    # what somebody believed at a moment, and an edit that moved either would
+    # make the calibration M5.2 measures a measurement of hindsight.
+
+    decisions_link = decisions_commands.add_parser(
+        "link", help="attach memories to a decision as evidence"
+    )
+    decisions_link.add_argument("decision_id")
+    decisions_link.add_argument(
+        "--evidence",
+        dest="evidence",
+        action="append",
+        default=[],
+        required=True,
+        metavar="SOURCE:PATH[#CHUNK][::RELATION]",
+    )
+
+    decisions_suggest = decisions_commands.add_parser(
+        "suggest",
+        help="propose drafts from the corpus into the review queue; commits nothing",
+    )
+    decisions_suggest.add_argument("--source", help="limit to one source by name")
+    decisions_suggest.add_argument(
+        "--limit", type=int, default=20, help="how many passages to examine"
+    )
+
+    decisions_review = decisions_commands.add_parser(
+        "review", help="the suggestion queue, with the passage each draft came from"
+    )
+    decisions_review.add_argument(
+        "--status",
+        choices=[value.value for value in SuggestionStatus],
+        default=SuggestionStatus.PENDING.value,
+    )
+    decisions_review.add_argument("--limit", type=int, default=50)
+    decisions_review.add_argument(
+        "--no-passage",
+        dest="show_passage",
+        action="store_false",
+        help="hide the source passage; it is shown by default because it is the evidence",
+    )
+
+    decisions_accept = decisions_commands.add_parser(
+        "accept", help="turn one suggestion into a decision, keeping its passage as evidence"
+    )
+    decisions_accept.add_argument("suggestion_id")
+
+    decisions_reject = decisions_commands.add_parser(
+        "reject", help="mark a suggestion as not a decision; the row stays"
+    )
+    decisions_reject.add_argument("suggestion_id")
 
     commands.add_parser("stats", help="report corpus and embedding coverage")
     commands.add_parser(
@@ -2329,6 +2963,74 @@ def main(argv: list[str] | None = None) -> int:
                 refresh=args.refresh,
             )
         )
+
+    if args.command == "decide":
+        return asyncio.run(
+            run_decide(
+                settings,
+                question=args.question,
+                chosen=args.chosen,
+                reasoning=args.reasoning,
+                confidence=args.confidence,
+                expected=args.expected,
+                options=args.options,
+                assumptions=args.assumptions,
+                evidence=args.evidence,
+                decided=args.decided,
+                interactive=args.interactive,
+            )
+        )
+
+    if args.command == "decisions":
+        if args.decisions_command == "list":
+            return asyncio.run(
+                run_decisions_list(settings, status=args.status, limit=args.limit)
+            )
+        if args.decisions_command == "show":
+            return asyncio.run(
+                run_decisions_show(settings, decision_id=args.decision_id)
+            )
+        if args.decisions_command == "edit":
+            return asyncio.run(
+                run_decisions_edit(
+                    settings,
+                    decision_id=args.decision_id,
+                    question=args.question,
+                    chosen=args.chosen,
+                    reasoning=args.reasoning,
+                    expected=args.expected,
+                    status=args.status,
+                    options=args.options,
+                    assumptions=args.assumptions,
+                )
+            )
+        if args.decisions_command == "link":
+            return asyncio.run(
+                run_decisions_link(
+                    settings, decision_id=args.decision_id, evidence=args.evidence
+                )
+            )
+        if args.decisions_command == "suggest":
+            return asyncio.run(
+                run_decisions_suggest(settings, source=args.source, limit=args.limit)
+            )
+        if args.decisions_command == "review":
+            return asyncio.run(
+                run_decisions_review(
+                    settings,
+                    status=args.status,
+                    limit=args.limit,
+                    show_passage=args.show_passage,
+                )
+            )
+        if args.decisions_command == "accept":
+            return asyncio.run(
+                run_decisions_accept(settings, suggestion_id=args.suggestion_id)
+            )
+        if args.decisions_command == "reject":
+            return asyncio.run(
+                run_decisions_reject(settings, suggestion_id=args.suggestion_id)
+            )
 
     if args.command == "stats":
         return asyncio.run(run_stats(settings))
