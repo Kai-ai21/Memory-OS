@@ -22,6 +22,7 @@ from memoryos.adapters.db import models
 from memoryos.adapters.db.keyword_store import PostgresKeywordStore
 from memoryos.adapters.db.vector_store import PgVectorStore
 from memoryos.application.context_engine import (
+    CANDIDATES_PER_SOURCE,
     AssembleContext,
     ContextRequest,
     ContextSource,
@@ -373,3 +374,41 @@ async def test_an_empty_corpus_assembles_nothing_rather_than_failing(
     assert assembled.items == []
     assert assembled.tokens_used == 0
     assert {report.source for report in assembled.sources} == set(ContextSource)
+
+
+async def test_a_focus_containing_a_wildcard_is_matched_literally(
+    harness: Harness,
+) -> None:
+    """`%` in a focus made the by-name source return the whole corpus.
+
+    Not SQL injection — the value is parameterised — but the wrong query, which
+    is harder to notice because nothing errors: every memory matched, and each
+    was ranked as though it were the file being looked at. Live rather than
+    theoretical from M6.2, where the watcher and the editor send file paths as
+    the focus and a path may legitimately contain `%` or `_`.
+    """
+    wildcard = await engine(harness)(
+        ContextRequest(focus="%", max_items=12), use_cache=False
+    )
+    underscore = await engine(harness)(
+        ContextRequest(focus="_", max_items=12), use_cache=False
+    )
+
+    for assembled in (wildcard, underscore):
+        temporal = next(
+            report
+            for report in assembled.sources
+            if report.source is ContextSource.TEMPORAL
+        )
+        # Recency still proposes — that half does not read the focus at all —
+        # but the by-name half must contribute nothing, because no external key
+        # ends with a literal percent sign.
+        assert temporal.proposed <= CANDIDATES_PER_SOURCE
+
+    # And the corpus does contain a file whose key ends in `.py`, so the by-name
+    # half is not simply broken for everything.
+    named = await engine(harness)(ContextRequest(focus="mod.py"), use_cache=False)
+    assert any(
+        item.external_key is not None and item.external_key.endswith("mod.py")
+        for item in named.items
+    )
