@@ -68,6 +68,9 @@ export function PatternsPage() {
             >
               show dismissed
             </button>
+            <Link className="text-amber underline" to="/decisions/reflections">
+              reflections
+            </Link>
             <Link className="text-amber underline" to="/decisions">
               decisions
             </Link>

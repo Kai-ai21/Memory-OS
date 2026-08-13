@@ -160,6 +160,8 @@ export type PatternEvidence = Pattern["supporting"][number];
 export type PatternKind = NonNullable<Pattern["kind"]>;
 export type Calibration = Ok<paths["/patterns/calibration"]["get"]>;
 export type CalibrationBand = Calibration["decisions"][number];
+export type Reflection = Ok<paths["/reflections"]["get"]>[number];
+export type ReflectionCitation = Reflection["citations"][number];
 
 export interface SearchArgs {
   q: string;
@@ -307,6 +309,26 @@ export const api = {
 
   dismissPattern: (id: string, reason: string) =>
     request<null>(`/patterns/${id}/dismiss`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+
+  /**
+   * Reflections, and this is the only place the client asks for them. Nothing
+   * else in this file returns one as part of a larger payload, which is what
+   * keeps them off the home screen and out of search results by construction
+   * rather than by a component remembering not to render them.
+   */
+  reflections: (includeDismissed = false) =>
+    request<Reflection[]>(
+      `/reflections${includeDismissed ? "?include_dismissed=true" : ""}`,
+    ),
+
+  acknowledgeReflection: (id: string) =>
+    request<null>(`/reflections/${id}/acknowledge`, { method: "POST" }),
+
+  dismissReflection: (id: string, reason: string) =>
+    request<null>(`/reflections/${id}/dismiss`, {
       method: "POST",
       body: JSON.stringify({ reason }),
     }),

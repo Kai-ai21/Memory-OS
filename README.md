@@ -21,10 +21,14 @@ See [Time](#time) and the [Phase 4 retrospective](#phase-4-retrospective).
 what else was considered, why, and what had to be true — M5.1 (outcome linking),
 which connects a decision to what happened afterwards and is the milestone where
 Phase 4's temporal layer pays for itself, M5.2 (assumption tracking), which
-evaluates which of those beliefs held, and M5.3 (pattern discovery), which finds
-none and explains exactly why. See [Decisions](#decisions), which opens
-with the measurement of how little decision-shaped content this corpus actually
-holds, [Outcomes](#outcomes), [Assumptions](#assumptions) and [Patterns](#patterns).
+evaluates which of those beliefs held, M5.3 (pattern discovery), which finds
+none and explains exactly why, and M5.4 (reflection generation), which turns a
+pattern into prose and refuses to write anything at all below its evidence bar.
+**Phase 5 complete.** See [Decisions](#decisions), which opens with the
+measurement of how little decision-shaped content this corpus actually holds,
+[Outcomes](#outcomes), [Assumptions](#assumptions), [Patterns](#patterns),
+[Reflections](#reflections) and the
+[Phase 5 retrospective](#phase-5-retrospective).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -140,6 +144,8 @@ such table fails the build rather than losing its rows in a cascade nobody watch
 | `assumption_evidence` | Memories bearing on whether an assumption held.              |
 | `patterns`         | M5.3. A behavioural claim, with the evidence that makes it one. |
 | `pattern_evidence` | Decisions that support a pattern, and decisions that contradict it. |
+| `reflections`      | M5.4. A pattern in prose. The only row a language model wrote. |
+| `reflection_citations` | Each `[n]` in that prose, frozen to the decision it points at. |
 
 Two design points carry the most weight:
 
@@ -2781,6 +2787,332 @@ that mostly broke. M5.2 found one group of two across 16 decisions, so the
 binding constraint there is not the threshold but how rarely the same belief is
 written down twice.
 
+## Reflections
+
+M5.4 turns a pattern into readable prose with citations, and refuses to write
+anything at all when the evidence is not there. **On this corpus it refuses,
+because M5.3 found no patterns to describe.**
+
+```bash
+memoryos reflect --all [--min-confidence 0.67]   # or --pattern <id>
+memoryos reflections list [--include-dismissed]
+memoryos reflections acknowledge <id>
+memoryos reflections dismiss <id> --reason "..."
+```
+
+### The riskiest output in the project
+
+Every prior milestone returns retrieved text or computed numbers. A `patterns`
+row is already a behavioural claim, but it is a claim shaped like a table: a
+sentence assembled from counts, with the decisions it was counted from beside it,
+and a reader looks at both. **This produces claims about a person in fluent
+English, and prose is read as a claim rather than as a summary of a table.**
+
+An unfalsifiable behavioural claim is the single most damaging thing this system
+can emit. It sounds exactly like the product working, it is trusted because it is
+personal, and there is nothing in it to argue with. So M2.6's grounding
+discipline applies, tightened in two places, and the first tightening matters far
+more than the second.
+
+### The refusal happens before the model is called
+
+A pattern below the confidence bar produces **no reflection** — not a hedged one,
+not a short one, not one with a caveat. The `LanguageModel` is never invoked, so
+there is no fluent paragraph anywhere in the process to be tempted by, and no
+prompt instruction for a model under pressure to be helpful to smooth over.
+
+The bar is derived rather than picked, and it is deliberately **above** the bar a
+pattern itself had to clear:
+
+```
+REFLECTION_MIN_CONFIDENCE = pattern_confidence(DEFAULT_MIN_SUPPORT + 1, 0) = 0.667
+```
+
+`pattern_confidence(3, 0)` is 0.50 — the least that counts as a pattern at all —
+and this is one more agreeing decision than that with nothing against it. Written
+as the expression rather than the decimal so that raising the support floor
+raises this too; a literal would silently become the *lower* of the two bars the
+first time the floor moved.
+
+What `reflect` prints instead is the arithmetic:
+
+```
+  A recurring assumption breaks more often than it holds: ...
+    → confidence 0.50 is below the 0.67 a reflection needs
+    → would need 1 more decision(s) agreeing, with no further counter-evidence,
+      against the 3 supporting and 0 contradicting it has now
+```
+
+"Two more decisions where this belief broke, with none where it held" is
+something a person can go and look for. "No reflections" is not. **That output is
+the correct result of the command rather than its failure mode.**
+
+### Every sentence cites a decision, or it is not written
+
+M2.6 requires every *factual* sentence to carry a citation and lets a refusal go
+uncited — "the passages do not cover this" is the behaviour that milestone most
+wants, and demanding a marker on it would penalise exactly that. A reflection has
+no equivalent sentence, because the refusal here happens before generation. So
+the escape hatch is removed rather than extended: **every sentence with a letter
+in it must cite**, including the hedges. "This is tentative" is a claim about the
+strength of the evidence and can cite the decisions that make it thin.
+
+Two outcomes, and the asymmetry is the point:
+
+* **An uncited sentence is flagged and kept.** Deleting one from the middle of a
+  paragraph leaves prose that reads as complete and is not. It is marked in the
+  interface, counted in `citation_rate`, and returned by the API.
+* **A citation to a decision outside the pattern's evidence rejects the whole
+  reflection.** Nothing is stored. At that point the paragraph is describing
+  somebody using evidence nobody showed it, and there is no charitable reading
+  under which the rest of it is still worth keeping. Prose citing *nothing at
+  all* is rejected for the same reason — marking every sentence would still leave
+  every sentence on the screen.
+
+What this still cannot check is whether the cited decision actually *supports*
+the sentence. That needs a judge, the only available judge is another language
+model, and a model grading its own grounding is not evidence. The answer is
+M2.6's: a person reads it and says whether it is true about them. That reading is
+below.
+
+### The check needed its own sentence splitter, and that was a real bug
+
+The prompt asks for decisions to be named by their questions, and a decision
+question ends in a question mark. Under M2.6's splitter — terminal punctuation
+followed by whitespace — a correct, fully cited sentence
+
+> You underestimated the work in Should we use Celery or a table? [1].
+
+becomes three fragments, two of them uncited. The citation rate then reports 33%
+for a reflection that did exactly what it was asked, and every uncited-sentence
+flag points at half a sentence. Under-reporting the number that says whether the
+guardrail works is not a conservative error; it is the metric turning into noise,
+which is the same defect `_REFUSAL_PATTERN` was written to fix one phase earlier.
+A reflection boundary therefore needs punctuation, whitespace, *and* something
+that can begin a sentence — a capital, a digit or an opening quote.
+
+### `reflection_citations` is a table, and M1.4a is why
+
+M1.4a stored citations as offsets, the offsets drifted under the text they
+pointed into, and nothing failed: row counts were right, every test passed, and
+the highlights pointed a few hundred characters from the answer.
+
+The same drift is available here and it is worse. A reflection's `[3]` means "the
+third decision in the list this reflection was generated from", and `patterns
+discover` **replaces a pattern's evidence wholesale** on every re-run. A numbering
+re-derived at read time would silently renumber every citation the first time the
+corpus grew — and the claim would still read correctly while linking to a
+different decision. Frozen as a foreign key at generation, that cannot happen. A
+cited decision that is later deleted takes its citation with it rather than
+leaving a marker pointing at nothing.
+
+Evidence is numbered **per distinct decision and per relation**, which is exactly
+how a pattern counts its own support. Numbering per evidence row would let one
+decision with two grouped assumptions appear as `[1]` and `[4]`, and a reflection
+citing both would read as two observations of a person when it is one — the
+mistake `DEFAULT_MIN_SUPPORT` exists to prevent, reintroduced at the point where
+somebody actually reads the claim.
+
+### You go and look at reflections; they are never delivered
+
+No reflection appears on the home screen, in search results, on a decision page,
+or in any list rendered by default. There is no nav tab for the view — it is
+reached from the patterns page, deliberately — and no endpoint returns a
+reflection inside a larger payload. A test asserts the masthead's tabs by name so
+that adding one is a deliberate act rather than something a refactor does
+quietly.
+
+**A system that volunteers behavioural claims about you unprompted is a system
+you stop trusting.** Dismissal is not "hide": it stops the sentence being shown
+*and* stops its pattern being written about again, and `--regenerate` does not
+override it. Everything else in this milestone is a judgement about evidence;
+that one is a judgement about the person's own judgement, and it outranks.
+
+### What actually happened
+
+`memoryos reflect --all`, against the real corpus:
+
+```
+patterns considered:    0
+threshold:              0.67 confidence
+reflections written:    0
+
+No patterns to reflect on. Run `memoryos patterns discover` first;
+nothing clearing that bar is a result rather than a failure.
+```
+
+Zero, and not because the reflection bar is high. **There were no patterns at
+all** — M5.3 emits none on 16 decisions, 12 outcomes and 37 assumptions, five of
+its six candidates refused because the stated confidence falls inside the Wilson
+interval its own sample supports. The reflection threshold was never reached
+because nothing got that far.
+
+### The one reflection this project has produced, and the judgement on it
+
+Since refusing is the expected result, `scripts/lowered_bar_reflection.py` writes
+the strongest refused candidate into `patterns` **bypassing only the resolution
+gate**, so that the prose layer can be read and judged rather than imagined.
+Everything else about it is real: the evidence rows are the actual decisions, the
+counts are the actual counts, the confidence is the same formula. What is missing
+is any reason to believe the observed rate differs from the stated one by more
+than a sample this size produces by chance. It was removed afterwards.
+
+The pattern: *"Underconfident on assumptions stated between 0.75 and 1.00: mean
+stated 0.85, actual 100% (95% CI 78%–100%, n=14)"*, 10 supporting decisions, 0
+contradicting, confidence 0.95. Generated by `llama-3.3-70b-versatile`, **citation
+rate 100%, no uncited sentences, no fabricated citations**:
+
+> You see a pattern of underconfidence in assumptions stated between 0.75 and
+> 1.00, with a mean stated confidence of 0.85, and an actual confidence of 100%
+> [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]. This observation is based on decisions such as
+> what stores vectors, where the stated confidence was 0.80 and 0.75, and the
+> outcome held [1]. Similar confidence levels were stated for other decisions,
+> including what runs background work, with stated confidences of 0.90 and 0.95,
+> and the outcome also held [2]. The pattern also appears in decisions like which
+> embedding model to use, with a stated confidence of 0.75, and how to combine
+> two retrievers, with stated confidences of 0.85 and 0.80, both of which held
+> [3, 4]. Overall, the decisions show that the stated confidences were lower than
+> the actual outcomes, with all 10 decisions arguing for this pattern [1, 2, 3,
+> 4, 5, 6, 7, 8, 9, 10].
+
+**Verdict: not a horoscope, and not an insight either. It is a caption.**
+
+Every checkable detail is correct. "What stores the vectors" really does carry
+assumptions stated at 0.80 and 0.75 and both held; "what runs background work"
+really is 0.90 and 0.95. Nothing is invented, and the mechanical checks agree.
+That is worth something — a fluent paragraph about somebody's judgement in which
+every specific is true is not what a language model produces unprompted, and it
+is the thing the guardrails were built for.
+
+But four things are wrong with it as a *finding*.
+
+**It restates the pattern rather than saying anything about the person.** The
+first sentence is the `patterns` row with the numbers reformatted, and the last
+sentence is the first sentence again. Two of five sentences carry content.
+
+**A citation to all ten decisions is citation-shaped and not evidence-shaped.**
+`[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]` passes every check this milestone implements
+and tells a reader nothing about which decision supports which clause. The
+citation rate cannot distinguish it from a sentence that cites the one decision
+it is about, and that is the sharpest limit of the mechanical check.
+
+**It says "actual confidence of 100%", which is a category error** — 100% is a
+hold rate, not a confidence — and no check catches it, because the number is in
+the evidence and the sentence is grammatical.
+
+**It is not tentative, and it should be.** The claim's entire statistical
+standing is that 0.85 sits *inside* 78%–100%, which is the interval saying this
+person may be exactly as reliable as they said. The reflection has no way to know
+that: the pattern row carries counts and a confidence, and the resolution gate
+that refused it lives upstream in `discover`. Under normal operation the pattern
+would not exist and the question would not arise — **but the prose layer's honesty
+is entirely inherited from the gate above it, and nothing in the paragraph would
+tell a reader the difference.**
+
+One requirement went untested against a real model. Every writable candidate on
+this corpus has zero counter-evidence, so "state the counter-evidence in the same
+paragraph as the claim" was exercised only against fakes. That is a fact about a
+corpus whose confidence bands are unanimous, not a gap in the code, and it is the
+first thing to check when this corpus is large enough to emit a pattern honestly.
+
+### What it would take to be worth reading
+
+The reflection layer is not the constraint. The pattern layer is, and the
+[interval table](#how-many-decisions-this-would-need) already answers it: around
+25 evaluated observations in a single confidence band, or roughly 50–60 decisions
+with their assumptions evaluated — three to four times this corpus.
+
+And the confound that outranks the count. **Every confidence in this corpus was
+reconstructed after the outcome was known**; `scripts/seed_decisions.py` says so
+in its own docstring. A calibration reflection built on that measures hindsight,
+and it would read exactly like one built on foresight. That is why the dismissal
+recorded on the reflection above was not "this is untrue" but "the claim is true
+of the numbers and means nothing".
+
+## Phase 5 retrospective
+
+Five milestones: a decision schema, outcome linking, assumption tracking, pattern
+discovery, and reflections. The layer that was supposed to be the differentiator.
+
+### Is it the differentiator, or is it waiting on years of data?
+
+**Both, and the honest split is not 50/50.** What Phase 5 built is a working
+apparatus with almost nothing to say, and the two halves should be judged
+separately.
+
+The apparatus is real and it is the part that transfers. Sixteen decisions with
+their alternatives, 37 assumptions of which 25 were evaluated and 12 deliberately
+left alone, 12 outcomes with `too_early` kept outside the success rate, four
+detectors, a Wilson interval standing between a gap and a finding, and a prose
+layer that refuses more often than it writes. None of that needs more data to be
+correct; all of it needs more data to be *useful*.
+
+The findings are absent, and the absence is measured rather than assumed. M5.1
+found no suggestion worth accepting. M5.2 found one recurring assumption group,
+of two members, which both held. M5.3 emitted zero patterns from six candidates.
+M5.4 wrote zero reflections. **Four milestones in a row whose headline result is a
+number that is zero** — and each one printed why, which is the difference between
+a quiet system and a broken one.
+
+So: waiting on data, yes. But the thing being waited on is narrower than "years".
+It is **50–60 decisions with their assumptions evaluated and their outcomes
+recorded** — a year of deliberate practice, not a decade of passive accumulation
+— and the binding constraint on the assumption detector is not the threshold at
+all but how rarely the same belief gets written down twice.
+
+### What would make it genuinely useful
+
+**Confidence recorded before the outcome, provably.** This is the largest single
+defect in Phase 5 and no amount of data fixes it. Nothing in the schema records
+whether a confidence was written before the answer was known, so every
+calibration result here is calibration of hindsight wearing the same shape as
+calibration of foresight. The fix is small and structural: a decision's
+confidence should be immutable from the moment it is written — it already is —
+*and* the schema should record that no outcome existed for that decision at the
+time. A `confidence_recorded_before_outcome` boolean derived at write time, or
+simply refusing to accept a confidence on a decision that already has an outcome,
+would make the whole calibration table mean something it currently does not.
+
+**Detectors that read the choices, not only the counts.** Three of the four
+detectors count things: reversals, days, verdicts. The one that would say
+something a person could not already feel — "you reach for the same kind of
+option" — was deliberately not built, because categorising choices needs a
+vocabulary the corpus does not have and inventing one would mean the detector
+choosing its categories and then finding them. That is still the right call, and
+it is also the reason this layer's output is arithmetic rather than insight.
+
+**Reflections that know how strong their own claim is.** The gate that refuses a
+noisy pattern is upstream of the prose, so a reflection cannot hedge for the right
+reason. Passing the interval into the prompt — "this rate is indistinguishable
+from the one you stated, given the sample" — would let a tentative sentence be
+tentative about the actual weakness rather than about support counts.
+
+### Would I build it this way again?
+
+**Yes, with one change to the order.**
+
+The three-gate structure, counter-evidence found by the same pass that finds the
+support, the confidence formula being derivable by hand, the interval as the real
+gate, and the refusal happening before the model call rather than in the prompt —
+all of that would go in unchanged. The evidence is that the one milestone whose
+output could have been a horoscope produced a caption instead, and the mechanical
+checks caught what they were built to catch.
+
+What I would change: **the confidence-before-outcome guarantee belongs in M5.0,
+not in a retrospective.** It is one CHECK constraint and one column, it costs
+nothing on the day the schema is written, and its absence silently invalidates
+the most interesting thing the phase measures. That is the same argument M1.1 made
+for storing two timestamps six milestones before anything read them, and Phase 5
+is where the lesson had to be learned twice.
+
+The second change is smaller: **`patterns` and `reflections` should have been one
+milestone.** They were built as two and share a single decision — what evidence
+is enough to say something about a person — and splitting it meant the resolution
+gate and the prose bar were designed a week apart. The bug this milestone found in
+M5.3's calibration detector, where under-confidence could not fire at all, is
+exactly the kind of thing that surfaces when the layer above finally asks the
+layer below for its evidence.
+
 ## Migrations
 
 ```bash
@@ -2860,6 +3192,15 @@ hash.
 | `GET /patterns`            | Patterns with both evidence lists, never one of them.       |
 | `GET /patterns/calibration`| Every confidence band with the interval its sample supports.|
 | `POST /patterns/{id}/dismiss` | Reject a pattern permanently. A reason is required.      |
+| `GET /reflections`         | Reflections with citations resolved. Dismissed ones excluded.|
+| `POST /reflections/{id}/acknowledge` | Record that it was read. Not agreement.           |
+| `POST /reflections/{id}/dismiss` | "This is wrong about me." Stops regeneration too.     |
+
+There is no route that returns a reflection alongside anything else — not in a search result,
+not on a decision, not in a corpus summary. They are fetched from `GET /reflections` and nowhere
+else, because a system that volunteers behavioural claims about you unprompted is a system you
+stop trusting, and the way that happens by accident is one endpoint quietly including them in a
+payload something already renders. There is no `POST /reflections` either, for the reason below.
 
 There is deliberately no `POST /decisions/suggest` and no `POST /outcomes/suggest`. Running
 either extractor costs a model call per candidate, and an endpoint that spends money is one
@@ -2930,6 +3271,10 @@ was once wrong:
   table is added without deciding whether it can be rebuilt. That omission is otherwise invisible.
 - `tests/integration/test_replay.py::test_versions_and_tombstones_survive_a_rebuild` — the test that
   caught the replay applying events without interleaving the pipeline, a defect no row count showed.
+- `tests/unit/test_reflection_grounding.py::test_a_pattern_below_the_threshold_produces_no_reflection`
+  — a deliberately weak pattern, two supporting and two contradicting, must produce no prose *and*
+  must not call the model. M5.4's acceptance criterion, and the one guard that cannot be talked
+  out of by a fluent paragraph.
 
 If `/health/ready` reports a null `pgvector_version`, the init script did not run because the
 data volume already existed. Reset it:

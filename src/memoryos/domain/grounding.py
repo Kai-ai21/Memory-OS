@@ -393,3 +393,191 @@ def _split_diff(evidence: str) -> tuple[str, str]:
         else:
             context.append(line[1:] if line.startswith(" ") else line)
     return "\n".join(changed), "\n".join(context)
+
+
+# --------------------------------------------------------------------------
+# M5.4: grounding a reflection, where the subject of every sentence is a person
+#
+# The same check as `verify_citations` above, tightened in two places, and both
+# tightenings exist because of what a reflection *is*.
+#
+# An answer is about the corpus. A reflection is about the reader — "you tend to
+# underestimate how long integration takes" — and an unfalsifiable sentence of
+# that kind is the single most damaging thing this system can emit: it sounds
+# like the product working, it is trusted because it is personal, and there is
+# nothing in it to argue with. So:
+#
+# **Every sentence needs a citation, not only the factual ones.** `_is_factual`
+# exists above so that a model refusing to answer is not punished for writing
+# "the passages do not cover this" without a marker. A reflection has no such
+# sentence, because in M5.4 the refusal happens *before* the model is called: a
+# pattern below the confidence bar produces no reflection at all rather than a
+# hedged one. What that leaves is prose in which every sentence is a claim about
+# somebody, including the hedges — "this is tentative" is a claim about the
+# strength of the evidence and can cite the decisions that make it thin. So the
+# escape hatch is removed rather than extended, which is also why this is not
+# implemented by adding entries to `_NON_FACTUAL_PREFIXES`: that list is the
+# place where a check gets argued down to nothing.
+#
+# **A citation outside the evidence rejects the whole reflection**, rather than
+# being counted and reported as it is for an answer. The indices here are not
+# passages retrieved for a question; they are the specific decisions this
+# pattern was derived from. A reflection citing anything else is describing a
+# person using evidence that was never shown to be about the claim, and there is
+# no charitable reading in which the rest of the paragraph is still trustworthy.
+#
+# What this still cannot check is whether the cited decision *supports* the
+# sentence. That needs a judge, the only available judge is another language
+# model, and a model grading its own grounding is not evidence. The milestone's
+# answer to that is the same as M2.6's: a person reading the output and saying
+# whether it is true about them.
+# --------------------------------------------------------------------------
+
+# Sentence boundaries for a reflection, which are deliberately not the answer
+# ones, and this is a fix rather than a refinement.
+#
+# A reflection is *asked* to name decisions by their questions, and a decision
+# question ends in a question mark. `_SENTENCE` splits on terminal punctuation
+# followed by whitespace, so a correct, fully cited sentence —
+#
+#     You underestimated the work in Should we use Celery or a table? [1].
+#
+# — becomes three fragments, two of which carry no citation. The citation rate
+# then reports 33% for a reflection that did exactly what it was asked, and every
+# uncited-sentence flag points at half a sentence. Under-reporting the number that
+# says whether the guardrail works is not a conservative error: it is the metric
+# turning into noise, which is the same defect `_REFUSAL_PATTERN` above was
+# written to fix.
+#
+# So a boundary here needs terminal punctuation, whitespace, and then something
+# that can *begin* a sentence: a capital, a digit or an opening quote. A citation
+# marker or a lowercase word after a question mark is the middle of one. A line
+# break stays a boundary unconditionally.
+_REFLECTION_SENTENCE = re.compile(
+    "(?<=[.!?])\\s+(?=[A-Z0-9\"'\u201c\u2018])|\\n+"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ReflectionCheck:
+    """Whether a generated reflection stayed inside the pattern's evidence."""
+
+    sentences: list[SentenceCheck] = field(default_factory=list)
+    # Cited decision numbers that were never in the pattern's evidence. The
+    # unambiguous failure, and the one that makes the reflection unwritable.
+    out_of_evidence: list[int] = field(default_factory=list)
+    cited_indices: list[int] = field(default_factory=list)
+
+    @property
+    def claims(self) -> int:
+        """Sentences making a claim, which here is every sentence with letters."""
+        return sum(1 for sentence in self.sentences if sentence.factual)
+
+    @property
+    def cited_claims(self) -> int:
+        return sum(
+            1 for sentence in self.sentences if sentence.factual and not sentence.unsupported
+        )
+
+    @property
+    def uncited(self) -> list[str]:
+        """The sentences carrying no citation, kept whole.
+
+        Flagged, never removed — the rule `verify_citations` states and for the
+        same reason: prose with a sentence quietly deleted from the middle reads
+        as complete and is not.
+        """
+        return [sentence.text for sentence in self.sentences if sentence.unsupported]
+
+    @property
+    def citation_rate(self) -> float:
+        """Cited sentences over sentences.
+
+        0.0 for an empty reflection rather than 1.0. `VerificationResult` scores
+        an empty answer's rate as 1.0 because a refusal has nothing to cite; here
+        there is no such case, and a generation that produced nothing must not
+        report the same number as one that cited everything.
+        """
+        total = self.claims
+        if total == 0:
+            return 0.0
+        return self.cited_claims / total
+
+    @property
+    def grounded(self) -> bool:
+        return not self.out_of_evidence and self.citation_rate == 1.0
+
+    @property
+    def writable(self) -> bool:
+        """Whether this may be stored at all.
+
+        Two rejections and one tolerance, and the asymmetry is the point. A
+        fabricated citation is not survivable: the paragraph is describing
+        somebody using evidence nobody showed it. Prose that cites *nothing* is
+        not survivable either — it is exactly the unfalsifiable behavioural
+        claim this milestone is arranged against, and flagging every sentence of
+        it would still leave the sentences on screen.
+
+        An individual uncited sentence in an otherwise cited paragraph is
+        tolerated and marked, because deleting one from the middle produces text
+        that reads as complete and is not.
+        """
+        return not self.out_of_evidence and self.cited_claims > 0
+
+    def marked(self, marker: str = " [uncited]") -> str:
+        return " ".join(
+            sentence.text + (marker if sentence.unsupported else "") for sentence in self.sentences
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "citation_rate": round(self.citation_rate, 4),
+            "claims": self.claims,
+            "cited_claims": self.cited_claims,
+            "uncited": self.uncited,
+            "out_of_evidence": list(self.out_of_evidence),
+            "cited_indices": sorted(set(self.cited_indices)),
+            "grounded": self.grounded,
+        }
+
+
+def check_reflection(text: str, valid_indices: set[int]) -> ReflectionCheck:
+    """Check a reflection against the decisions it was given.
+
+    `valid_indices` is the numbering of the pattern's own evidence — supporting
+    and contradicting together, because a reflection is required to cite the
+    decisions that argue against it in the same breath as the claim.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return ReflectionCheck()
+
+    sentences: list[SentenceCheck] = []
+    out_of_evidence: list[int] = []
+    cited: list[int] = []
+
+    for raw in _REFLECTION_SENTENCE.split(stripped):
+        sentence = raw.strip()
+        if not sentence:
+            continue
+        indices = _indices(sentence)
+        cited.extend(index for index in indices if index in valid_indices)
+        out_of_evidence.extend(index for index in indices if index not in valid_indices)
+        # Every sentence with a letter in it, with no prefix escape. See the
+        # section note: in a reflection there is no sentence that is *about* the
+        # evidence rather than drawn from it.
+        claim = _HAS_LETTERS.search(sentence) is not None
+        sentences.append(
+            SentenceCheck(
+                text=sentence,
+                citations=indices,
+                factual=claim,
+                unsupported=claim and not indices,
+            )
+        )
+
+    return ReflectionCheck(
+        sentences=sentences,
+        out_of_evidence=sorted(set(out_of_evidence)),
+        cited_indices=cited,
+    )

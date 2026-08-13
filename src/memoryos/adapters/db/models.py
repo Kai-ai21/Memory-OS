@@ -2256,3 +2256,135 @@ class PatternEvidence(Base):
         Index("ix_pattern_evidence_pattern", "pattern_id", "relation"),
         Index("ix_pattern_evidence_decision", "decision_id"),
     )
+
+
+class Reflection(Base):
+    """A pattern, in prose, with the citations that make it checkable.
+
+    **The riskiest row in this schema, and it is worth saying why it is riskier
+    than `patterns` — which the docstring above already called the most
+    dangerous table.** A pattern is a statement assembled from counts, sitting
+    beside the decisions it was counted from, and a reader looks at both
+    together. This is fluent English about somebody's judgement, and prose is
+    read as a claim rather than as a summary of a table. Everything else this
+    system stores is retrieved text or arithmetic; this is the one row a
+    language model wrote.
+
+    So three columns exist to keep it answerable rather than merely readable.
+
+    `citation_rate` is what `domain/grounding.check_reflection` measured at
+    generation: cited sentences over sentences, where *every* sentence must
+    cite, not only the ones a heuristic calls factual. Stored rather than
+    recomputed on read because it is a fact about the text as generated, and a
+    number recomputed later against a pattern whose evidence has since moved
+    would be a different measurement wearing the same name.
+
+    `model_id` is which model wrote it. A reflection is the only row here whose
+    wording is not reproducible from the data, so the thing that produced the
+    wording is part of the record.
+
+    `dismissed_at` is the column that matters most. You have to be able to say
+    "this is wrong about me" and have the system stop repeating it — and stop
+    *regenerating* it, which is why `application/reflections.py` refuses to
+    generate for a pattern whose reflection was dismissed rather than only
+    hiding the row. A rejection a weekly re-run undid would not be a rejection.
+
+    `acknowledged_at` is deliberately not the same thing and deliberately not a
+    verdict. It records that somebody read it, so a view can stop showing an
+    unread claim first; it is not agreement, and nothing downstream weights a
+    reflection by it.
+    """
+
+    __tablename__ = "reflections"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    pattern_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("patterns.id", name="fk_reflections_pattern_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    citation_rate: Mapped[float | None] = mapped_column(REAL)
+    generated_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    model_id: Mapped[str] = mapped_column(Text, nullable=False)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    dismissed_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    dismissed_reason: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("length(btrim(text)) > 0", name="ck_reflections_text"),
+        CheckConstraint(
+            "citation_rate IS NULL OR citation_rate BETWEEN 0.0 AND 1.0",
+            name="ck_reflections_citation_rate_range",
+        ),
+        # The same rule `patterns` carries: a rejection without a reason is a row
+        # nobody can tell from a stale one.
+        CheckConstraint(
+            "(dismissed_at IS NULL) = (dismissed_reason IS NULL)",
+            name="ck_reflections_dismissal_pairing",
+        ),
+        Index("ix_reflections_pattern", "pattern_id"),
+    )
+
+
+class ReflectionCitation(Base):
+    """One `[n]` in a reflection, resolved to the decision it points at.
+
+    **A table rather than a column, and the reason is M1.4a.** That milestone
+    stored citations as offsets, the offsets drifted under the text they pointed
+    into, nothing failed — row counts were right, every test passed — and
+    highlights pointed a few hundred characters from the answer. The only thing
+    that catches that class of bug is making the identity structural.
+
+    The same drift is available here and it is worse. A reflection's `[3]` means
+    "the third decision in the list this reflection was generated from", and
+    `patterns discover` **replaces a pattern's evidence wholesale** on every
+    re-run — so re-deriving the numbering at read time would silently renumber
+    every citation the first time the corpus grew. The claim would still read
+    correctly and would link to a different decision.
+
+    So the numbering is frozen here at generation, as a foreign key. A cited
+    decision that is later deleted takes its citation with it rather than
+    leaving a marker pointing at nothing.
+
+    `relation` is carried across from `pattern_evidence` rather than joined back
+    to it, for the same reason: it is what the *reflection* was told about this
+    decision, and the interface uses it to show that the counter-evidence really
+    was cited in the same paragraph as the claim. Re-reading it from the pattern
+    later would report what the detector thinks today.
+    """
+
+    __tablename__ = "reflection_citations"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    reflection_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "reflections.id",
+            name="fk_reflection_citations_reflection_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    # The number as it appears in the text. 1-based, matching what the model was
+    # shown.
+    marker: Mapped[int] = mapped_column(Integer, nullable=False)
+    decision_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decisions.id",
+            name="fk_reflection_citations_decision_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    relation: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("reflection_id", "marker", name="uq_reflection_citations_marker"),
+        CheckConstraint("marker > 0", name="ck_reflection_citations_marker_positive"),
+        _enum_check("relation", PatternRelation, "ck_reflection_citations_relation"),
+        Index("ix_reflection_citations_decision", "decision_id"),
+    )

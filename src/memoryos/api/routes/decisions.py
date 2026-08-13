@@ -28,6 +28,7 @@ from memoryos.application import (
     outcome_suggest,
     outcomes,
     patterns,
+    reflections,
 )
 from memoryos.container import Container
 from memoryos.domain.values import (
@@ -738,6 +739,37 @@ async def assumption_stats(container: ContainerDep) -> AssumptionStatsOut:
     )
 
 
+class ReflectionCitationOut(BaseModel):
+    marker: int
+    decision_id: UUID
+    decision_question: str
+    relation: PatternRelation
+
+
+class ReflectionOut(BaseModel):
+    id: UUID
+    pattern_id: UUID
+    pattern_statement: str
+    text: str
+    # Cited sentences over sentences, measured at generation. Shown, not hidden:
+    # a claim about somebody that is only 60% attributable should say so on the
+    # same screen as the claim.
+    citation_rate: float | None
+    model_id: str
+    generated_at: datetime
+    acknowledged_at: datetime | None
+    dismissed_at: datetime | None
+    dismissed_reason: str | None
+    support_count: int
+    contradiction_count: int
+    # Every `[n]` in the text, resolved to the decision it points at, so the
+    # client can render the markers as links rather than as punctuation.
+    citations: list[ReflectionCitationOut]
+    # Sentences carrying no citation at all. Flagged rather than removed, and
+    # sent to the client so the interface can mark them in place.
+    uncited: list[str]
+
+
 @router.get("/patterns", response_model=list[PatternOut])
 async def list_patterns_route(
     container: ContainerDep,
@@ -832,6 +864,98 @@ def _band_out(band: patterns.CalibrationBand) -> CalibrationBandOut:
         interval_high=band.interval.high,
         n=band.interval.n,
         miscalibrated=band.miscalibrated,
+    )
+
+
+# --------------------------------------------------------------------------
+# Reflections
+#
+# **There is no route that returns a reflection alongside anything else.** No
+# reflection appears in a search result, in a decision, on a corpus summary, or
+# in any list a client renders by default. They are fetched from here and
+# nowhere else, because a system that volunteers behavioural claims about you
+# unprompted is a system you stop trusting — and the way that happens by
+# accident is one endpoint quietly including them in a payload something already
+# renders.
+#
+# There is also no POST that generates. Generation costs a model call and writes
+# prose about a person; it is a CLI command for the same reason `POST
+# /decisions/suggest` is absent.
+# --------------------------------------------------------------------------
+
+
+@router.get("/reflections", response_model=list[ReflectionOut])
+async def list_reflections_route(
+    container: ContainerDep,
+    include_dismissed: Annotated[bool, Query()] = False,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+) -> list[ReflectionOut]:
+    """Reflections with their citations resolved.
+
+    Dismissed ones are excluded by default and that default is the feature. "This
+    is wrong about me" has to mean the sentence stops appearing, not that it
+    moves down the page.
+    """
+    rows = await reflections.list_reflections(
+        container.database.session_factory,
+        include_dismissed=include_dismissed,
+        limit=limit,
+    )
+    return [_reflection_out(row) for row in rows]
+
+
+@router.post(
+    "/reflections/{reflection_id}/acknowledge", status_code=status.HTTP_204_NO_CONTENT
+)
+async def acknowledge_reflection(reflection_id: UUID, container: ContainerDep) -> None:
+    """Record that it was read. Not agreement, and nothing is weighted by it."""
+    try:
+        await reflections.acknowledge(container.database.session_factory, reflection_id)
+    except reflections.UnknownReflection as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+
+@router.post(
+    "/reflections/{reflection_id}/dismiss", status_code=status.HTTP_204_NO_CONTENT
+)
+async def dismiss_reflection(
+    reflection_id: UUID, body: DismissIn, container: ContainerDep
+) -> None:
+    """"This is wrong about me." Permanent, and it stops regeneration too."""
+    try:
+        await reflections.dismiss(
+            container.database.session_factory, reflection_id, reason=body.reason
+        )
+    except reflections.UnknownReflection as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+
+
+def _reflection_out(row: reflections.ReflectionRow) -> ReflectionOut:
+    return ReflectionOut(
+        id=row.id,
+        pattern_id=row.pattern_id,
+        pattern_statement=row.pattern_statement,
+        text=row.text,
+        citation_rate=row.citation_rate,
+        model_id=row.model_id,
+        generated_at=row.generated_at,
+        acknowledged_at=row.acknowledged_at,
+        dismissed_at=row.dismissed_at,
+        dismissed_reason=row.dismissed_reason,
+        support_count=row.support_count,
+        contradiction_count=row.contradiction_count,
+        citations=[
+            ReflectionCitationOut(
+                marker=item.marker,
+                decision_id=item.decision_id,
+                decision_question=item.decision_question,
+                relation=item.relation,
+            )
+            for item in row.citations
+        ],
+        uncited=row.uncited,
     )
 
 

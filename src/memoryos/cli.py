@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import json
 import math
+import textwrap
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -39,6 +40,7 @@ from memoryos.application import (
     outcome_suggest,
     outcomes,
     patterns,
+    reflections,
     temporal,
 )
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
@@ -91,7 +93,10 @@ from memoryos.domain.entities import Source
 from memoryos.domain.fusion import DEFAULT_RRF_K
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobStatus, JobType, PermanentError, TransientError
-from memoryos.domain.patterns import DEFAULT_MIN_SUPPORT
+from memoryos.domain.patterns import (
+    DEFAULT_MIN_SUPPORT,
+    REFLECTION_MIN_CONFIDENCE,
+)
 from memoryos.domain.values import (
     DEFAULT_SEARCH_MODE,
     AssumptionVerdict,
@@ -102,6 +107,7 @@ from memoryos.domain.values import (
     MergeStrategy,
     OutcomeVerdict,
     PatternKind,
+    PatternRelation,
     Period,
     SearchMode,
     SourceKind,
@@ -2592,6 +2598,187 @@ async def run_patterns_calibration(settings: Settings) -> int:
 
 
 # --------------------------------------------------------------------------
+# Reflections
+# --------------------------------------------------------------------------
+
+
+def _print_reflection(row: reflections.ReflectionRow, *, full: bool = True) -> None:
+    rate = "—" if row.citation_rate is None else f"{row.citation_rate:.0%}"
+    print(f"{row.id}  cited {rate}  {row.model_id}  {_stamp(row.generated_at)}")
+    if row.dismissed_at:
+        print(f"     DISMISSED: {row.dismissed_reason}")
+    elif row.acknowledged_at:
+        print(f"     acknowledged {_stamp(row.acknowledged_at)}")
+    print()
+    for line in textwrap.wrap(row.text, width=78):
+        print(f"  {line}")
+    print()
+    print(
+        f"     from: {row.pattern_statement}"
+    )
+    print(
+        f"     {row.support_count} supporting, {row.contradiction_count} contradicting"
+    )
+    if not full:
+        return
+    # The citations, resolved to the decisions they point at. Printed with the
+    # marker so a reader can follow `[2]` out of the prose and into the record
+    # it came from — which is the whole difference between a reflection and a
+    # horoscope.
+    print("\n     citations")
+    for citation in row.citations:
+        side = "for " if citation.relation is PatternRelation.SUPPORTS else "against"
+        print(f"       [{citation.marker}] {side}  {citation.decision_question}")
+        print(f"             {citation.decision_id}")
+    uncited = row.uncited
+    if uncited:
+        # Flagged, never removed. A sentence deleted from the middle of a
+        # paragraph leaves prose that reads as complete and is not.
+        print(f"\n     {len(uncited)} sentence(s) carrying no citation:")
+        for sentence in uncited:
+            print(f"       {sentence}")
+
+
+async def run_reflect(
+    settings: Settings,
+    *,
+    pattern_id: str | None,
+    threshold: float,
+    regenerate: bool,
+) -> int:
+    """Generate reflections for whatever cleared the bar, and say so when nothing did.
+
+    **Printing what would be needed is the correct output of this command, not
+    its failure mode.** A pattern below the confidence bar produces no reflection
+    at all — not a hedged one — and the model is never called for it, so there is
+    no fluent paragraph anywhere in the process to be tempted by. What a reader
+    gets instead is the arithmetic: how much more agreeing evidence it would take.
+    """
+    container = Container.build(settings)
+    try:
+        report = await reflections.reflect(
+            container.database.session_factory,
+            container.language_model(),
+            pattern_id=UUID(pattern_id) if pattern_id else None,
+            threshold=threshold,
+            regenerate=regenerate,
+        )
+    except MissingApiKey as exc:
+        print(f"refused: {exc}")
+        return 1
+    finally:
+        await container.dispose()
+
+    print(f"patterns considered:    {report.considered}")
+    print(f"threshold:              {threshold:.2f} confidence")
+    print(f"reflections written:    {report.written}")
+    print(f"below the threshold:    {len(report.refused)}")
+    print(f"generated and rejected: {len(report.rejected)}")
+    print(f"skipped (dismissed):    {report.skipped_dismissed}")
+    print(f"skipped (already have one): {report.skipped_existing}")
+
+    for reflection in report.reflections:
+        print()
+        print("-" * 78)
+        if reflection.text:
+            for line in textwrap.wrap(reflection.text, width=78):
+                print(f"  {line}")
+        if reflection.check is not None:
+            print(f"\n  citation rate {reflection.check.citation_rate:.0%}")
+            for sentence in reflection.check.uncited:
+                print(f"  UNCITED: {sentence}")
+
+    if report.rejected:
+        # The model was called and what came back could not be stored. Louder
+        # than a refusal, because this is the guardrail catching something.
+        print("\ngenerated and thrown away:")
+        for reflection in report.rejected:
+            print(f"  {reflection.statement}")
+            print(f"    → {reflection.rejected_because}")
+
+    if report.refused:
+        print("\nno reflection, and what each would need:")
+        for reflection in report.refused:
+            print(f"\n  {reflection.statement}")
+            print(f"    → {reflection.refused_because}")
+            print(f"    → would need {reflection.needed}")
+
+    if not report.considered:
+        print(
+            "\nNo patterns to reflect on. Run `memoryos patterns discover` first;\n"
+            "nothing clearing that bar is a result rather than a failure."
+        )
+    elif not report.written:
+        print(
+            "\nNothing was written, and that is the intended output rather than an\n"
+            "error. A behavioural claim in prose is the riskiest thing this system\n"
+            "emits, so it is refused before the model is called rather than hedged\n"
+            "afterwards."
+        )
+    return 0
+
+
+async def run_reflections_list(settings: Settings, *, include_dismissed: bool) -> int:
+    container = Container.build(settings)
+    try:
+        rows = await reflections.list_reflections(
+            container.database.session_factory, include_dismissed=include_dismissed
+        )
+    finally:
+        await container.dispose()
+
+    if not rows:
+        print("no reflections")
+        print(
+            "\nRun `memoryos reflect --all`. Nothing clearing the bar is a result,\n"
+            "not a failure — that command prints what each pattern would need."
+        )
+        return 0
+    for row in rows:
+        _print_reflection(row)
+        print()
+    return 0
+
+
+async def run_reflections_acknowledge(settings: Settings, *, reflection_id: str) -> int:
+    container = Container.build(settings)
+    try:
+        await reflections.acknowledge(
+            container.database.session_factory, UUID(reflection_id)
+        )
+    except reflections.UnknownReflection as exc:
+        print(str(exc))
+        return 1
+    finally:
+        await container.dispose()
+    print("acknowledged; read, which is not the same as agreed with")
+    return 0
+
+
+async def run_reflections_dismiss(
+    settings: Settings, *, reflection_id: str, reason: str
+) -> int:
+    container = Container.build(settings)
+    try:
+        await reflections.dismiss(
+            container.database.session_factory, UUID(reflection_id), reason=reason
+        )
+    except reflections.UnknownReflection as exc:
+        print(str(exc))
+        return 1
+    except ValueError as exc:
+        print(f"refused: {exc}")
+        return 1
+    finally:
+        await container.dispose()
+    print(
+        "dismissed; this claim will not be shown again and its pattern will not be\n"
+        "reflected on again"
+    )
+    return 0
+
+
+# --------------------------------------------------------------------------
 # Assumptions
 # --------------------------------------------------------------------------
 
@@ -3577,6 +3764,66 @@ def build_parser() -> argparse.ArgumentParser:
         help="stated confidence against actual verdicts, with the interval each supports",
     )
 
+    # The verb the milestone names, kept as its own top-level command rather than
+    # `patterns reflect`: generating prose about somebody is a different act from
+    # counting their decisions, and it should not read as a subcommand of it.
+    reflect_parser = commands.add_parser(
+        "reflect",
+        help="describe a pattern in prose, with citations; refuses below the bar",
+    )
+    reflect_parser.add_argument(
+        "--pattern", dest="pattern_id", help="one pattern by id"
+    )
+    reflect_parser.add_argument(
+        "--all",
+        dest="all_patterns",
+        action="store_true",
+        help="every pattern that clears the confidence bar",
+    )
+    reflect_parser.add_argument(
+        "--min-confidence",
+        dest="threshold",
+        type=float,
+        default=REFLECTION_MIN_CONFIDENCE,
+        help=(
+            f"the confidence a pattern needs before anything is written about it "
+            f"(default {REFLECTION_MIN_CONFIDENCE:.2f}). Deliberately above the bar "
+            f"for the pattern itself. Lowering it to produce output is exactly how "
+            f"a tool starts writing horoscopes"
+        ),
+    )
+    reflect_parser.add_argument(
+        "--regenerate",
+        action="store_true",
+        help=(
+            "replace an existing reflection. Never overrides a dismissal: a "
+            "rejection a re-run undid would not be a rejection"
+        ),
+    )
+
+    reflections_parser = commands.add_parser(
+        "reflections", help="reflections already written, with their citations"
+    )
+    reflections_commands = reflections_parser.add_subparsers(
+        dest="reflections_command", required=True
+    )
+    reflections_list = reflections_commands.add_parser(
+        "list", help="every reflection, with the decisions it cites"
+    )
+    reflections_list.add_argument(
+        "--include-dismissed", dest="include_dismissed", action="store_true"
+    )
+    reflections_ack = reflections_commands.add_parser(
+        "acknowledge", help="record that you read it; not agreement"
+    )
+    reflections_ack.add_argument("reflection_id")
+    reflections_dismiss = reflections_commands.add_parser(
+        "dismiss",
+        help="\"this is wrong about me\"; stops it being shown or regenerated",
+    )
+    reflections_dismiss.add_argument("reflection_id")
+    reflections_dismiss.add_argument("--reason", required=True)
+
     commands.add_parser("stats", help="report corpus and embedding coverage")
     commands.add_parser(
         "doctor", help="check the corpus for silently-degrading conditions"
@@ -4086,6 +4333,44 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.patterns_command == "calibration":
             return asyncio.run(run_patterns_calibration(settings))
+
+    if args.command == "reflect":
+        if not args.all_patterns and args.pattern_id is None:
+            # Neither flag is not "everything". Generating prose about a person
+            # is the one operation here that should never happen because a
+            # command was run without arguments.
+            print("give --pattern <id> or --all")
+            return 2
+        return asyncio.run(
+            run_reflect(
+                settings,
+                pattern_id=args.pattern_id,
+                threshold=args.threshold,
+                regenerate=args.regenerate,
+            )
+        )
+
+    if args.command == "reflections":
+        if args.reflections_command == "list":
+            return asyncio.run(
+                run_reflections_list(
+                    settings, include_dismissed=args.include_dismissed
+                )
+            )
+        if args.reflections_command == "acknowledge":
+            return asyncio.run(
+                run_reflections_acknowledge(
+                    settings, reflection_id=args.reflection_id
+                )
+            )
+        if args.reflections_command == "dismiss":
+            return asyncio.run(
+                run_reflections_dismiss(
+                    settings,
+                    reflection_id=args.reflection_id,
+                    reason=args.reason,
+                )
+            )
 
     if args.command == "assumption":
         return asyncio.run(
