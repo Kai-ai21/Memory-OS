@@ -833,6 +833,78 @@
         "title": "BucketOut",
         "type": "object"
       },
+      "CalibrationBandOut": {
+        "properties": {
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "interval_high": {
+            "title": "Interval High",
+            "type": "number"
+          },
+          "interval_low": {
+            "title": "Interval Low",
+            "type": "number"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "miscalibrated": {
+            "title": "Miscalibrated",
+            "type": "boolean"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "observed": {
+            "title": "Observed",
+            "type": "number"
+          },
+          "stated": {
+            "title": "Stated",
+            "type": "number"
+          }
+        },
+        "required": [
+          "low",
+          "high",
+          "stated",
+          "observed",
+          "interval_low",
+          "interval_high",
+          "n",
+          "miscalibrated"
+        ],
+        "title": "CalibrationBandOut",
+        "type": "object"
+      },
+      "CalibrationOut": {
+        "properties": {
+          "assumptions": {
+            "items": {
+              "$ref": "#/components/schemas/CalibrationBandOut"
+            },
+            "title": "Assumptions",
+            "type": "array"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/CalibrationBandOut"
+            },
+            "title": "Decisions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "decisions",
+          "assumptions"
+        ],
+        "title": "CalibrationOut",
+        "type": "object"
+      },
       "CitationOut": {
         "properties": {
           "char_end": {
@@ -1534,6 +1606,20 @@
           "unified"
         ],
         "title": "DiffOut",
+        "type": "object"
+      },
+      "DismissIn": {
+        "properties": {
+          "reason": {
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "DismissIn",
         "type": "object"
       },
       "DoctorOut": {
@@ -2889,6 +2975,202 @@
           "too_early"
         ],
         "title": "OutcomeVerdict",
+        "type": "string"
+      },
+      "PatternEvidenceOut": {
+        "properties": {
+          "decided_at": {
+            "format": "date-time",
+            "title": "Decided At",
+            "type": "string"
+          },
+          "decision_id": {
+            "format": "uuid",
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "decision_question": {
+            "title": "Decision Question",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "relation": {
+            "$ref": "#/components/schemas/PatternRelation"
+          }
+        },
+        "required": [
+          "decision_id",
+          "decision_question",
+          "decided_at",
+          "relation",
+          "note"
+        ],
+        "title": "PatternEvidenceOut",
+        "type": "object"
+      },
+      "PatternKind": {
+        "description": "What sort of behaviour a pattern is about.\n\nFour, closed, and each names a different detector rather than a different\ntopic. `ASSUMPTION` is a belief that keeps breaking; `TIMING` is outcomes\narriving later than the decision implied; `CHOICE` is reaching for the same\nkind of option repeatedly, or reversing repeatedly; `OUTCOME` is calibration\n\u2014 stated confidence against what actually happened.\n\nClosed for the reason `EntityType` and `Predicate` are: an open vocabulary\nis what you get when every new detector invents its own label, and a kind\nthat means almost the same as another kind is a filter that silently returns\nhalf its rows.",
+        "enum": [
+          "assumption",
+          "timing",
+          "choice",
+          "outcome"
+        ],
+        "title": "PatternKind",
+        "type": "string"
+      },
+      "PatternOut": {
+        "properties": {
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "contradicting": {
+            "items": {
+              "$ref": "#/components/schemas/PatternEvidenceOut"
+            },
+            "title": "Contradicting",
+            "type": "array"
+          },
+          "contradiction_count": {
+            "title": "Contradiction Count",
+            "type": "integer"
+          },
+          "detector": {
+            "title": "Detector",
+            "type": "string"
+          },
+          "discovered_at": {
+            "format": "date-time",
+            "title": "Discovered At",
+            "type": "string"
+          },
+          "dismissed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dismissed At"
+          },
+          "dismissed_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dismissed Reason"
+          },
+          "first_observed": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Observed"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PatternKind"
+          },
+          "last_observed": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Observed"
+          },
+          "span_days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Span Days"
+          },
+          "statement": {
+            "title": "Statement",
+            "type": "string"
+          },
+          "support_count": {
+            "title": "Support Count",
+            "type": "integer"
+          },
+          "supporting": {
+            "items": {
+              "$ref": "#/components/schemas/PatternEvidenceOut"
+            },
+            "title": "Supporting",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "statement",
+          "kind",
+          "detector",
+          "support_count",
+          "contradiction_count",
+          "confidence",
+          "first_observed",
+          "last_observed",
+          "span_days",
+          "discovered_at",
+          "dismissed_at",
+          "dismissed_reason",
+          "supporting",
+          "contradicting"
+        ],
+        "title": "PatternOut",
+        "type": "object"
+      },
+      "PatternRelation": {
+        "description": "Whether a piece of evidence agrees with a pattern or argues against it.\n\n**`CONTRADICTS` is not optional and is not a formality.** A detector that\nonly collected agreeing evidence would be confirmation bias implemented in\nSQL: every candidate would look strong, because the search that found it\nonly looked for cases that fit. Counter-evidence is searched for\ndeliberately, stored at the same weight, counted in the confidence formula,\nand shown in the interface beside the supporting kind rather than below a\nfold.",
+        "enum": [
+          "supports",
+          "contradicts"
+        ],
+        "title": "PatternRelation",
         "type": "string"
       },
       "Period": {
@@ -5448,6 +5730,151 @@
           }
         },
         "summary": "Reject Outcome Suggestion",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/patterns": {
+      "get": {
+        "description": "Patterns with both evidence lists.\n\nBoth always, and never a truncated one: a client that had to ask again for\nthe counter-evidence would render the supporting side first and the\ncontradicting side after a spinner, which is how a tool becomes a flatterer.",
+        "operationId": "list_patterns_route_patterns_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PatternKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_dismissed",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Dismissed",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PatternOut"
+                  },
+                  "title": "Response List Patterns Route Patterns Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Patterns Route",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/patterns/calibration": {
+      "get": {
+        "description": "Stated confidence against actual verdicts, band by band.\n\nReturned whether or not any band is a finding, because \"no patterns\" and\n\"here are the bands, and every stated confidence falls inside what its\nsample supports\" are the same result and only the second is legible.",
+        "operationId": "pattern_calibration_patterns_calibration_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Pattern Calibration",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/patterns/{pattern_id}/dismiss": {
+      "post": {
+        "description": "Reject a pattern permanently. Discovery will not re-propose the subject.",
+        "operationId": "dismiss_pattern_patterns__pattern_id__dismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pattern_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pattern Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DismissIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss Pattern",
         "tags": [
           "decisions"
         ]

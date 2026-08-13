@@ -68,6 +68,9 @@ export function DecisionsPage() {
             <Link className="text-amber underline" to="/decisions/assumptions">
               assumptions
             </Link>
+            <Link className="text-amber underline" to="/decisions/patterns">
+              patterns
+            </Link>
           </span>
         }
       >

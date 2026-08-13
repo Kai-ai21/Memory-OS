@@ -38,6 +38,7 @@ from memoryos.application import (
     graph_verify,
     outcome_suggest,
     outcomes,
+    patterns,
     temporal,
 )
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
@@ -90,6 +91,7 @@ from memoryos.domain.entities import Source
 from memoryos.domain.fusion import DEFAULT_RRF_K
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobStatus, JobType, PermanentError, TransientError
+from memoryos.domain.patterns import DEFAULT_MIN_SUPPORT
 from memoryos.domain.values import (
     DEFAULT_SEARCH_MODE,
     AssumptionVerdict,
@@ -99,6 +101,7 @@ from memoryos.domain.values import (
     MergeStatus,
     MergeStrategy,
     OutcomeVerdict,
+    PatternKind,
     Period,
     SearchMode,
     SourceKind,
@@ -2399,6 +2402,196 @@ async def run_outcomes_rate(settings: Settings) -> int:
 
 
 # --------------------------------------------------------------------------
+# Patterns
+# --------------------------------------------------------------------------
+
+
+def _print_pattern(row: patterns.PatternRow, *, full: bool) -> None:
+    confidence = "—" if row.confidence is None else f"{row.confidence:.2f}"
+    span = "" if row.span_days is None else f", spanning {row.span_days:.0f} days"
+    print(f"{row.id}  [{row.kind.value}]  confidence {confidence}")
+    print(f"     {row.statement}")
+    print(
+        f"     {row.support_count} supporting, "
+        f"{row.contradiction_count} contradicting{span}"
+    )
+    if row.dismissed_at:
+        print(f"     DISMISSED: {row.dismissed_reason}")
+    if not full:
+        return
+    # Both lists, at the same weight, always. Counter-evidence printed shorter
+    # or last is how a tool becomes a flatterer.
+    for label, items in (
+        ("supports", row.supporting),
+        ("contradicts", row.contradicting),
+    ):
+        print(f"\n     {label} ({len(items)})")
+        for item in items:
+            print(f"       {_stamp(item.decided_at)}  {item.decision_question}")
+            if item.note:
+                print(f"         {item.note}")
+
+
+async def run_patterns_discover(
+    settings: Settings, *, min_support: int, window_days: float
+) -> int:
+    container = Container.build(settings)
+    try:
+        report = await patterns.discover(
+            container.database.session_factory,
+            min_support=min_support,
+            window_days=window_days,
+        )
+    finally:
+        await container.dispose()
+
+    print(f"candidates considered:  {report.candidates}")
+    print(f"minimum support:        {min_support} distinct decisions")
+    print(f"emitted:                {report.emitted}")
+    print(f"updated:                {report.updated}")
+    print(f"below support:          {report.below_support}")
+    print(f"outweighed by counter-evidence: {report.outweighed_by_counter_evidence}")
+    print(f"within sampling noise:  {report.within_noise}")
+    print(f"skipped (dismissed):    {report.skipped_dismissed}")
+
+    if report.silent:
+        # Printed whether or not anything was emitted. A detector that could not
+        # run is a fact about the corpus, and leaving it out would make the
+        # machinery look busier than it was.
+        print("\ndetectors with nothing to propose:")
+        for name, reason in report.silent:
+            print(f"  {name}: {reason}")
+
+    if not report.emitted and not report.updated:
+        # The correct result on a small corpus, and it has to read like one.
+        # "No patterns" alone is indistinguishable from a broken detector.
+        print("\nno patterns with sufficient support.\n")
+        print("what was considered, and why each was not emitted:")
+        for candidate in report.considered:
+            support = len(candidate.supporting)
+            counter = len(candidate.contradicting)
+            if candidate.rejected_because is not None:
+                reason = candidate.rejected_because
+            elif support < min_support:
+                reason = (
+                    f"{support} supporting decision(s), below the minimum of "
+                    f"{min_support}"
+                )
+            elif support <= counter:
+                reason = f"{counter} contradicting against {support} supporting"
+            else:
+                reason = "emitted"
+            print(f"\n  [{candidate.kind.value}] {candidate.statement}")
+            print(f"    → {reason}")
+    return 0
+
+
+async def run_patterns_list(
+    settings: Settings, *, kind: str | None, include_dismissed: bool
+) -> int:
+    container = Container.build(settings)
+    try:
+        rows = await patterns.list_patterns(
+            container.database.session_factory,
+            kind=PatternKind(kind) if kind else None,
+            include_dismissed=include_dismissed,
+        )
+        totals = await patterns.counts(container.database.session_factory)
+    finally:
+        await container.dispose()
+
+    if not rows:
+        print("no patterns recorded")
+        print(
+            "\nRun `memoryos patterns discover`. Nothing clearing the bar is a "
+            "result,\nnot a failure — see the reasons that command prints."
+        )
+        return 0
+    print(f"{len(rows)} pattern(s)   ({totals['dismissed']} dismissed)\n")
+    for row in rows:
+        _print_pattern(row, full=False)
+        print()
+    return 0
+
+
+async def run_patterns_show(settings: Settings, *, pattern_id: str) -> int:
+    container = Container.build(settings)
+    try:
+        row = await patterns.show(
+            container.database.session_factory, UUID(pattern_id)
+        )
+    except patterns.UnknownPattern as exc:
+        print(str(exc))
+        return 1
+    finally:
+        await container.dispose()
+    _print_pattern(row, full=True)
+    return 0
+
+
+async def run_patterns_dismiss(
+    settings: Settings, *, pattern_id: str, reason: str
+) -> int:
+    container = Container.build(settings)
+    try:
+        await patterns.dismiss(
+            container.database.session_factory, UUID(pattern_id), reason=reason
+        )
+    except patterns.UnknownPattern as exc:
+        print(str(exc))
+        return 1
+    except ValueError as exc:
+        print(f"refused: {exc}")
+        return 1
+    finally:
+        await container.dispose()
+    print("dismissed; discovery will not propose this subject again")
+    return 0
+
+
+async def run_patterns_calibration(settings: Settings) -> int:
+    """The calibration table, printed whether or not anything clears the bar.
+
+    This is the output worth reading even — especially — when discovery is
+    silent. "No patterns found" and "here are the bands, and every stated
+    confidence falls inside what its sample supports" are the same result, and
+    only the second one lets a reader see how far from a finding it was.
+    """
+    container = Container.build(settings)
+    try:
+        bands = await patterns.calibration(container.database.session_factory)
+    finally:
+        await container.dispose()
+
+    if not bands:
+        print("nothing to calibrate: no confidences recorded against verdicts")
+        return 0
+
+    for detector, values in sorted(bands.items()):
+        noun = "decisions" if detector.startswith("decision") else "assumptions"
+        print(f"\n{noun} by stated confidence")
+        print(f"  {'band':<12} {'n':>3}  {'stated':>7}  {'actual':>7}  95% CI")
+        for band in values:
+            marker = "  <-- outside the interval" if band.miscalibrated else ""
+            print(
+                f"  {band.low:.2f}-{band.high:.2f}  {band.interval.n:>3}  "
+                f"{band.stated:>7.2f}  {band.interval.observed:>7.0%}  "
+                f"{band.interval.low:.0%}-{band.interval.high:.0%}{marker}"
+            )
+    print(
+        "\nA band is a finding only when the stated confidence falls outside the "
+        "interval\nits sample supports. Anything inside is consistent with being "
+        "exactly as\nreliable as claimed — see domain/patterns.py."
+    )
+    print(
+        "\nCalibration is only meaningful when the confidence was written down "
+        "before the\noutcome was known. Nothing in the schema records whether it "
+        "was."
+    )
+    return 0
+
+
+# --------------------------------------------------------------------------
 # Assumptions
 # --------------------------------------------------------------------------
 
@@ -3331,6 +3524,59 @@ def build_parser() -> argparse.ArgumentParser:
         help="totals, hold rate, and every group with more than one member",
     )
 
+    patterns_parser = commands.add_parser(
+        "patterns", help="behavioural patterns across decisions, with their evidence"
+    )
+    patterns_commands = patterns_parser.add_subparsers(
+        dest="patterns_command", required=True
+    )
+
+    patterns_discover = patterns_commands.add_parser(
+        "discover", help="run every detector; emits only what clears the bar"
+    )
+    patterns_discover.add_argument(
+        "--min-support",
+        dest="min_support",
+        type=int,
+        default=DEFAULT_MIN_SUPPORT,
+        help=(
+            f"distinct decisions a pattern needs (default {DEFAULT_MIN_SUPPORT}). "
+            f"Raise it to be stricter; lowering it to produce output is how a "
+            f"tool starts inventing findings"
+        ),
+    )
+    patterns_discover.add_argument(
+        "--window-days",
+        dest="window_days",
+        type=float,
+        default=90.0,
+        help="the timing detector's threshold for 'later than expected'",
+    )
+
+    patterns_list = patterns_commands.add_parser("list", help="patterns found so far")
+    patterns_list.add_argument(
+        "--kind", choices=[value.value for value in PatternKind]
+    )
+    patterns_list.add_argument(
+        "--include-dismissed", dest="include_dismissed", action="store_true"
+    )
+
+    patterns_show = patterns_commands.add_parser(
+        "show", help="one pattern, with its supporting and contradicting evidence"
+    )
+    patterns_show.add_argument("pattern_id")
+
+    patterns_dismiss = patterns_commands.add_parser(
+        "dismiss", help="reject a pattern permanently; discovery will not re-propose it"
+    )
+    patterns_dismiss.add_argument("pattern_id")
+    patterns_dismiss.add_argument("--reason", required=True)
+
+    patterns_commands.add_parser(
+        "calibration",
+        help="stated confidence against actual verdicts, with the interval each supports",
+    )
+
     commands.add_parser("stats", help="report corpus and embedding coverage")
     commands.add_parser(
         "doctor", help="check the corpus for silently-degrading conditions"
@@ -3812,6 +4058,34 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.outcomes_command == "rate":
             return asyncio.run(run_outcomes_rate(settings))
+
+    if args.command == "patterns":
+        if args.patterns_command == "discover":
+            return asyncio.run(
+                run_patterns_discover(
+                    settings,
+                    min_support=args.min_support,
+                    window_days=args.window_days,
+                )
+            )
+        if args.patterns_command == "list":
+            return asyncio.run(
+                run_patterns_list(
+                    settings,
+                    kind=args.kind,
+                    include_dismissed=args.include_dismissed,
+                )
+            )
+        if args.patterns_command == "show":
+            return asyncio.run(run_patterns_show(settings, pattern_id=args.pattern_id))
+        if args.patterns_command == "dismiss":
+            return asyncio.run(
+                run_patterns_dismiss(
+                    settings, pattern_id=args.pattern_id, reason=args.reason
+                )
+            )
+        if args.patterns_command == "calibration":
+            return asyncio.run(run_patterns_calibration(settings))
 
     if args.command == "assumption":
         return asyncio.run(

@@ -27,6 +27,7 @@ from memoryos.application import (
     decisions,
     outcome_suggest,
     outcomes,
+    patterns,
 )
 from memoryos.container import Container
 from memoryos.domain.values import (
@@ -35,6 +36,8 @@ from memoryos.domain.values import (
     EvidenceKind,
     EvidenceRelation,
     OutcomeVerdict,
+    PatternKind,
+    PatternRelation,
     SuggestionStatus,
     TimeProvenance,
 )
@@ -184,6 +187,12 @@ class OutcomeOut(BaseModel):
     evidence: list[OutcomeEvidenceOut]
 
 
+class DismissIn(BaseModel):
+    # Required, and the CHECK constraint agrees: a rejection nobody explained is
+    # one the next reader cannot tell from a stale row.
+    reason: str = Field(min_length=1)
+
+
 class OutcomeIn(BaseModel):
     description: str = Field(min_length=1)
     verdict: OutcomeVerdict
@@ -286,6 +295,58 @@ class AssumptionStatsOut(BaseModel):
     partially: int
     hold_rate: float | None
     groups: list[AssumptionGroupOut]
+
+
+class PatternEvidenceOut(BaseModel):
+    decision_id: UUID
+    decision_question: str
+    decided_at: datetime
+    relation: PatternRelation
+    # Why this decision counts for or against, written by the detector. Shown
+    # verbatim: "supports" beside a title is not something a reader can check.
+    note: str | None
+
+
+class PatternOut(BaseModel):
+    id: UUID
+    statement: str
+    kind: PatternKind
+    detector: str
+    support_count: int
+    contradiction_count: int
+    confidence: float | None
+    first_observed: datetime | None
+    last_observed: datetime | None
+    # How long the supporting decisions span. Three made in one afternoon are
+    # three observations of one mood, and the client needs to be able to say so.
+    span_days: float | None
+    discovered_at: datetime
+    dismissed_at: datetime | None
+    dismissed_reason: str | None
+    # Two lists, never merged and never one flag on a shared list. The interface
+    # renders them at equal weight, which is the whole point of finding
+    # counter-evidence in the first place.
+    supporting: list[PatternEvidenceOut]
+    contradicting: list[PatternEvidenceOut]
+
+
+class CalibrationBandOut(BaseModel):
+    low: float
+    high: float
+    stated: float
+    observed: float
+    interval_low: float
+    interval_high: float
+    n: int
+    # True only when the stated confidence falls outside the interval its sample
+    # supports. Everything else is consistent with being exactly as reliable as
+    # claimed.
+    miscalibrated: bool
+
+
+class CalibrationOut(BaseModel):
+    decisions: list[CalibrationBandOut]
+    assumptions: list[CalibrationBandOut]
 
 
 class SuccessRateOut(BaseModel):
@@ -674,6 +735,103 @@ async def assumption_stats(container: ContainerDep) -> AssumptionStatsOut:
             # that mean something under thirty that do not.
             for group in report.recurring
         ],
+    )
+
+
+@router.get("/patterns", response_model=list[PatternOut])
+async def list_patterns_route(
+    container: ContainerDep,
+    kind: Annotated[PatternKind | None, Query()] = None,
+    include_dismissed: Annotated[bool, Query()] = False,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+) -> list[PatternOut]:
+    """Patterns with both evidence lists.
+
+    Both always, and never a truncated one: a client that had to ask again for
+    the counter-evidence would render the supporting side first and the
+    contradicting side after a spinner, which is how a tool becomes a flatterer.
+    """
+    rows = await patterns.list_patterns(
+        container.database.session_factory,
+        kind=kind,
+        include_dismissed=include_dismissed,
+        limit=limit,
+    )
+    return [_pattern_out(row) for row in rows]
+
+
+@router.get("/patterns/calibration", response_model=CalibrationOut)
+async def pattern_calibration(container: ContainerDep) -> CalibrationOut:
+    """Stated confidence against actual verdicts, band by band.
+
+    Returned whether or not any band is a finding, because "no patterns" and
+    "here are the bands, and every stated confidence falls inside what its
+    sample supports" are the same result and only the second is legible.
+    """
+    bands = await patterns.calibration(container.database.session_factory)
+    return CalibrationOut(
+        decisions=[_band_out(band) for band in bands.get("decision_calibration", [])],
+        assumptions=[
+            _band_out(band) for band in bands.get("assumption_calibration", [])
+        ],
+    )
+
+
+@router.post("/patterns/{pattern_id}/dismiss", status_code=status.HTTP_204_NO_CONTENT)
+async def dismiss_pattern(
+    pattern_id: UUID, body: DismissIn, container: ContainerDep
+) -> None:
+    """Reject a pattern permanently. Discovery will not re-propose the subject."""
+    try:
+        await patterns.dismiss(
+            container.database.session_factory, pattern_id, reason=body.reason
+        )
+    except patterns.UnknownPattern as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+
+
+def _pattern_out(row: patterns.PatternRow) -> PatternOut:
+    return PatternOut(
+        id=row.id,
+        statement=row.statement,
+        kind=row.kind,
+        detector=row.detector,
+        support_count=row.support_count,
+        contradiction_count=row.contradiction_count,
+        confidence=row.confidence,
+        first_observed=row.first_observed,
+        last_observed=row.last_observed,
+        span_days=row.span_days,
+        discovered_at=row.discovered_at,
+        dismissed_at=row.dismissed_at,
+        dismissed_reason=row.dismissed_reason,
+        supporting=[_evidence_out(item) for item in row.supporting],
+        contradicting=[_evidence_out(item) for item in row.contradicting],
+    )
+
+
+def _evidence_out(item: patterns.EvidenceRow) -> PatternEvidenceOut:
+    return PatternEvidenceOut(
+        decision_id=item.decision_id,
+        decision_question=item.decision_question,
+        decided_at=item.decided_at,
+        relation=item.relation,
+        note=item.note,
+    )
+
+
+def _band_out(band: patterns.CalibrationBand) -> CalibrationBandOut:
+    return CalibrationBandOut(
+        low=band.low,
+        high=band.high,
+        stated=band.stated,
+        observed=band.interval.observed,
+        interval_low=band.interval.low,
+        interval_high=band.interval.high,
+        n=band.interval.n,
+        miscalibrated=band.miscalibrated,
     )
 
 

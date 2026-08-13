@@ -502,6 +502,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/patterns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Patterns Route
+         * @description Patterns with both evidence lists.
+         *
+         *     Both always, and never a truncated one: a client that had to ask again for
+         *     the counter-evidence would render the supporting side first and the
+         *     contradicting side after a spinner, which is how a tool becomes a flatterer.
+         */
+        get: operations["list_patterns_route_patterns_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/patterns/calibration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Pattern Calibration
+         * @description Stated confidence against actual verdicts, band by band.
+         *
+         *     Returned whether or not any band is a finding, because "no patterns" and
+         *     "here are the bands, and every stated confidence falls inside what its
+         *     sample supports" are the same result and only the second is legible.
+         */
+        get: operations["pattern_calibration_patterns_calibration_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/patterns/{pattern_id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss Pattern
+         * @description Reject a pattern permanently. Discovery will not re-propose the subject.
+         */
+        post: operations["dismiss_pattern_patterns__pattern_id__dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/search": {
         parameters: {
             query?: never;
@@ -916,6 +984,32 @@ export interface components {
              */
             start: string;
         };
+        /** CalibrationBandOut */
+        CalibrationBandOut: {
+            /** High */
+            high: number;
+            /** Interval High */
+            interval_high: number;
+            /** Interval Low */
+            interval_low: number;
+            /** Low */
+            low: number;
+            /** Miscalibrated */
+            miscalibrated: boolean;
+            /** N */
+            n: number;
+            /** Observed */
+            observed: number;
+            /** Stated */
+            stated: number;
+        };
+        /** CalibrationOut */
+        CalibrationOut: {
+            /** Assumptions */
+            assumptions: components["schemas"]["CalibrationBandOut"][];
+            /** Decisions */
+            decisions: components["schemas"]["CalibrationBandOut"][];
+        };
         /** CitationOut */
         CitationOut: {
             /** Char End */
@@ -1163,6 +1257,11 @@ export interface components {
             to_version: number;
             /** Unified */
             unified: string;
+        };
+        /** DismissIn */
+        DismissIn: {
+            /** Reason */
+            reason: string;
         };
         /** DoctorOut */
         DoctorOut: {
@@ -1717,6 +1816,93 @@ export interface components {
          * @enum {string}
          */
         OutcomeVerdict: "worked" | "failed" | "mixed" | "too_early";
+        /** PatternEvidenceOut */
+        PatternEvidenceOut: {
+            /**
+             * Decided At
+             * Format: date-time
+             */
+            decided_at: string;
+            /**
+             * Decision Id
+             * Format: uuid
+             */
+            decision_id: string;
+            /** Decision Question */
+            decision_question: string;
+            /** Note */
+            note: string | null;
+            relation: components["schemas"]["PatternRelation"];
+        };
+        /**
+         * PatternKind
+         * @description What sort of behaviour a pattern is about.
+         *
+         *     Four, closed, and each names a different detector rather than a different
+         *     topic. `ASSUMPTION` is a belief that keeps breaking; `TIMING` is outcomes
+         *     arriving later than the decision implied; `CHOICE` is reaching for the same
+         *     kind of option repeatedly, or reversing repeatedly; `OUTCOME` is calibration
+         *     — stated confidence against what actually happened.
+         *
+         *     Closed for the reason `EntityType` and `Predicate` are: an open vocabulary
+         *     is what you get when every new detector invents its own label, and a kind
+         *     that means almost the same as another kind is a filter that silently returns
+         *     half its rows.
+         * @enum {string}
+         */
+        PatternKind: "assumption" | "timing" | "choice" | "outcome";
+        /** PatternOut */
+        PatternOut: {
+            /** Confidence */
+            confidence: number | null;
+            /** Contradicting */
+            contradicting: components["schemas"]["PatternEvidenceOut"][];
+            /** Contradiction Count */
+            contradiction_count: number;
+            /** Detector */
+            detector: string;
+            /**
+             * Discovered At
+             * Format: date-time
+             */
+            discovered_at: string;
+            /** Dismissed At */
+            dismissed_at: string | null;
+            /** Dismissed Reason */
+            dismissed_reason: string | null;
+            /** First Observed */
+            first_observed: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            kind: components["schemas"]["PatternKind"];
+            /** Last Observed */
+            last_observed: string | null;
+            /** Span Days */
+            span_days: number | null;
+            /** Statement */
+            statement: string;
+            /** Support Count */
+            support_count: number;
+            /** Supporting */
+            supporting: components["schemas"]["PatternEvidenceOut"][];
+        };
+        /**
+         * PatternRelation
+         * @description Whether a piece of evidence agrees with a pattern or argues against it.
+         *
+         *     **`CONTRADICTS` is not optional and is not a formality.** A detector that
+         *     only collected agreeing evidence would be confirmation bias implemented in
+         *     SQL: every candidate would look strong, because the search that found it
+         *     only looked for cases that fit. Counter-evidence is searched for
+         *     deliberately, stored at the same weight, counted in the confidence formula,
+         *     and shown in the interface beside the supporting kind rather than below a
+         *     fold.
+         * @enum {string}
+         */
+        PatternRelation: "supports" | "contradicts";
         /**
          * Period
          * @description The calendar grain an activity histogram is bucketed at.
@@ -3073,6 +3259,92 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_patterns_route_patterns_get: {
+        parameters: {
+            query?: {
+                kind?: components["schemas"]["PatternKind"] | null;
+                include_dismissed?: boolean;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatternOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pattern_calibration_patterns_calibration_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationOut"];
+                };
+            };
+        };
+    };
+    dismiss_pattern_patterns__pattern_id__dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pattern_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DismissIn"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             204: {

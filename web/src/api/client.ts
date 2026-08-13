@@ -155,6 +155,11 @@ export type AssumptionVerdict = NonNullable<Assumption["held"]>;
 export type AssumptionDetail = Ok<paths["/assumptions"]["get"]>[number];
 export type AssumptionStats = Ok<paths["/assumptions/stats"]["get"]>;
 export type AssumptionGroup = AssumptionStats["groups"][number];
+export type Pattern = Ok<paths["/patterns"]["get"]>[number];
+export type PatternEvidence = Pattern["supporting"][number];
+export type PatternKind = NonNullable<Pattern["kind"]>;
+export type Calibration = Ok<paths["/patterns/calibration"]["get"]>;
+export type CalibrationBand = Calibration["decisions"][number];
 
 export interface SearchArgs {
   q: string;
@@ -292,6 +297,19 @@ export const api = {
   },
 
   assumptionStats: () => request<AssumptionStats>("/assumptions/stats"),
+
+  patterns: (includeDismissed = false) =>
+    request<Pattern[]>(
+      `/patterns${includeDismissed ? "?include_dismissed=true" : ""}`,
+    ),
+
+  calibration: () => request<Calibration>("/patterns/calibration"),
+
+  dismissPattern: (id: string, reason: string) =>
+    request<null>(`/patterns/${id}/dismiss`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
 };
 
 export interface TimelineArgs {

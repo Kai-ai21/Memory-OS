@@ -396,6 +396,43 @@ EVALUATED_VERDICTS: frozenset[AssumptionVerdict] = frozenset(
 )
 
 
+class PatternKind(StrEnum):
+    """What sort of behaviour a pattern is about.
+
+    Four, closed, and each names a different detector rather than a different
+    topic. `ASSUMPTION` is a belief that keeps breaking; `TIMING` is outcomes
+    arriving later than the decision implied; `CHOICE` is reaching for the same
+    kind of option repeatedly, or reversing repeatedly; `OUTCOME` is calibration
+    — stated confidence against what actually happened.
+
+    Closed for the reason `EntityType` and `Predicate` are: an open vocabulary
+    is what you get when every new detector invents its own label, and a kind
+    that means almost the same as another kind is a filter that silently returns
+    half its rows.
+    """
+
+    ASSUMPTION = auto()
+    TIMING = auto()
+    CHOICE = auto()
+    OUTCOME = auto()
+
+
+class PatternRelation(StrEnum):
+    """Whether a piece of evidence agrees with a pattern or argues against it.
+
+    **`CONTRADICTS` is not optional and is not a formality.** A detector that
+    only collected agreeing evidence would be confirmation bias implemented in
+    SQL: every candidate would look strong, because the search that found it
+    only looked for cases that fit. Counter-evidence is searched for
+    deliberately, stored at the same weight, counted in the confidence formula,
+    and shown in the interface beside the supporting kind rather than below a
+    fold.
+    """
+
+    SUPPORTS = auto()
+    CONTRADICTS = auto()
+
+
 class EvidenceKind(StrEnum):
     """Whether an outcome was observed by a person or inferred by the system.
 
