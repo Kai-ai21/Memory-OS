@@ -48,10 +48,6 @@ class UnknownAssumption(LookupError):
     """No assumption with that id."""
 
 
-class InvalidEvaluation(ValueError):
-    """An evaluation that cannot be stored as given."""
-
-
 class UnresolvedEvidence(LookupError):
     """The item a link names is not in the corpus."""
 
@@ -298,23 +294,6 @@ async def _latest_outcomes(
     )
     rows = await session.execute(stmt)
     return {row[0]: OutcomeVerdict(row[1]) for row in rows}
-
-
-async def get(
-    session_factory: async_sessionmaker[AsyncSession], assumption_id: UUID
-) -> AssumptionRow:
-    rows = await _by_ids(session_factory, [assumption_id])
-    if not rows:
-        raise UnknownAssumption(f"no assumption {assumption_id}")
-    return rows[0]
-
-
-async def _by_ids(
-    session_factory: async_sessionmaker[AsyncSession], ids: Sequence[UUID]
-) -> list[AssumptionRow]:
-    every = await list_assumptions(session_factory, limit=10_000)
-    wanted = set(ids)
-    return [row for row in every if row.id in wanted]
 
 
 # --------------------------------------------------------------------------

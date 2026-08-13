@@ -142,6 +142,27 @@ USER_AUTHORED_TABLES: frozenset[str] = frozenset(
         "assumption_groups",
         "assumption_group_candidates",
         "assumption_evidence",
+        # M5.3's two, and the most arguable classification in this file since
+        # `entity_merges`.
+        #
+        # Most of `patterns` is genuinely derived: the statements, the counts
+        # and the confidences are a pure function of the decisions, assumptions
+        # and outcomes, and `patterns discover` reproduces them exactly. By that
+        # test alone it belongs in the derived set.
+        #
+        # It is here anyway because of two columns. `dismissed_at` and
+        # `dismissed_reason` are a person having read a behavioural claim about
+        # themselves and refused it, and nothing in the log reproduces that —
+        # a replay that truncated this table would quietly un-reject every
+        # pattern somebody had rejected, and the next `discover` would put them
+        # all back. That is precisely the property `USER_AUTHORED` exists for.
+        #
+        # Unlike the three evidence tables, no snapshot is needed: every foreign
+        # key `pattern_evidence` holds points at `decisions`,
+        # `decision_assumptions` or `decision_outcomes`, all of which are
+        # user-authored and never truncated. Nothing a replay does can reach it.
+        "patterns",
+        "pattern_evidence",
     }
 )
 

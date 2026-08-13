@@ -48,6 +48,8 @@ from memoryos.domain.values import (
     MergeStatus,
     MergeStrategy,
     OutcomeVerdict,
+    PatternKind,
+    PatternRelation,
     Predicate,
     SourceKind,
     SuggestionStatus,
@@ -2079,3 +2081,178 @@ Index(
     postgresql_where=text("status = 'pending'"),
     postgresql_nulls_not_distinct=True,
 )
+
+
+class Pattern(Base):
+    """A behavioural claim, with the evidence that has to exist for it to be one.
+
+    **The most dangerous table in this schema.** Everything else here records
+    something that happened; this records a generalisation about a person, and a
+    generalisation is exactly the thing that sounds most like the product
+    working when it is wrong. "You consistently underestimate deployment effort"
+    is either a finding backed by five specific decisions or a horoscope — vague
+    enough to feel true about anyone — and nothing in the sentence itself
+    distinguishes the two.
+
+    So `support_count` is not a decoration and neither is `pattern_evidence`.
+    **A pattern that cannot cite is never written**: `application/patterns.py`
+    refuses to emit a candidate below the minimum support, and the minimum is
+    counted in *distinct decisions* rather than in rows, because four
+    assumptions from two decisions is two observations rather than four.
+
+    `confidence` is derivable rather than assigned — see
+    `domain/patterns.pattern_confidence`, which states the formula and works
+    four examples. A confidence number nobody can reproduce is decoration with a
+    decimal point.
+
+    `dismissed_at` and `dismissed_reason` make a pattern permanently rejectable.
+    Detection over a corpus this small is never going to be right every time,
+    and a claim about somebody's judgement that they have looked at and refused
+    should stay refused rather than reappear on the next run — the same rule
+    `entity_merges` applies to a resolution nobody accepted.
+
+    `subject_key` is what makes re-running discovery idempotent. A pattern is
+    identified by *what it is about* — this assumption group, this confidence
+    band — rather than by its sentence, because the sentence carries the current
+    numbers and would change every time the corpus grew. Without it a weekly
+    `patterns discover` would leave a row per week saying almost the same thing.
+    """
+
+    __tablename__ = "patterns"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    # Which rule produced it, and what it is about. Together they are the
+    # identity a re-run updates rather than duplicates.
+    detector: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # Distinct decisions agreeing. Denormalised from `pattern_evidence` because
+    # every read of this table sorts and filters on it, and recomputing a count
+    # per row to render a list is how a page gets slow — but written only by the
+    # code that writes the evidence, in the same transaction.
+    support_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    contradiction_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    confidence: Mapped[float | None] = mapped_column(REAL)
+    # The span the supporting decisions cover. A pattern drawn from three
+    # decisions made in one afternoon is a different claim from one drawn from
+    # three across a year, and the dates are what let a reader tell.
+    first_observed: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    last_observed: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    discovered_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    dismissed_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    dismissed_reason: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        _enum_check("kind", PatternKind, "ck_patterns_kind"),
+        CheckConstraint("length(btrim(statement)) > 0", name="ck_patterns_statement"),
+        # The rule that makes the citation requirement structural rather than a
+        # convention in one module. A pattern claiming no support is a
+        # behavioural claim with nothing behind it, and no writer may create one.
+        CheckConstraint("support_count > 0", name="ck_patterns_support_positive"),
+        CheckConstraint(
+            "contradiction_count >= 0", name="ck_patterns_contradictions_non_negative"
+        ),
+        # And the rule that keeps confirmation bias out of the table itself:
+        # more evidence must agree than disagree, or it is not a pattern.
+        CheckConstraint(
+            "support_count > contradiction_count",
+            name="ck_patterns_support_exceeds_contradiction",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR confidence BETWEEN 0.0 AND 1.0",
+            name="ck_patterns_confidence_range",
+        ),
+        # A dismissal has a reason. "Rejected, no reason recorded" is a row
+        # nobody can act on later, and the next run would have no way to tell a
+        # considered refusal from a stale one.
+        CheckConstraint(
+            "(dismissed_at IS NULL) = (dismissed_reason IS NULL)",
+            name="ck_patterns_dismissal_pairing",
+        ),
+        CheckConstraint(
+            "first_observed IS NULL OR last_observed IS NULL "
+            "OR first_observed <= last_observed",
+            name="ck_patterns_observation_order",
+        ),
+        UniqueConstraint(
+            "detector", "subject_key", name="uq_patterns_detector_subject"
+        ),
+        Index("ix_patterns_kind", "kind"),
+    )
+
+
+class PatternEvidence(Base):
+    """One decision that agrees with a pattern, or argues against it.
+
+    **Counter-evidence is a first-class row here, not a footnote.** A detector
+    that stored only agreeing cases would make every candidate look strong,
+    because the query that found it only looked for cases that fit. So each
+    detector runs a second search for the decisions that contradict its
+    candidate, those land here with `relation = 'contradicts'`, they lower the
+    confidence through `domain/patterns.pattern_confidence`, and the interface
+    shows them at the same weight as the supporting kind.
+
+    `assumption_id` and `outcome_id` are nullable because the four detectors
+    cite different things: an assumption pattern points at the assumption that
+    broke, a calibration pattern at the outcome that resolved, a choice pattern
+    at neither and only at the decision. All three cascade, and all three are
+    inside the derived-table problem the phase already knows about — see
+    `application/replay.py`.
+    """
+
+    __tablename__ = "pattern_evidence"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    pattern_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("patterns.id", name="fk_pattern_evidence_pattern_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    decision_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decisions.id", name="fk_pattern_evidence_decision_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    assumption_id: Mapped[UUID | None] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decision_assumptions.id",
+            name="fk_pattern_evidence_assumption_id",
+            ondelete="CASCADE",
+        ),
+    )
+    outcome_id: Mapped[UUID | None] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decision_outcomes.id",
+            name="fk_pattern_evidence_outcome_id",
+            ondelete="CASCADE",
+        ),
+    )
+    relation: Mapped[str] = mapped_column(Text, nullable=False)
+    # Why this decision counts for or against. Written by the detector and shown
+    # verbatim, because "supports" beside a decision title is not something a
+    # reader can check and "the assumption 'deployment takes two days' failed
+    # here" is.
+    note: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "pattern_id",
+            "decision_id",
+            "assumption_id",
+            "outcome_id",
+            name="uq_pattern_evidence_link",
+            postgresql_nulls_not_distinct=True,
+        ),
+        _enum_check("relation", PatternRelation, "ck_pattern_evidence_relation"),
+        Index("ix_pattern_evidence_pattern", "pattern_id", "relation"),
+        Index("ix_pattern_evidence_decision", "decision_id"),
+    )

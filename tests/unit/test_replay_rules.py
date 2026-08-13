@@ -155,6 +155,36 @@ def test_outcomes_are_user_authored_too() -> None:
         assert name not in SOURCE_OF_TRUTH_TABLES, name
 
 
+def test_patterns_are_user_authored_for_their_dismissals_alone() -> None:
+    """The most arguable classification since `entity_merges`.
+
+    Most of `patterns` is derived — the statements, counts and confidences are a
+    pure function of the decisions, assumptions and outcomes, and `discover`
+    reproduces them exactly. Two columns keep it out of that set:
+    `dismissed_at` and `dismissed_reason` are a person having read a claim about
+    themselves and refused it, and a replay that truncated the table would
+    un-reject every one of them.
+
+    And unlike the evidence tables it needs no snapshot, because every foreign
+    key it holds points at something user-authored. This test pins that: a
+    future `pattern_evidence` column pointing at `memories` would need the
+    EVIDENCE_TABLES treatment, and the assertion below is what would notice.
+    """
+    for name in ("patterns", "pattern_evidence"):
+        assert name in USER_AUTHORED_TABLES, name
+        assert name not in DERIVED_TABLES, name
+
+    derived = set(SHADOW_TABLES)
+    reaching = {
+        key.column.table.name
+        for key in Base.metadata.tables["pattern_evidence"].foreign_keys
+    }
+    assert not (reaching & derived), (
+        f"pattern_evidence now references {sorted(reaching & derived)}, which a "
+        f"replay truncates. It needs the EVIDENCE_TABLES snapshot treatment."
+    )
+
+
 def test_every_table_reaching_into_the_derived_set_is_preserved_across_a_replay() -> None:
     """The check that catches the third evidence table nobody remembered.
 
