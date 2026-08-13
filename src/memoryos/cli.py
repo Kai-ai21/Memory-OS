@@ -2318,8 +2318,8 @@ async def run_outcomes_review(
         # another closely enough to be connected, so the number that claim rests
         # on belongs on screen rather than inside a score.
         print(
-            f"     gap        {row.gap_days:.1f} days after the decision "
-            f"(window {row.window_days:.0f})"
+            f"     gap        {outcome_suggest.describe_gap(row.gap_days)} after the "
+            f"decision (window {row.window_days:.0f}d)"
         )
         shared = ", ".join(row.shared_entities) if row.shared_entities else "—"
         print(f"     entities   {row.entity_filter}: {shared}")

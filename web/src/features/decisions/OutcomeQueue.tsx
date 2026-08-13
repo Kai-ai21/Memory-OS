@@ -34,6 +34,23 @@ interface Draft {
   rationale?: string | null;
 }
 
+/**
+ * The gap, in a unit a reader can judge. Mirrors `describe_gap` in
+ * `application/outcome_suggest.py`, which the CLI uses.
+ *
+ * "0.0 days" is what this corpus produces constantly, and it is the least
+ * useful thing the interface could say: every mtime here falls inside a
+ * 2-day-18-hour window and files written in one batch are seconds apart. A gap
+ * that rounds to zero is the temporal signal saying it has nothing to offer,
+ * not a very tight correlation, and it should read that way.
+ */
+function describeGap(days: number): string {
+  if (days >= 1) return `${days.toFixed(1)} days`;
+  const hours = days * 24;
+  if (hours >= 1) return `${hours.toFixed(1)} hours`;
+  return `${Math.round(hours * 60)} minutes`;
+}
+
 export function OutcomeQueue() {
   const client = useQueryClient();
   const [status, setStatus] = useState<OutcomeSuggestion["status"]>("pending");
@@ -188,7 +205,7 @@ function CandidateRow({
           </span>
           {/* The whole basis of the claim, in one line, before the passage. */}
           <p className="meta text-ink">
-            <span className="text-amber">{row.gap_days.toFixed(1)} days later</span>
+            <span className="text-amber">{describeGap(row.gap_days)} later</span>
             <span className="text-faint">
               {" "}
               · window {Math.round(row.window_days)}d ·{" "}

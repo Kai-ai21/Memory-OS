@@ -76,6 +76,21 @@ describe("the outcome review queue", () => {
     expect(screen.getByText(/postgres, sqlalchemy/)).toBeInTheDocument();
   });
 
+  it("does not round a sub-day gap to zero days", async () => {
+    // The condition this corpus is actually in: every mtime falls inside a
+    // 2-day-18-hour window, so files written in one batch are minutes apart.
+    // "0.0 days" would read as a very tight correlation; it is the temporal
+    // signal saying it has nothing to offer.
+    stubFetch([
+      { match: "/outcomes/rate", body: RATE },
+      { match: "/outcomes/suggestions", body: [candidate({ gap_days: 0.02 })] },
+    ]);
+    renderWithProviders(<OutcomeQueue />);
+
+    expect(await screen.findByText(/29 minutes later/)).toBeInTheDocument();
+    expect(screen.queryByText(/0\.0 days/)).not.toBeInTheDocument();
+  });
+
   it("shows the decision beside the candidate", async () => {
     stubFetch([
       { match: "/outcomes/rate", body: RATE },

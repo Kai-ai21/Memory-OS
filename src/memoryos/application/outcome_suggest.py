@@ -609,6 +609,44 @@ class SuggestOutcomes:
         return True
 
 
+# How much of the candidate document the model is shown.
+#
+# Smaller than what the *reviewer* is shown, and deliberately. The question this
+# prompt asks — does this text report a result of that decision — is answerable
+# from the opening of a document or not at all: a file that describes an outcome
+# says so where it introduces itself, and a file that merely shares a topic
+# looks equally relevant at any length. The larger excerpt would mostly buy more
+# surface for a coincidence to look meaningful on.
+#
+# It is also what makes the pass usable at all on a free tier bound at 12,000
+# tokens per minute. At 6,000 characters per call this was two candidates a
+# minute, which for sixteen decisions is a coffee break per run — and a
+# measurement nobody runs is not a measurement. That constraint is itself
+# recorded as the broken assumption behind the Groq decision's `mixed` outcome.
+PROMPT_EXCERPT_CHARS = 3000
+
+
+def describe_gap(days: float) -> str:
+    """The gap, in a unit a reader can judge.
+
+    "0.0 days" is what this corpus produces constantly and it is the least
+    useful thing the interface could say: every mtime here falls inside a
+    2-day-18-hour window, and files written in one batch are seconds apart. A
+    gap that rounds to zero is not a strong causal link expressed imprecisely —
+    it is the temporal signal telling you it has nothing to offer, and it should
+    read that way rather than as a very tight correlation.
+
+    Shared by the CLI and the API so the two cannot disagree about the same
+    number.
+    """
+    if days >= 1.0:
+        return f"{days:.1f} days"
+    hours = days * 24.0
+    if hours >= 1.0:
+        return f"{hours:.1f} hours"
+    return f"{hours * 60.0:.0f} minutes"
+
+
 def _render(decision: DecisionContext, candidate: Candidate) -> str:
     """The decision, the gap, and the document. In that order, deliberately.
 
@@ -624,9 +662,9 @@ def _render(decision: DecisionContext, candidate: Candidate) -> str:
         f"  chosen:   {decision.chosen}\n"
         f"  expected: {expected}\n"
         f"  decided:  {decision.decided_at.date().isoformat()}\n\n"
-        f"DOCUMENT, {candidate.gap_days:.1f} days later "
+        f"DOCUMENT, {describe_gap(candidate.gap_days)} later "
         f"({candidate.external_key})\n"
-        f"<<<DOCUMENT>>>\n{candidate.text[:6000]}\n<<<END DOCUMENT>>>"
+        f"<<<DOCUMENT>>>\n{candidate.text[:PROMPT_EXCERPT_CHARS]}\n<<<END DOCUMENT>>>"
     )
 
 

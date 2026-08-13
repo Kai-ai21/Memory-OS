@@ -43,6 +43,7 @@ from memoryos.application.outcome_suggest import (
     MIN_WINDOW_DAYS,
     SuggestOutcomes,
     accept,
+    describe_gap,
     find_candidates,
     list_suggestions,
     open_decisions,
@@ -606,3 +607,19 @@ async def test_a_replay_relinks_outcome_evidence_by_natural_key(
     assert after.memory_id != before.memory_id
     # And the snapshot came across rather than being re-derived.
     assert after.occurred_at == before.occurred_at
+
+
+async def test_a_sub_day_gap_is_not_reported_as_zero_days(harness: Harness) -> None:
+    """The corpus's actual condition, and the one the interface must not flatter.
+
+    Every mtime here falls inside a 2-day-18-hour window, so files written in
+    one batch are minutes apart and almost every gap rounds to `0.0 days`. That
+    reads as a very tight causal link and is the opposite: it is the temporal
+    signal reporting that it has nothing to offer.
+    """
+    assert describe_gap(2.0) == "2.0 days"
+    assert describe_gap(0.5) == "12.0 hours"
+    assert describe_gap(0.0005) == "1 minutes"
+    # Never zero days, whatever the value, as long as the gap is real — the
+    # CHECK constraint guarantees it is.
+    assert "0.0 days" not in describe_gap(0.02)
