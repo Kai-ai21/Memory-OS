@@ -113,6 +113,83 @@ def test_human_authored_data_is_neither_derived_nor_ingestion_input() -> None:
     assert "query_judgements" not in SOURCE_OF_TRUTH_TABLES
 
 
+def test_decisions_are_user_authored_like_judgements() -> None:
+    """M5.0's addition to the same set, and the same argument.
+
+    No amount of replaying the log produces somebody's account of a choice they
+    made — the question they were answering, what else was on the table, or how
+    confident they were at the time. So a decision is not derived. It does not
+    feed ingestion either, so it is not source of truth in the sense that set
+    means. Classifying any of these derived would attach the truncation rule to
+    the corpus every later Phase 5 milestone reads.
+
+    `decision_suggestions` is here rather than in the derived set even though a
+    language model produced its drafts, because the row also carries a person's
+    accept or reject — and unlike `entity_merges` it has no foreign key forcing
+    the classification. Its provenance is a natural key plus id snapshots, which
+    is what lets it be classified by argument.
+    """
+    for name in (
+        "decisions",
+        "decision_options",
+        "decision_assumptions",
+        "decision_evidence",
+        "decision_suggestions",
+    ):
+        assert name in USER_AUTHORED_TABLES, name
+        assert name not in DERIVED_TABLES, name
+        assert name not in SOURCE_OF_TRUTH_TABLES, name
+
+
+def test_evidence_is_user_authored_and_still_reachable_by_a_cascade() -> None:
+    """The one classification a set membership cannot enforce on its own.
+
+    `decision_evidence` holds ON DELETE CASCADE foreign keys into `memories` and
+    `memory_chunks`, deliberately — a citation that resolves to nothing is worse
+    than an absent one — so `TRUNCATE memories CASCADE` reaches it however it is
+    classified here. That is the finding M1.7 made when the golden set was
+    specified with a foreign key, and this table was designed knowing it: every
+    row carries the natural key too, and `ReplayCorpus._preserve_evidence` reads
+    the links out before the truncation and writes them back afterwards.
+
+    This test asserts the shape that makes that possible, so that a later change
+    dropping the natural key from the row fails here rather than losing every
+    link on the next rebuild.
+    """
+    evidence = Base.metadata.tables["decision_evidence"]
+    columns = set(evidence.columns.keys())
+    assert {"source_name", "external_key", "chunk_ordinal"} <= columns, (
+        "decision_evidence must carry the durable identity as well as the ids, "
+        "or a replay cannot re-link it after TRUNCATE ... CASCADE takes the row."
+    )
+    referenced = {
+        key.column.table.name for key in evidence.foreign_keys
+    }
+    assert {"memories", "memory_chunks"} <= referenced
+
+
+def test_the_shadow_swap_knows_about_the_constraints_pointing_into_it() -> None:
+    """The collision M5.0 was the first table to cause.
+
+    Until now nothing outside the derived set referenced anything inside it, so
+    `DROP TABLE public.memories` in the swap worked. `decision_evidence` breaks
+    that, and the tempting fix — `DROP TABLE ... CASCADE` — makes the error go
+    away by taking the constraints with it, silently, leaving a live schema that
+    no longer matches the models and an `alembic check` that fails on the next
+    run.
+
+    Imported here rather than in `test_replay_rules`' own imports because this
+    is the one assertion in this file that reaches into an adapter: the rule is
+    declared in `application/replay.py` and the mechanism lives beside the SQL
+    that needs it.
+    """
+    from memoryos.adapters.db.shadow import inbound_foreign_key_names
+
+    names = inbound_foreign_key_names()
+    assert "fk_decision_evidence_memory_id" in names
+    assert "fk_decision_evidence_chunk_id" in names
+
+
 def test_no_user_authored_table_is_ever_truncated() -> None:
     # `truncate_derived` names its tables explicitly, so this asserts the two
     # lists cannot overlap however the cache flag is set.

@@ -37,7 +37,7 @@ from uuid import UUID
 
 import structlog
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -404,7 +404,13 @@ class SuggestDecisions:
                 model_id=self._model.model_id,
                 suggester_version=self.version,
             )
-            .on_conflict_do_nothing(index_elements=["source_name", "external_key", "chunk_ordinal"])
+            # The predicate as well as the columns: the index is partial, and
+            # without `index_where` Postgres cannot tell which constraint this
+            # `ON CONFLICT` means and refuses the statement outright.
+            .on_conflict_do_nothing(
+                index_elements=["source_name", "external_key", "chunk_ordinal"],
+                index_where=text("status = 'pending'"),
+            )
             .returning(models.DecisionSuggestion.id)
         )
         async with self._sessions.begin() as session:
