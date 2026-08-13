@@ -150,6 +150,11 @@ export type OutcomeIn =
   paths["/decisions/{decision_id}/outcomes"]["post"]["requestBody"]["content"]["application/json"];
 export type OutcomeSuggestion = Ok<paths["/outcomes/suggestions"]["get"]>[number];
 export type SuccessRate = Ok<paths["/outcomes/rate"]["get"]>;
+export type Assumption = DecisionDetail["assumptions"][number];
+export type AssumptionVerdict = NonNullable<Assumption["held"]>;
+export type AssumptionDetail = Ok<paths["/assumptions"]["get"]>[number];
+export type AssumptionStats = Ok<paths["/assumptions/stats"]["get"]>;
+export type AssumptionGroup = AssumptionStats["groups"][number];
 
 export interface SearchArgs {
   q: string;
@@ -278,6 +283,15 @@ export const api = {
     request<null>(`/outcomes/suggestions/${id}/reject`, { method: "POST" }),
 
   successRate: () => request<SuccessRate>("/outcomes/rate"),
+
+  assumptions: (decision?: string) => {
+    const params = new URLSearchParams();
+    if (decision) params.set("decision", decision);
+    const query = params.toString();
+    return request<AssumptionDetail[]>(`/assumptions${query ? `?${query}` : ""}`);
+  },
+
+  assumptionStats: () => request<AssumptionStats>("/assumptions/stats"),
 };
 
 export interface TimelineArgs {

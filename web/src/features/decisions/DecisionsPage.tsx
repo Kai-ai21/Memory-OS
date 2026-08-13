@@ -65,6 +65,9 @@ export function DecisionsPage() {
             <Link className="text-amber underline" to="/decisions/outcomes">
               outcomes{outcomeQueue ? ` (${outcomeQueue})` : ""}
             </Link>
+            <Link className="text-amber underline" to="/decisions/assumptions">
+              assumptions
+            </Link>
           </span>
         }
       >
