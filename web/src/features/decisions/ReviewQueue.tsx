@@ -19,11 +19,13 @@
  */
 
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, type Suggestion } from "../../api/client";
 import { Empty, Failure, Loading, SectionHeading, Tag } from "../../components/primitives";
 import { timestamp } from "../../lib/format";
+import type { PrefilledDraft } from "./DecisionForm";
 
 interface Draft {
   question?: string | null;
@@ -37,6 +39,7 @@ interface Draft {
 
 export function ReviewQueue() {
   const client = useQueryClient();
+  const navigate = useNavigate();
   const [status, setStatus] = useState<Suggestion["status"]>("pending");
   const suggestions = useQuery({
     queryKey: ["suggestions", status],
@@ -105,6 +108,7 @@ export function ReviewQueue() {
               row={row}
               busy={review.isPending}
               onReview={(verdict) => review.mutate({ id: row.id, verdict })}
+              onEdit={() => navigate("/decisions/new", { state: prefillFrom(row) })}
             />
           ))}
         </ul>
@@ -117,14 +121,39 @@ function draftOf(row: Suggestion): Draft {
   return (row.draft ?? {}) as Draft;
 }
 
+/**
+ * The draft, as the capture form's starting point.
+ *
+ * `confidence` and `expected_outcome` are deliberately not carried across even
+ * when the model supplied them. Those two are claims about what somebody
+ * believed, and a form that started them from a model's guess would make the
+ * reviewer's job to disagree with a number rather than to state their own.
+ */
+function prefillFrom(row: Suggestion): PrefilledDraft {
+  const draft = draftOf(row);
+  return {
+    acceptSuggestionId: row.id,
+    question: draft.question ?? "",
+    chosen: draft.chosen ?? "",
+    reasoning: draft.reasoning ?? "",
+    options: (draft.options ?? []).map((option) => ({
+      description: option.description ?? "",
+      rejected_because: option.rejected_because ?? "",
+    })),
+    assumptions: (draft.assumptions ?? []).map((item) => item.statement ?? ""),
+  };
+}
+
 function SuggestionRow({
   row,
   busy,
   onReview,
+  onEdit,
 }: {
   row: Suggestion;
   busy: boolean;
   onReview: (verdict: "accept" | "reject") => void;
+  onEdit: () => void;
 }) {
   const draft = draftOf(row);
   const where =
@@ -188,6 +217,18 @@ function SuggestionRow({
             className="meta-label border border-edge px-3 py-1 text-affirm"
           >
             accept
+          </button>
+          {/* Between the two verdicts, because it is the expected one: the
+              reviewer has just read the passage and knows things the model
+              could not. It opens the capture form prefilled, and submitting
+              there accepts this suggestion in the same act. */}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onEdit}
+            className="meta-label border border-rule px-3 py-1 text-amber"
+          >
+            edit
           </button>
           <button
             type="button"

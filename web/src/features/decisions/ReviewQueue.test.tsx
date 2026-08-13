@@ -89,6 +89,20 @@ describe("the review queue", () => {
     expect(accepted?.method).toBe("POST");
   });
 
+  it("offers edit between the two verdicts, and does not commit on the way there", async () => {
+    // Edit-then-accept is the expected path — the reviewer has just read the
+    // passage — and it must reach the capture form without writing anything.
+    const calls = stubFetch([
+      { match: "/decisions/suggestions?status", body: [suggestion()] },
+    ]);
+    renderWithProviders(<ReviewQueue />);
+    await screen.findByText(/How are two retrievers combined/);
+
+    await userEvent.click(screen.getByRole("button", { name: "edit" }));
+
+    expect(calls.every((call) => call.method === "GET")).toBe(true);
+  });
+
   it("rejects through its own endpoint rather than a verdict flag", async () => {
     const calls = stubFetch([
       { match: "/decisions/suggestions?status", body: [suggestion()] },

@@ -2165,6 +2165,15 @@ informed a decision and existed before it; an ADR records it and exists after.
 M5.1 needs that ordering, and a pass that marked its own source as an input would
 make every extracted decision look as though it had been argued for in advance.
 
+The queue's third button is **edit**, and it is the expected one. It opens the
+capture form prefilled from the draft, and submitting there accepts the
+suggestion in the same act — accepting first and editing afterwards would leave a
+record in the table that nobody stands behind, however briefly. `confidence` and
+`expected_outcome` are not carried across even when the model supplied them:
+those two are claims about what somebody believed, and starting them from a
+model's guess would make the reviewer's job to disagree with a number rather than
+to state their own.
+
 **Measured on this corpus.** 25 passages examined, 25 model calls, 8 drafts
 queued, 0 unparseable. Of the 8, **4 were worth accepting** — a 50% false-positive
 rate among drafts that had already passed the module's own no-alternatives

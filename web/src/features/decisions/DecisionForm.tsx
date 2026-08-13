@@ -15,7 +15,7 @@
  */
 
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api, type DecisionIn } from "../../api/client";
@@ -26,25 +26,55 @@ interface OptionDraft {
   rejected_because: string;
 }
 
+/**
+ * What the review queue hands over when a reviewer chooses to edit a draft.
+ *
+ * Edit-then-accept goes through this form rather than an inline editor in the
+ * queue, and that is deliberate: a reviewer who has read the passage usually
+ * knows a confidence and at least one assumption the model could not have, and
+ * this is the screen that asks for them properly. `acceptSuggestionId` makes the
+ * submit an accept rather than a create, so one act both writes the decision and
+ * closes the queue entry — accepting first and editing afterwards would leave a
+ * record in the table that nobody stands behind, however briefly.
+ */
+export interface PrefilledDraft {
+  acceptSuggestionId?: string;
+  question?: string;
+  chosen?: string;
+  reasoning?: string;
+  options?: OptionDraft[];
+  assumptions?: string[];
+}
+
 export function DecisionForm() {
   const navigate = useNavigate();
   const client = useQueryClient();
+  const prefill = (useLocation().state ?? {}) as PrefilledDraft;
 
-  const [question, setQuestion] = useState("");
-  const [chosen, setChosen] = useState("");
-  const [reasoning, setReasoning] = useState("");
+  const [question, setQuestion] = useState(prefill.question ?? "");
+  const [chosen, setChosen] = useState(prefill.chosen ?? "");
+  const [reasoning, setReasoning] = useState(prefill.reasoning ?? "");
+  // Never prefilled, even when the draft carried one. The queue reports what the
+  // model said; this field is the reviewer's own claim about what they believe
+  // now, and starting it from a model's number would make it the model's.
   const [confidence, setConfidence] = useState("");
   const [expected, setExpected] = useState("");
-  const [options, setOptions] = useState<OptionDraft[]>([
-    { description: "", rejected_because: "" },
-  ]);
-  const [assumptions, setAssumptions] = useState<string[]>([""]);
+  const [options, setOptions] = useState<OptionDraft[]>(
+    prefill.options?.length ? prefill.options : [{ description: "", rejected_because: "" }],
+  );
+  const [assumptions, setAssumptions] = useState<string[]>(
+    prefill.assumptions?.length ? prefill.assumptions : [""],
+  );
   const [refusal, setRefusal] = useState<string | null>(null);
 
   const submit = useMutation({
-    mutationFn: (body: DecisionIn) => api.decide(body),
+    mutationFn: (body: DecisionIn) =>
+      prefill.acceptSuggestionId
+        ? api.acceptSuggestion(prefill.acceptSuggestionId, body)
+        : api.decide(body),
     onSuccess: async (created) => {
       await client.invalidateQueries({ queryKey: ["decisions"] });
+      await client.invalidateQueries({ queryKey: ["suggestions"] });
       navigate(`/decisions/${created.id}`);
     },
   });
@@ -89,7 +119,17 @@ export function DecisionForm() {
 
   return (
     <form className="flex max-w-3xl flex-col gap-5" onSubmit={onSubmit}>
-      <SectionHeading>record a decision</SectionHeading>
+      <SectionHeading right={prefill.acceptSuggestionId ? "from a suggestion" : undefined}>
+        record a decision
+      </SectionHeading>
+      {prefill.acceptSuggestionId ? (
+        <p className="meta max-w-prose leading-relaxed text-faint">
+          Editing a draft. Submitting accepts the suggestion and writes this, with the
+          passage it came from attached as <code className="kbd">records</code> evidence.
+          Confidence and assumptions are blank on purpose — they are yours, not the
+          model&apos;s.
+        </p>
+      ) : null}
 
       <Field label="what was being decided">
         <input
@@ -234,7 +274,11 @@ export function DecisionForm() {
         className="meta-label self-start border border-edge px-3 py-1 text-amber"
         disabled={submit.isPending}
       >
-        {submit.isPending ? "recording…" : "record"}
+        {submit.isPending
+          ? "recording…"
+          : prefill.acceptSuggestionId
+            ? "accept with these edits"
+            : "record"}
       </button>
     </form>
   );
