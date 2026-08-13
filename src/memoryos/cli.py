@@ -33,6 +33,7 @@ from memoryos.application import (
     assumptions,
     decision_suggest,
     decisions,
+    events,
     evolution,
     graph_projection,
     graph_sync,
@@ -90,6 +91,7 @@ from memoryos.config import Settings, get_settings
 from memoryos.container import Container
 from memoryos.domain.backoff import wait_for
 from memoryos.domain.entities import Source
+from memoryos.domain.events import Event, EventKind
 from memoryos.domain.fusion import DEFAULT_RRF_K
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobStatus, JobType, PermanentError, TransientError
@@ -2565,15 +2567,26 @@ async def run_patterns_calibration(settings: Settings) -> int:
     """
     container = Container.build(settings)
     try:
-        bands = await patterns.calibration(container.database.session_factory)
+        report = await patterns.calibration(container.database.session_factory)
     finally:
         await container.dispose()
 
-    if not bands:
-        print("nothing to calibrate: no confidences recorded against verdicts")
+    if report.excluded:
+        # Printed first and unconditionally. An empty table below this line means
+        # something entirely different from an empty table without it.
+        print(
+            f"excluded from every band: {report.excluded_decisions} decision(s) and "
+            f"{report.excluded_assumptions} assumption(s)\n"
+            f"  their confidence was reconstructed after the fact, and hindsight "
+            f"cannot\n  measure foresight at any weight — see "
+            f"domain/values.ConfidenceHorizon"
+        )
+
+    if not report.bands:
+        print("\nnothing to calibrate: no confidence recorded before its outcome")
         return 0
 
-    for detector, values in sorted(bands.items()):
+    for detector, values in sorted(report.bands.items()):
         noun = "decisions" if detector.startswith("decision") else "assumptions"
         print(f"\n{noun} by stated confidence")
         print(f"  {'band':<12} {'n':>3}  {'stated':>7}  {'actual':>7}  95% CI")
@@ -2593,6 +2606,121 @@ async def run_patterns_calibration(settings: Settings) -> int:
         "\nCalibration is only meaningful when the confidence was written down "
         "before the\noutcome was known. Nothing in the schema records whether it "
         "was."
+    )
+    return 0
+
+
+# --------------------------------------------------------------------------
+# Events
+# --------------------------------------------------------------------------
+
+
+def _print_event(event: Event) -> None:
+    state = "done" if event.processed_at else "PENDING"
+    lag = event.delivery_lag
+    lag_note = "" if lag is None else f"  (+{lag.total_seconds():.1f}s to arrive)"
+    keys = ",".join(sorted(event.payload)) or "-"
+    print(
+        f"{_stamp(event.received_at)}  {state:<7}  {event.kind.value:<16} "
+        f"{event.source:<12}  {keys}{lag_note}"
+    )
+
+
+async def run_events_tail(
+    settings: Settings, *, kind: str | None, limit: int, follow: bool
+) -> int:
+    """The event stream, oldest first, optionally following.
+
+    `--follow` polls rather than listening on `NOTIFY`, and the reason is the
+    same one that made the queue a table: a poll is one indexed query against
+    rows that are already committed, while a listener is a second delivery path
+    that can be connected while the transaction that would have notified it
+    rolls back. At one query a second against a partial index this costs
+    nothing, and it cannot show an event that is not in the table.
+    """
+    container = Container.build(settings)
+    sessions = container.database.session_factory
+    try:
+        rows = await events.tail(
+            sessions, kind=EventKind(kind) if kind else None, limit=limit
+        )
+        if not rows and not follow:
+            print("no events")
+            print(
+                "\nPost one: curl -X POST localhost:8000/events -H "
+                "'Content-Type: application/json' \\\n"
+                "  -d '{\"kind\":\"manual\",\"source\":\"cli\",\"payload\":{}}'"
+            )
+            return 0
+        for event in rows:
+            _print_event(event)
+        if not follow:
+            return 0
+
+        # Watermarked on `received_at` rather than re-reading the window, so a
+        # long-running follow does not re-render what it has already printed and
+        # does not grow more expensive the longer it runs.
+        since = rows[-1].received_at if rows else datetime.now(UTC)
+        while True:
+            await asyncio.sleep(1.0)
+            fresh = await events.tail(sessions, kind=EventKind(kind) if kind else None,
+                                      limit=200, since=since)
+            for event in fresh:
+                _print_event(event)
+            if fresh and fresh[-1].received_at is not None:
+                since = fresh[-1].received_at
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        await container.dispose()
+
+
+async def run_events_stats(settings: Settings) -> int:
+    """Counts per kind, and the latency M6.1 depends on.
+
+    **The mean from `received_at` to `processed_at` is the number this milestone
+    exists to produce.** Everything else here is a row count. M6.1 puts context
+    assembly behind these triggers, and context that arrives after the meeting
+    starts is worth nothing — so whether a Postgres queue is adequate for a push
+    system is a question this number answers rather than an architecture opinion.
+    """
+    container = Container.build(settings)
+    try:
+        report = await events.stats(container.database.session_factory)
+    finally:
+        await container.dispose()
+
+    if not report.by_kind:
+        print("no events recorded")
+        return 0
+
+    print(f"  {'kind':<16} {'total':>6} {'done':>6} {'pending':>8}  {'latency':>9}  arrival")
+    for row in report.by_kind:
+        latency = "—" if row.mean_latency_seconds is None else f"{row.mean_latency_seconds:.3f}s"
+        lag = (
+            "—"
+            if row.mean_delivery_lag_seconds is None
+            else f"{row.mean_delivery_lag_seconds:.3f}s"
+        )
+        print(
+            f"  {row.kind.value:<16} {row.total:>6} {row.processed:>6} "
+            f"{row.pending:>8}  {latency:>9}  {lag}"
+        )
+
+    overall = report.mean_latency_seconds
+    print(f"\n  {'total':<16} {report.total:>6} {report.processed:>6} {report.pending:>8}")
+    if overall is None:
+        print(
+            "\nNothing has been processed, so there is no latency to report. Run "
+            "`memoryos worker --drain`."
+        )
+    else:
+        # Weighted by how many each kind processed. A plain mean of the per-kind
+        # means would let one rare kind outweigh two hundred common ones.
+        print(f"\n  mean received -> processed: {overall:.3f}s (weighted by kind)")
+    print(
+        "\nArrival is occurred_at -> received_at, kept separate on purpose: a slow "
+        "queue is\nthis system's fault and a slow delivery is the network's."
     )
     return 0
 
@@ -3767,6 +3895,27 @@ def build_parser() -> argparse.ArgumentParser:
     # The verb the milestone names, kept as its own top-level command rather than
     # `patterns reflect`: generating prose about somebody is a different act from
     # counting their decisions, and it should not read as a subcommand of it.
+    events_parser = commands.add_parser(
+        "events", help="the external event stream, and how fast it is drained"
+    )
+    events_commands = events_parser.add_subparsers(
+        dest="events_command", required=True
+    )
+    events_tail = events_commands.add_parser(
+        "tail", help="recent events, oldest first"
+    )
+    events_tail.add_argument("--kind", choices=[member.value for member in EventKind])
+    events_tail.add_argument("--limit", type=int, default=20)
+    events_tail.add_argument(
+        "--follow",
+        action="store_true",
+        help="poll for new events once a second until interrupted",
+    )
+    events_commands.add_parser(
+        "stats",
+        help="events by kind, processed against pending, and the mean latency",
+    )
+
     reflect_parser = commands.add_parser(
         "reflect",
         help="describe a pattern in prose, with citations; refuses below the bar",
@@ -4333,6 +4482,19 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.patterns_command == "calibration":
             return asyncio.run(run_patterns_calibration(settings))
+
+    if args.command == "events":
+        if args.events_command == "tail":
+            return asyncio.run(
+                run_events_tail(
+                    settings,
+                    kind=args.kind,
+                    limit=args.limit,
+                    follow=args.follow,
+                )
+            )
+        if args.events_command == "stats":
+            return asyncio.run(run_events_stats(settings))
 
     if args.command == "reflect":
         if not args.all_patterns and args.pattern_id is None:

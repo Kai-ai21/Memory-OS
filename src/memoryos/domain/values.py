@@ -297,6 +297,41 @@ class DecisionStatus(StrEnum):
     REVERSED = auto()
 
 
+class ConfidenceHorizon(StrEnum):
+    """Whether a decision's confidence was recorded before the answer was known.
+
+    **The column Phase 5's retrospective said should have existed in M5.0.**
+    Calibration — stated confidence against what actually happened — is only
+    meaningful when the number was written down in advance. A confidence
+    reconstructed afterwards measures nothing, because everybody is well
+    calibrated about the past, and the resulting table looks *exactly* like a
+    table of real foresight. Nothing in the schema recorded which it was, so
+    every calibration result in M5.3 was calibration of hindsight wearing the
+    shape of calibration of foresight.
+
+    Three values, and the third is not a hedge:
+
+    `FORESIGHT` — recorded at the time of deciding, with nothing yet known about
+    how it went. The only kind that belongs in a calibration population.
+
+    `HINDSIGHT` — reconstructed later. Kept rather than refused, because a
+    decision remembered is still worth recording; it simply cannot be used to
+    measure how well somebody predicts.
+
+    `UNKNOWN` — no confidence recorded at all, so there is nothing to classify.
+    Paired with a null `confidence` by a CHECK constraint, so the two columns
+    cannot come to disagree.
+
+    Written once at capture and never updated, the same rule `confidence` itself
+    follows. A horizon that could be revised is a horizon somebody can revise
+    into whichever answer makes the calibration table look better.
+    """
+
+    FORESIGHT = auto()
+    HINDSIGHT = auto()
+    UNKNOWN = auto()
+
+
 class EvidenceRelation(StrEnum):
     """How a memory relates to a decision.
 

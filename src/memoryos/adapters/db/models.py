@@ -35,10 +35,12 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from memoryos.domain.events import EventKind
 from memoryos.domain.jobs import DEFAULT_MAX_ATTEMPTS, JobStatus
 from memoryos.domain.values import (
     HEX64_PATTERN,
     AssumptionVerdict,
+    ConfidenceHorizon,
     DecisionStatus,
     EntityType,
     EventType,
@@ -1144,6 +1146,17 @@ class Decision(Base):
     known: a number updated in hindsight measures nothing, because everyone is
     well calibrated about the past.
 
+    **`confidence_horizon` is the column that makes that sentence checkable, and
+    Phase 5 shipped without it.** Immutability guarantees the number did not
+    *move*; it guarantees nothing about when it was first written. A confidence
+    reconstructed a week later is still never refreshed, and the calibration
+    table built on it looks exactly like one built on real foresight — which is
+    what M5.3 measured and could not say. Set once at capture from
+    `domain/patterns.classify_confidence` and never updated, because a horizon
+    somebody can revise is a horizon somebody can revise into whichever answer
+    makes the table look better. The CHECK pairs it with `confidence` so a null
+    number and a claimed horizon cannot coexist.
+
     `decided_at_source` follows M1.1 exactly, and for the same reason. A date a
     person typed is `declared`; a date read off an ADR's front matter is
     `parsed`; a date taken from a file's mtime is `filesystem`. Phase 4's
@@ -1161,6 +1174,9 @@ class Decision(Base):
     chosen: Mapped[str] = mapped_column(Text, nullable=False)
     reasoning: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(REAL)
+    confidence_horizon: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text(f"'{ConfidenceHorizon.UNKNOWN.value}'")
+    )
     expected_outcome: Mapped[str | None] = mapped_column(Text)
     decided_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False)
     decided_at_source: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1188,6 +1204,15 @@ class Decision(Base):
         CheckConstraint(
             "confidence IS NULL OR confidence BETWEEN 0.0 AND 1.0",
             name="ck_decisions_confidence_range",
+        ),
+        _enum_check("confidence_horizon", ConfidenceHorizon, "ck_decisions_horizon"),
+        # A confidence with no horizon is a number nobody can calibrate against,
+        # and a horizon with no confidence is a claim about a number that is not
+        # there. Neither may exist.
+        CheckConstraint(
+            f"(confidence IS NULL) = "
+            f"(confidence_horizon = '{ConfidenceHorizon.UNKNOWN.value}')",
+            name="ck_decisions_horizon_pairing",
         ),
         CheckConstraint("length(btrim(question)) > 0", name="ck_decisions_question"),
         CheckConstraint("length(btrim(chosen)) > 0", name="ck_decisions_chosen"),
@@ -2387,4 +2412,87 @@ class ReflectionCitation(Base):
         CheckConstraint("marker > 0", name="ck_reflection_citations_marker_positive"),
         _enum_check("relation", PatternRelation, "ck_reflection_citations_relation"),
         Index("ix_reflection_citations_decision", "decision_id"),
+    )
+
+
+class ExternalEvent(Base):
+    """Something that happened outside, and the trigger for work nobody asked for.
+
+    **The first table in this schema whose rows arrive rather than being
+    written.** Everything before it is the product of somebody using the system:
+    a source they registered, a decision they recorded, a query they judged. This
+    is a plugin firing on a keystroke, and the difference shows up in the two
+    indexes below rather than in the columns.
+
+    Named `ExternalEvent` in Python and `events` in SQL. `IngestionEvent`
+    already holds the other meaning of the word — M1.1's append-only log of what
+    was observed at a source, which is source-of-truth and never discarded — and
+    two classes called `Event` in one schema is how somebody truncates the wrong
+    one.
+
+    **Bitemporal for M1.1's reason, unchanged.** `occurred_at` is when the thing
+    happened and `received_at` is when this system heard about it; an editor
+    event delivered after a network hiccup happened earlier than it arrived, and
+    collapsing the two would silently re-date every event to whenever the
+    connection recovered. There is no `occurred_at_source` here because there is
+    only one way an event gets its time — the client asserts it — and a client
+    that asserts nothing gets `received_at`, which makes the two equal. That
+    equality *is* the provenance: it means nobody said when.
+
+    `processed_at` is null until a handler has run to completion, and it is
+    deliberately not set at dispatch. An event whose jobs are all still pending
+    has had nothing done about it, and marking it processed when the jobs were
+    enqueued would make the latency in `events stats` measure the speed of an
+    INSERT.
+
+    `payload` is JSONB and is not validated beyond being an object. M6.0 is
+    plumbing: no handler reads a field of it yet, and a schema invented before
+    the first consumer exists is a schema that will be wrong when one does.
+    """
+
+    __tablename__ = "events"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    # Which client emitted it. Free text rather than an enum: clients are added
+    # by whoever writes a plugin, and an enum here would mean a migration before
+    # a new editor could say anything at all.
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=_EMPTY_JSONB
+    )
+    occurred_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    dedupe_key: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        _enum_check("kind", EventKind, "ck_events_kind"),
+        CheckConstraint("length(btrim(source)) > 0", name="ck_events_source"),
+        # The rule that makes ten keystrokes one unit of work, and the `WHERE`
+        # is the whole of it. Restricted to unprocessed rows, so the same file
+        # focused again tomorrow is new work rather than a permanent collision —
+        # an index over every row would refuse the second focus forever.
+        Index(
+            "uq_events_pending_dedupe",
+            "kind",
+            "dedupe_key",
+            unique=True,
+            postgresql_where=text("processed_at IS NULL AND dedupe_key IS NOT NULL"),
+        ),
+        # The rate limiter's query, and the reason it can afford to run on every
+        # POST: counting one source's last minute is an index range scan.
+        Index("ix_events_source_received", "source", "received_at"),
+        # `events tail` and `events stats`, both of which read by kind in time
+        # order.
+        Index("ix_events_kind_received", "kind", "received_at"),
+        # Finding the backlog without scanning processed history. Partial,
+        # because the pending set is the only one anybody queries for.
+        Index(
+            "ix_events_unprocessed",
+            "received_at",
+            postgresql_where=text("processed_at IS NULL"),
+        ),
     )

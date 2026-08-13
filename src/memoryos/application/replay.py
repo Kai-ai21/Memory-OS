@@ -280,8 +280,44 @@ DERIVED_TABLES: tuple[str, ...] = (
     "change_summaries",
     "memory_chunks",
     "memories",
-    "jobs",
     "embedding_cache",
+)
+
+# **The fourth category, and M1.7 already knew it was missing.**
+#
+# That milestone shipped with two sets and reported in its own retrospective that
+# the binary was hiding a third; `query_judgements` made it concrete and
+# `USER_AUTHORED_TABLES` was the answer. This is the one after it, and the note
+# that predicted it is still in the comment above `USER_AUTHORED_TABLES`: "`jobs`
+# is classified derived and truncating it works, but it is *discardable*, not
+# reconstructible, which is a different property that happened to be safe."
+#
+# Operational rows are the exhaust of running the system rather than any part of
+# what it knows. Test each against the other three and all three refuse it:
+#
+# * Not source-of-truth — nothing is ever rebuilt from them.
+# * Not derived — a replay does not reproduce them, and could not. No amount of
+#   replaying the ingestion log produces a keystroke somebody made in an editor,
+#   or the retry history of a job that failed twice.
+# * Not user-authored — nobody wrote them. An event is a plugin firing; a job is
+#   this system talking to itself.
+#
+# What they are is *discardable*: emptying them loses information that existed
+# nowhere else and costs nothing, because nothing downstream depends on it. That
+# is a fourth property, not a shade of the other three, and writing it down is
+# what stops the next table like this being filed under "derived" because the
+# truncation happens to work.
+#
+# `jobs` moves here from `DERIVED_TABLES`, where it never belonged. Nothing about
+# the replay changes: both sets are emptied, in this order, and `SHADOW_TABLES`
+# still copies them. Only the reason is now correct.
+#
+# Ordered child-before-parent like `DERIVED_TABLES`, though neither holds a
+# foreign key to the other today — the order is a property the truncation relies
+# on, so it is maintained rather than assumed absent.
+OPERATIONAL_TABLES: tuple[str, ...] = (
+    "events",
+    "jobs",
 )
 
 # The cache is the interesting member of that list. Truncating it makes a replay
@@ -310,7 +346,7 @@ CACHE_TABLE = "embedding_cache"
 # would fail permanently. Replacing the queue with an empty one is the honest
 # outcome, not collateral damage.
 SHADOW_TABLES: tuple[str, ...] = tuple(
-    name for name in DERIVED_TABLES if name != CACHE_TABLE
+    name for name in (*DERIVED_TABLES, *OPERATIONAL_TABLES) if name != CACHE_TABLE
 )
 
 # Derived state that is not a Postgres table at all.
@@ -338,11 +374,19 @@ SHADOW_TABLES: tuple[str, ...] = tuple(
 DERIVED_PROJECTIONS: frozenset[str] = frozenset({"neo4j_graph"})
 
 
-def derived_tables(*, clear_cache: bool) -> tuple[str, ...]:
-    """The tables a replay empties, given the cache decision."""
+def cleared_tables(*, clear_cache: bool) -> tuple[str, ...]:
+    """The tables a replay empties, given the cache decision.
+
+    Two classifications, one truncation, and the names are kept separate because
+    the *reasons* differ: derived tables are emptied because they will be
+    rebuilt, operational ones because nothing needs them back. A single set would
+    make the next `jobs` — a table that is safe to truncate for the wrong reason
+    — invisible again.
+    """
+    ordered = (*DERIVED_TABLES, *OPERATIONAL_TABLES)
     if clear_cache:
-        return DERIVED_TABLES
-    return tuple(name for name in DERIVED_TABLES if name != CACHE_TABLE)
+        return ordered
+    return tuple(name for name in ordered if name != CACHE_TABLE)
 
 
 # --------------------------------------------------------------------------
@@ -1324,6 +1368,6 @@ async def truncate_derived(
     naming them means a table that has drifted into the wrong set shows up here
     as data left behind, instead of being quietly swept away with everything else.
     """
-    names = ", ".join(f'"{name}"' for name in derived_tables(clear_cache=clear_cache))
+    names = ", ".join(f'"{name}"' for name in cleared_tables(clear_cache=clear_cache))
     async with session_factory.begin() as session:
         await session.execute(text(f"TRUNCATE {names} CASCADE"))

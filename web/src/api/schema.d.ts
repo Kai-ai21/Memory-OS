@@ -1073,6 +1073,10 @@ export interface components {
             assumptions: components["schemas"]["CalibrationBandOut"][];
             /** Decisions */
             decisions: components["schemas"]["CalibrationBandOut"][];
+            /** Excluded Assumptions */
+            excluded_assumptions: number;
+            /** Excluded Decisions */
+            excluded_decisions: number;
         };
         /** CitationOut */
         CitationOut: {

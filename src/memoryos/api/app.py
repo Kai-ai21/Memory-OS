@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from memoryos.api.routes import (
     answer,
     decisions,
+    events,
     evolution,
     health,
     judgements,
@@ -60,6 +61,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # `timeline` sits above `memories`.
     app.include_router(decisions.router)
     app.include_router(answer.router)
+    # Phase 6's one endpoint, and the only route in this API that something
+    # other than a person calls. No path collision with anything above it.
+    app.include_router(events.router)
     return app
 
 

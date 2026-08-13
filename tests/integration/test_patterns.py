@@ -31,6 +31,9 @@ from memoryos.application.decisions import record as record_decision
 from memoryos.application.outcomes import OutcomeDraft
 from memoryos.application.outcomes import record as record_outcome
 from memoryos.application.patterns import (
+    calibration as patterns_calibration,
+)
+from memoryos.application.patterns import (
     detect_assumption_patterns,
     discover,
     dismiss,
@@ -41,6 +44,7 @@ from memoryos.application.patterns import (
 from memoryos.domain.patterns import DEFAULT_MIN_SUPPORT, pattern_confidence
 from memoryos.domain.values import (
     AssumptionVerdict,
+    ConfidenceHorizon,
     MergeStrategy,
     OutcomeVerdict,
     PatternKind,
@@ -52,6 +56,17 @@ from tests.integration.conftest import Harness
 pytestmark = pytest.mark.integration
 
 DECIDED_AT = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+# The anchor the calibration fixtures use, and it has to be recent.
+#
+# A confidence only enters a calibration population when it was recorded at the
+# time of deciding — `domain/patterns.classify_confidence` — so a fixture dating
+# its decisions to a fixed point in the past builds a corpus of reconstructions
+# and measures nothing. That is not a test artefact to work around; it is the
+# rule doing its job, and the fixture has to record decisions the way somebody
+# recording a decision would. Spread over hours rather than days for the same
+# reason.
+RECENTLY = datetime.now(UTC) - timedelta(hours=12)
 
 
 async def a_decision(
@@ -66,6 +81,11 @@ async def a_decision(
     # test below assert about two detectors at once.
     assumption_confidence: float | None = None,
     days: int = 0,
+    # Calibration tests pass `RECENTLY`; everything else keeps the fixed anchor,
+    # because a pattern's span and ordering are easier to read against a
+    # constant and no other detector cares when the row was written.
+    anchor: datetime = DECIDED_AT,
+    offset: timedelta | None = None,
 ) -> UUID:
     return await record_decision(
         sessions,
@@ -80,7 +100,7 @@ async def a_decision(
                 AssumptionInput(statement=assumption, confidence=assumption_confidence),
             ),
         ),
-        decided_at=DECIDED_AT + timedelta(days=days),
+        decided_at=anchor + (timedelta(days=days) if offset is None else offset),
         decided_at_source=TimeProvenance.DECLARED,
     )
 
@@ -355,13 +375,14 @@ async def test_calibration_stays_silent_when_the_sample_cannot_resolve_the_gap(
             question=f"Question {index}",
             assumption=f"Belief {index}",
             confidence=0.8,
-            days=index,
+            anchor=RECENTLY,
+            offset=timedelta(minutes=index),
         )
         await record_outcome(
             harness.sessions,
             decision_id,
             OutcomeDraft(description="it worked", verdict=OutcomeVerdict.WORKED),
-            observed_at=DECIDED_AT + timedelta(days=index + 1),
+            observed_at=RECENTLY + timedelta(hours=1, minutes=index),
             observed_at_source=TimeProvenance.DECLARED,
         )
 
@@ -389,7 +410,8 @@ async def test_calibration_emits_when_the_sample_is_large_enough(
             question=f"Question {index}",
             assumption=f"Belief {index}",
             confidence=0.9,
-            days=index,
+            anchor=RECENTLY,
+            offset=timedelta(minutes=index),
         )
         await record_outcome(
             harness.sessions,
@@ -400,7 +422,7 @@ async def test_calibration_emits_when_the_sample_is_large_enough(
                     OutcomeVerdict.WORKED if index < 4 else OutcomeVerdict.FAILED
                 ),
             ),
-            observed_at=DECIDED_AT + timedelta(days=index + 1),
+            observed_at=RECENTLY + timedelta(hours=1, minutes=index),
             observed_at_source=TimeProvenance.DECLARED,
         )
 
@@ -443,7 +465,8 @@ async def test_under_confidence_cites_the_successes_as_its_support(
             question=f"Question {index}",
             assumption=f"Belief {index}",
             confidence=0.3,
-            days=index,
+            anchor=RECENTLY,
+            offset=timedelta(minutes=index),
         )
         await record_outcome(
             harness.sessions,
@@ -454,7 +477,7 @@ async def test_under_confidence_cites_the_successes_as_its_support(
                     OutcomeVerdict.FAILED if index < 1 else OutcomeVerdict.WORKED
                 ),
             ),
-            observed_at=DECIDED_AT + timedelta(days=index + 1),
+            observed_at=RECENTLY + timedelta(hours=1, minutes=index),
             observed_at_source=TimeProvenance.DECLARED,
         )
 
@@ -476,6 +499,106 @@ async def test_under_confidence_cites_the_successes_as_its_support(
     assert {item.relation for item in pattern.supporting} == {PatternRelation.SUPPORTS}
     assert len(pattern.supporting) == 11
     assert len(pattern.contradicting) == 1
+
+
+async def test_a_reconstructed_confidence_never_enters_a_calibration_band(
+    harness: Harness,
+) -> None:
+    """The same twelve decisions that emit a pattern, dated `parsed` instead.
+
+    Phase 5's retrospective called this its largest single defect: every
+    calibration result the phase produced was calibration of hindsight, and
+    nothing but a paragraph of prose said so. The population is now the
+    foresight rows and only those, so a corpus of reconstructions produces an
+    empty table rather than a confident one.
+    """
+    for index in range(12):
+        decision_id = await record_decision(
+            harness.sessions,
+            DecisionDraft(
+                question=f"Question {index}",
+                chosen="A Postgres table",
+                confidence=0.9,
+                options=(
+                    OptionInput(description="Celery", rejected_because="No transaction."),
+                ),
+                assumptions=(AssumptionInput(statement=f"Belief {index}"),),
+            ),
+            decided_at=DECIDED_AT + timedelta(days=index),
+            # Read out of a document rather than asserted by anybody. The date
+            # was reconstructed, so the confidence beside it was too.
+            decided_at_source=TimeProvenance.PARSED,
+        )
+        await record_outcome(
+            harness.sessions,
+            decision_id,
+            OutcomeDraft(
+                description="result",
+                verdict=(OutcomeVerdict.WORKED if index < 4 else OutcomeVerdict.FAILED),
+            ),
+            observed_at=DECIDED_AT + timedelta(days=index + 1),
+            observed_at_source=TimeProvenance.DECLARED,
+        )
+
+    report = await discover(harness.sessions)
+    calibration = await patterns_calibration(harness.sessions)
+
+    # The identical corpus with `declared` dates emits an overconfidence pattern
+    # — that is the test directly above this one. With reconstructed dates there
+    # is no population at all, so there is no candidate to reject.
+    assert not [
+        row
+        for row in await list_patterns(harness.sessions)
+        if row.detector == "decision_calibration"
+    ]
+    assert report.candidates == 0
+    assert calibration.bands == {}
+    # And the exclusion is counted rather than silent. An empty table with no
+    # number beside it reads as "nothing recorded yet".
+    assert calibration.excluded_decisions == 12
+
+
+async def test_a_caller_may_declare_hindsight_but_never_assert_foresight(
+    harness: Harness,
+) -> None:
+    """Downgrades are believed; upgrades are not.
+
+    The one error that matters is a reconstruction entering a calibration
+    population, so a writer who knows better may always make the horizon worse
+    and may never argue past the derivation to make it better.
+    """
+    honest = await record_decision(
+        harness.sessions,
+        DecisionDraft(
+            question="Recorded at the time, but the number came later",
+            chosen="A Postgres table",
+            confidence=0.8,
+            options=(OptionInput(description="Celery", rejected_because="No."),),
+        ),
+        decided_at=datetime.now(UTC),
+        decided_at_source=TimeProvenance.DECLARED,
+        confidence_horizon=ConfidenceHorizon.HINDSIGHT,
+    )
+    optimistic = await record_decision(
+        harness.sessions,
+        DecisionDraft(
+            question="A date nobody asserted, claimed as foresight anyway",
+            chosen="A Postgres table",
+            confidence=0.8,
+            options=(OptionInput(description="Celery", rejected_because="No."),),
+        ),
+        decided_at=datetime.now(UTC),
+        decided_at_source=TimeProvenance.PARSED,
+        confidence_horizon=ConfidenceHorizon.FORESIGHT,
+    )
+
+    async with harness.sessions() as session:
+        horizons = {
+            row.id: row.confidence_horizon
+            for row in (await session.execute(select(models.Decision))).scalars()
+        }
+    assert horizons[honest] == ConfidenceHorizon.HINDSIGHT.value
+    assert horizons[optimistic] == ConfidenceHorizon.HINDSIGHT.value
 
 
 # --------------------------------------------------------------------------

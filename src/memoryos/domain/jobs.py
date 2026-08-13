@@ -45,6 +45,15 @@ class JobType(StrEnum):
     # current, and derived state that is a few seconds behind is the normal
     # condition of this system rather than a fault.
     SYNC_GRAPH = auto()
+    # M6.0, and the first job type enqueued by something outside this system.
+    #
+    # One job per subscribed handler rather than one per event, which is what
+    # makes a failing handler a failing *job*: it retries on its own schedule,
+    # dead-letters on its own, and cannot take another handler's work down with
+    # it. The payload names the event and the handler by name, because a worker
+    # draining this queue may be a different process on a different build from
+    # the one that dispatched.
+    HANDLE_EVENT = auto()
 
     # Test types. The worker's success, retry, and dead-letter paths are
     # exercised through these rather than through real work.

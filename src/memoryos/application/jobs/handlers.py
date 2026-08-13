@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from memoryos.adapters.blobs.filesystem import BlobNotFound
 from memoryos.adapters.parsers.registry import build_default_registry as build_parser_registry
 from memoryos.application.embed import EmbedMemory
+from memoryos.application.events import EventBus, mark_processed
+from memoryos.application.events import load as load_event
 from memoryos.application.extraction import ExtractEntities
 from memoryos.application.graph_sync import SyncGraph
 from memoryos.application.jobs.registry import Handler, HandlerRegistry, JobContext
@@ -101,6 +103,63 @@ def make_graph_sync_handler(
     return handle_sync_graph
 
 
+def make_event_handler(
+    session_factory: async_sessionmaker[AsyncSession], bus: EventBus
+) -> Handler:
+    """Build the `HANDLE_EVENT` handler.
+
+    The job payload names an event and a handler; this loads one, looks up the
+    other, runs it, and stamps `processed_at`. Everything that could go wrong is
+    classified rather than caught-and-logged, because each has a different right
+    answer:
+
+    A payload missing either field can never become valid, so it is permanent.
+
+    An event id with no row is permanent too, and the case worth naming: a full
+    replay truncates `events` — they are operational and discardable — while any
+    job still pending refers to a row that no longer exists. Retrying that for
+    five attempts would turn a routine rebuild into a burst of dead letters, so
+    it fails on the first.
+
+    A handler name this build does not know is permanent for the same reason the
+    worker treats an unregistered job type as permanent: retrying cannot make
+    code appear.
+
+    Anything the handler itself raises is left alone, so a handler that wants
+    the retry path can raise `TransientError` and get M1.2's backoff unchanged.
+    """
+
+    async def handle_event(ctx: JobContext) -> None:
+        raw_id = ctx.job.payload.get("event_id")
+        name = ctx.job.payload.get("handler")
+        if not raw_id or not name:
+            raise PermanentError(
+                "handle_event job needs both event_id and handler in its payload"
+            )
+
+        event = await load_event(session_factory, UUID(str(raw_id)))
+        if event is None:
+            raise PermanentError(f"no event {raw_id}; a replay may have cleared it")
+
+        handler = bus.handler(str(name))
+        if handler is None:
+            raise PermanentError(f"no handler named {name!r} on this build")
+
+        await handler.handle(event)
+        # After the handler returns and only then. Stamping it first would report
+        # a latency for work that had not happened, and a handler that raised
+        # would leave an event marked processed that nothing processed.
+        await mark_processed(session_factory, event.id)
+        logger.info(
+            "event.job_finished",
+            job_id=str(ctx.job.id),
+            event_id=str(event.id),
+            handler=handler.name,
+        )
+
+    return handle_event
+
+
 def make_normalize_handler(
     session_factory: async_sessionmaker[AsyncSession],
     blob_store: BlobStore,
@@ -185,6 +244,7 @@ def build_default_registry(
     extractor: EntityExtractor | None = None,
     graph: GraphStore | None = None,
     queue: JobQueue | None = None,
+    bus: EventBus | None = None,
 ) -> HandlerRegistry:
     """The registry a worker runs with.
 
@@ -220,6 +280,9 @@ def build_default_registry(
             JobType.SYNC_GRAPH,
             make_graph_sync_handler(session_factory, graph),
         )
+
+    if session_factory is not None and bus is not None:
+        registry.register(JobType.HANDLE_EVENT, make_event_handler(session_factory, bus))
 
     if session_factory is not None and connector is not None and blob_store is not None:
         registry.register(

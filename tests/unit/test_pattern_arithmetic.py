@@ -10,6 +10,7 @@ quiet on a small corpus, and a change that widened or narrowed it would change
 what the system is willing to claim about somebody.
 """
 
+from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 
 import pytest
@@ -17,11 +18,15 @@ import pytest
 from memoryos.domain.patterns import (
     DEFAULT_MIN_SUPPORT,
     MAX_CONFIDENCE,
+    classify_confidence,
     is_emittable,
     is_miscalibrated,
     pattern_confidence,
     wilson_interval,
 )
+from memoryos.domain.values import ConfidenceHorizon, TimeProvenance
+
+DECIDED_AT = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 # --------------------------------------------------------------------------
 # The Wilson interval, worked by hand
@@ -194,3 +199,87 @@ def test_the_default_minimum_is_three() -> None:
     # Written down as a test because it is the number the milestone turns on,
     # and a change to it should be deliberate rather than incidental.
     assert DEFAULT_MIN_SUPPORT == 3
+
+
+# --------------------------------------------------------------------------
+# Which confidences may be calibrated against at all
+#
+# Phase 5's retrospective called this the largest single defect in the phase: a
+# calibration table built on confidences reconstructed after the fact measures
+# hindsight and is indistinguishable from one built on foresight.
+# --------------------------------------------------------------------------
+
+
+def test_a_recovered_date_means_a_recovered_confidence() -> None:
+    """The test that decides it on real data.
+
+    `parsed` means the date was read out of a document; `filesystem` means it
+    came from an mtime. If nobody wrote the date down at the time, nobody wrote
+    the confidence down at the time either — both came from the same act of
+    reconstruction.
+    """
+    for source in (TimeProvenance.PARSED, TimeProvenance.FILESYSTEM):
+        assert (
+            classify_confidence(
+                0.8,
+                decided_at=DECIDED_AT,
+                decided_at_source=source,
+                # Recorded the same second, so the window test cannot be what
+                # rejects it.
+                recorded_at=DECIDED_AT,
+            )
+            is ConfidenceHorizon.HINDSIGHT
+        )
+
+
+def test_a_declared_date_recorded_at_the_time_is_foresight() -> None:
+    # The positive control. Without it every assertion here passes on a function
+    # that returns HINDSIGHT unconditionally.
+    assert (
+        classify_confidence(
+            0.8,
+            decided_at=DECIDED_AT,
+            decided_at_source=TimeProvenance.DECLARED,
+            recorded_at=DECIDED_AT + timedelta(hours=2),
+        )
+        is ConfidenceHorizon.FORESIGHT
+    )
+
+
+def test_a_declared_date_entered_a_week_later_is_not() -> None:
+    assert (
+        classify_confidence(
+            0.8,
+            decided_at=DECIDED_AT,
+            decided_at_source=TimeProvenance.DECLARED,
+            recorded_at=DECIDED_AT + timedelta(days=7),
+        )
+        is ConfidenceHorizon.HINDSIGHT
+    )
+
+
+def test_an_outcome_already_observed_settles_it_whatever_the_dates_say() -> None:
+    assert (
+        classify_confidence(
+            0.8,
+            decided_at=DECIDED_AT,
+            decided_at_source=TimeProvenance.DECLARED,
+            recorded_at=DECIDED_AT,
+            outcome_already_observed=True,
+        )
+        is ConfidenceHorizon.HINDSIGHT
+    )
+
+
+def test_no_confidence_is_unknown_rather_than_either_verdict() -> None:
+    # There is no number, so there is nothing to have been early or late about.
+    # A CHECK constraint pairs this with a null `confidence`.
+    assert (
+        classify_confidence(
+            None,
+            decided_at=DECIDED_AT,
+            decided_at_source=TimeProvenance.DECLARED,
+            recorded_at=DECIDED_AT,
+        )
+        is ConfidenceHorizon.UNKNOWN
+    )

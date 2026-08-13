@@ -896,11 +896,21 @@
             },
             "title": "Decisions",
             "type": "array"
+          },
+          "excluded_assumptions": {
+            "title": "Excluded Assumptions",
+            "type": "integer"
+          },
+          "excluded_decisions": {
+            "title": "Excluded Decisions",
+            "type": "integer"
           }
         },
         "required": [
           "decisions",
-          "assumptions"
+          "assumptions",
+          "excluded_decisions",
+          "excluded_assumptions"
         ],
         "title": "CalibrationOut",
         "type": "object"

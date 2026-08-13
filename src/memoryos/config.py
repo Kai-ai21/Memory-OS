@@ -164,6 +164,18 @@ class Settings(BaseSettings):
     # a better one, because the instruction to refuse competes with every extra
     # passage that looks vaguely relevant.
     answer_token_budget: int = 6000
+    # M6.0. How many events one source may deliver per window before it is
+    # refused. Per source rather than global: the point is to stop one
+    # misbehaving plugin, and a global limit would let that plugin lock out
+    # every well-behaved client.
+    #
+    # Sixty a minute is generous for anything a person does and far below what a
+    # plugin firing on keystrokes produces, which is the gap the number needs to
+    # sit in. Deduplication is the first defence and catches the well-behaved
+    # case; this catches the client that sets no dedupe key, or a fresh one each
+    # time.
+    event_rate_limit: int = 60
+    event_rate_window_seconds: int = 60
     answer_max_tokens: int = 1024
     # Chunks per extraction request (M3.1). The free tier's binding constraint
     # is requests per day, not tokens per request, so batching is what decides

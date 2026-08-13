@@ -31,6 +31,7 @@ from memoryos.adapters.parsers.registry import build_default_registry as build_p
 from memoryos.adapters.reranking.cross_encoder import CrossEncoderReranker
 from memoryos.application.answering import AnswerQuestion
 from memoryos.application.embed import EmbedMemory
+from memoryos.application.events import EventBus, build_default_bus
 from memoryos.application.extraction import ExtractEntities
 from memoryos.application.graph_expand import ExpandThroughGraph
 from memoryos.application.graph_sync import SyncGraph
@@ -125,7 +126,23 @@ class Container:
             # as the thing the worker drains: extraction and relationship
             # extraction enqueue a `SYNC_GRAPH` job rather than writing to Neo4j.
             queue=self.queue,
+            # M6.0. The same bus the API dispatches through, built from the same
+            # function: the API writes a handler *name* into a job payload and
+            # the worker looks it up, so two independently-assembled lists would
+            # show up as jobs no worker can run — which is exactly what happened
+            # the first time this milestone was run end to end, and what the
+            # `handle_event` registration test now pins.
+            bus=self.event_bus(),
         )
+
+    def event_bus(self) -> EventBus:
+        """The event bus, with M6.0's one handler subscribed.
+
+        Built per call rather than cached, and that is safe because the bus holds
+        no state beyond its subscriptions — it enqueues rather than running
+        anything, so two instances cannot disagree about work in flight.
+        """
+        return build_default_bus(self.queue)
 
     def optional_extractor(self) -> LlmEntityExtractor | None:
         """The extractor, or None when no API key is configured.
