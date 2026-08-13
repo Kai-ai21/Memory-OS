@@ -27,6 +27,9 @@ from memoryos.adapters.extraction.llm import ExtractionStats
 from memoryos.adapters.graph.schema import SCHEMA_VERSION
 from memoryos.adapters.llm.errors import MissingApiKey
 from memoryos.application import (
+    assumption_groups,
+    assumption_suggest,
+    assumptions,
     decision_suggest,
     decisions,
     evolution,
@@ -89,6 +92,7 @@ from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobStatus, JobType, PermanentError, TransientError
 from memoryos.domain.values import (
     DEFAULT_SEARCH_MODE,
+    AssumptionVerdict,
     DecisionStatus,
     EvidenceKind,
     EvidenceRelation,
@@ -2394,6 +2398,296 @@ async def run_outcomes_rate(settings: Settings) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# Assumptions
+# --------------------------------------------------------------------------
+
+
+def _verdict_of(raw: str) -> AssumptionVerdict:
+    """`--held true|false|partially`, in the words a person would type.
+
+    `true` and `false` are accepted because the milestone's own interface says
+    so and because they are what somebody reaches for; `partially` has no
+    boolean spelling, which is the point of it existing.
+    """
+    normalised = raw.strip().lower()
+    if normalised in ("true", "yes", "held"):
+        return AssumptionVerdict.HELD
+    if normalised in ("false", "no", "failed", "broke"):
+        return AssumptionVerdict.FAILED
+    if normalised in ("partial", "partially", "mixed"):
+        return AssumptionVerdict.PARTIALLY
+    raise SystemExit(
+        f"--held takes true, false or partially, got {raw!r}. 'partially' is "
+        f"there because almost nothing anybody assumes is cleanly right or wrong"
+    )
+
+
+def _print_assumption(row: assumptions.AssumptionRow, *, index: int | None = None) -> None:
+    prefix = f"{index}. " if index is not None else ""
+    verdict = "unevaluated" if row.held is None else row.held.value
+    confidence = "" if row.confidence is None else f"  (held at {row.confidence:.2f})"
+    print(f"{prefix}{row.id}")
+    print(f"     {row.statement}{confidence}")
+    print(f"     verdict    {verdict}")
+    # The decision and its outcome, because an assumption read away from the
+    # choice it served is a sentence with its subject removed.
+    print(f"     decision   {row.decision_question}")
+    outcome = "none recorded" if row.outcome_verdict is None else row.outcome_verdict.value
+    print(f"     outcome    {outcome}")
+    if row.group_label:
+        print(f"     group      {row.group_label}")
+    if row.note:
+        print(f"     note       {row.note}")
+    for item in row.evidence:
+        print(f"     · {item.source_name}:{item.external_key}")
+
+
+async def run_assumptions_review(
+    settings: Settings, *, decision_id: str | None, unevaluated: bool, limit: int
+) -> int:
+    """Walk assumptions with the context needed to judge them.
+
+    Prints rather than prompts. An interactive loop would be a nicer demo and a
+    worse tool: evaluating an assumption honestly means going and reading
+    something, and a prompt that sits waiting is a prompt somebody answers from
+    memory to make it go away.
+    """
+    container = Container.build(settings)
+    try:
+        rows = await assumptions.list_assumptions(
+            container.database.session_factory,
+            decision_id=UUID(decision_id) if decision_id else None,
+            unevaluated_only=unevaluated,
+            limit=limit,
+        )
+    finally:
+        await container.dispose()
+
+    if not rows:
+        print("no assumptions match")
+        return 0
+
+    print(f"{len(rows)} assumption(s)\n")
+    for index, row in enumerate(rows, start=1):
+        _print_assumption(row, index=index)
+        print()
+    print(
+        "Evaluate with `memoryos assumption <id> --held true|false|partially "
+        '--note "..."`.'
+    )
+    print("Find supporting memories with `memoryos assumptions suggest`.")
+    return 0
+
+
+async def run_assumption_evaluate(
+    settings: Settings,
+    *,
+    assumption_id: str,
+    held: str,
+    note: str | None,
+    evidence: list[str],
+) -> int:
+    container = Container.build(settings)
+    try:
+        await assumptions.evaluate(
+            container.database.session_factory,
+            UUID(assumption_id),
+            _verdict_of(held),
+            note=note,
+            evidence=[_parse_assumption_evidence(value) for value in evidence],
+        )
+    except assumptions.UnknownAssumption as exc:
+        print(str(exc))
+        return 1
+    except assumptions.UnresolvedEvidence as exc:
+        print(f"refused: {exc}")
+        return 1
+    finally:
+        await container.dispose()
+    print("recorded")
+    return 0
+
+
+def _parse_assumption_evidence(value: str) -> assumptions.EvidenceInput:
+    """`source:path[#ordinal]` — the natural key, as everywhere else in Phase 5."""
+    locator, _, ordinal = value.partition("#")
+    source_name, _, external_key = locator.partition(":")
+    if not source_name or not external_key:
+        raise SystemExit(f"evidence must look like source:path[#chunk], got {value!r}")
+    return assumptions.EvidenceInput(
+        source_name=source_name.strip(),
+        external_key=external_key.strip(),
+        chunk_ordinal=int(ordinal) if ordinal.strip() else None,
+    )
+
+
+async def run_assumptions_suggest(
+    settings: Settings, *, decision_id: str | None, limit: int
+) -> int:
+    container = Container.build(settings)
+    try:
+        suggest = assumption_suggest.SuggestAssumptionEvidence(
+            container.database.session_factory, container.search()
+        )
+        report = await suggest(
+            decision_id=UUID(decision_id) if decision_id else None, limit=limit
+        )
+    finally:
+        await container.dispose()
+
+    print(f"assumptions examined:     {report.assumptions}")
+    print(f"passages retrieved:       {report.retrieved}")
+    print(f"dropped (before decision): {report.dropped_before_decision}")
+    print(f"with evidence to show:    {report.with_evidence}")
+    print(f"no entity coverage:       {report.without_entity_coverage}\n")
+
+    for proposal in report.proposals:
+        if not proposal.evidence:
+            continue
+        print(f"{proposal.assumption.id}")
+        print(f"     {proposal.assumption.statement}")
+        print(f"     decision   {proposal.assumption.decision_question}")
+        print(f"     entities   {proposal.entity_filter}")
+        for item in proposal.evidence:
+            print(f"     · {item.source_name}:{item.external_key}  [{item.why}]")
+            print(f"       {item.excerpt[:200]}")
+        print()
+
+    # Said on every run. This is the one proposal path in Phase 5 with no model
+    # in it, and the reason is worth repeating where somebody will read it.
+    print(
+        "Nothing here is a verdict. These are passages that bear on the "
+        "assumption;\nwhether it held is yours to say."
+    )
+    return 0
+
+
+async def run_assumptions_group(settings: Settings, *, dry_run: bool) -> int:
+    container = Container.build(settings)
+    try:
+        group = assumption_groups.GroupAssumptions(
+            container.database.session_factory, container.embedder
+        )
+        report = await group(dry_run=dry_run)
+    finally:
+        await container.dispose()
+
+    print(f"assumptions compared: {report.assumptions} ({report.compared} pairs)")
+    print(f"auto threshold:       {assumption_groups.AUTO_THRESHOLD}")
+    print(f"review floor:         {assumption_groups.REVIEW_FLOOR}")
+    print(f"grouped:              {report.auto_grouped} into {report.groups_created}")
+    print(f"queued for review:    {report.queued}")
+    print(f"already queued:       {report.already_queued}")
+
+    if not report.auto_grouped and not report.queued and report.near_misses:
+        # The number that matters when nothing groups. "0 groups" does not
+        # distinguish a corpus that came close from one that is nowhere near,
+        # and those call for different next steps.
+        print("\nnothing cleared the floor. The closest pairs were:")
+        for score, left, right in report.near_misses:
+            print(f"  {score:.3f}  {left[:60]!r}")
+            print(f"         {right[:60]!r}")
+    if dry_run:
+        print("\ndry run; nothing written")
+    return 0
+
+
+async def run_assumptions_candidates(
+    settings: Settings, *, status: str | None, limit: int
+) -> int:
+    container = Container.build(settings)
+    try:
+        rows = await assumption_groups.list_candidates(
+            container.database.session_factory,
+            status=MergeStatus(status) if status else None,
+            limit=limit,
+        )
+    finally:
+        await container.dispose()
+
+    if not rows:
+        print("nothing in the grouping queue")
+        return 0
+    print(f"{len(rows)} pair(s)\n")
+    for row in rows:
+        print(f"{row.id}  {row.status.value}  cosine {row.similarity:.3f}")
+        print(f"     A  {row.left_statement}")
+        print(f"        from: {row.left_question}")
+        print(f"     B  {row.right_statement}")
+        print(f"        from: {row.right_question}\n")
+    print("Group with `assumptions accept <id>`, separate with `assumptions reject <id>`.")
+    return 0
+
+
+async def run_assumptions_accept(settings: Settings, *, candidate_id: str) -> int:
+    container = Container.build(settings)
+    try:
+        group_id = await assumption_groups.accept(
+            container.database.session_factory, UUID(candidate_id)
+        )
+    except (assumption_groups.UnknownCandidate, assumption_groups.AlreadyReviewed) as exc:
+        print(str(exc))
+        return 1
+    finally:
+        await container.dispose()
+    print(f"grouped into {group_id}")
+    return 0
+
+
+async def run_assumptions_reject(settings: Settings, *, candidate_id: str) -> int:
+    container = Container.build(settings)
+    try:
+        await assumption_groups.reject(
+            container.database.session_factory, UUID(candidate_id)
+        )
+    except (assumption_groups.UnknownCandidate, assumption_groups.AlreadyReviewed) as exc:
+        print(str(exc))
+        return 1
+    finally:
+        await container.dispose()
+    print("separated; the pair will not be proposed again")
+    return 0
+
+
+async def run_assumptions_stats(settings: Settings) -> int:
+    container = Container.build(settings)
+    try:
+        report = await assumptions.stats(container.database.session_factory)
+    finally:
+        await container.dispose()
+
+    print(f"total          {report.total}")
+    print(f"evaluated      {report.evaluated}")
+    print(f"unevaluated    {report.unevaluated}   (in neither half of any rate)")
+    print(f"  held         {report.held}")
+    print(f"  failed       {report.failed}")
+    print(f"  partially    {report.partially}")
+    if report.hold_rate is None:
+        print("\nnothing evaluated, so there is no hold rate to report")
+    else:
+        print(f"\nhold rate      {report.hold_rate:.0%} of {report.evaluated} evaluated")
+
+    # The line the milestone is actually for. A group of four with a 25% hold
+    # rate is a finding about how somebody estimates; the corpus-wide rate
+    # mostly reflects which assumptions were easy to check.
+    print("\nrecurring assumptions (groups with more than one member)")
+    recurring = report.recurring
+    if not recurring:
+        print("  none. Every assumption in this corpus is held once, so there is")
+        print("  no recurrence for M5.3 to find a pattern in.")
+        return 0
+    for group in recurring:
+        rate = "—" if group.hold_rate is None else f"{group.hold_rate:.0%}"
+        print(
+            f"  [{group.members} members, {group.evaluated} evaluated, "
+            f"hold rate {rate}]  {group.label}"
+        )
+        for statement in group.statements:
+            print(f"      · {statement}")
+    return 0
+
+
 async def run_decisions_suggest(
     settings: Settings, *, source: str | None, limit: int
 ) -> int:
@@ -2955,6 +3249,88 @@ def build_parser() -> argparse.ArgumentParser:
         "rate", help="worked/failed/mixed, with too_early and undecided outside the rate"
     )
 
+    assumption_parser = commands.add_parser(
+        "assumption", help="record whether one assumption held"
+    )
+    assumption_parser.add_argument("assumption_id")
+    assumption_parser.add_argument(
+        "--held",
+        required=True,
+        help=(
+            "true, false or partially. 'partially' exists because almost "
+            "nothing anybody assumes is cleanly right or wrong"
+        ),
+    )
+    assumption_parser.add_argument("--note", help="why you reached that verdict")
+    assumption_parser.add_argument(
+        "--evidence",
+        dest="evidence",
+        action="append",
+        default=[],
+        metavar="SOURCE:PATH[#CHUNK]",
+        help="a memory you actually used; repeatable",
+    )
+
+    assumptions_parser = commands.add_parser(
+        "assumptions", help="review, group and report on assumptions"
+    )
+    assumptions_commands = assumptions_parser.add_subparsers(
+        dest="assumptions_command", required=True
+    )
+
+    assumptions_review = assumptions_commands.add_parser(
+        "review", help="walk assumptions with their decision and outcome"
+    )
+    assumptions_review.add_argument("--decision", dest="decision")
+    assumptions_review.add_argument(
+        "--unevaluated",
+        action="store_true",
+        help="only the ones nobody has judged yet",
+    )
+    assumptions_review.add_argument("--limit", type=int, default=200)
+
+    assumptions_suggest = assumptions_commands.add_parser(
+        "suggest",
+        help="find memories bearing on an assumption; proposes evidence, never a verdict",
+    )
+    assumptions_suggest.add_argument("--decision", dest="decision")
+    assumptions_suggest.add_argument("--limit", type=int, default=20)
+
+    assumptions_group = assumptions_commands.add_parser(
+        "group", help="cluster assumptions that say the same thing"
+    )
+    assumptions_group.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="report what would group and what would queue, writing nothing",
+    )
+
+    assumptions_candidates = assumptions_commands.add_parser(
+        "candidates", help="pairs the embedder was unsure about"
+    )
+    assumptions_candidates.add_argument(
+        "--status",
+        choices=[value.value for value in MergeStatus],
+        default=MergeStatus.PENDING.value,
+    )
+    assumptions_candidates.add_argument("--limit", type=int, default=50)
+
+    assumptions_accept = assumptions_commands.add_parser(
+        "accept", help="put both assumptions of a pair in one group"
+    )
+    assumptions_accept.add_argument("candidate_id")
+
+    assumptions_reject = assumptions_commands.add_parser(
+        "reject", help="mark a pair as not the same belief; the row stays"
+    )
+    assumptions_reject.add_argument("candidate_id")
+
+    assumptions_commands.add_parser(
+        "stats",
+        help="totals, hold rate, and every group with more than one member",
+    )
+
     commands.add_parser("stats", help="report corpus and embedding coverage")
     commands.add_parser(
         "doctor", help="check the corpus for silently-degrading conditions"
@@ -3436,6 +3812,52 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.outcomes_command == "rate":
             return asyncio.run(run_outcomes_rate(settings))
+
+    if args.command == "assumption":
+        return asyncio.run(
+            run_assumption_evaluate(
+                settings,
+                assumption_id=args.assumption_id,
+                held=args.held,
+                note=args.note,
+                evidence=args.evidence,
+            )
+        )
+
+    if args.command == "assumptions":
+        if args.assumptions_command == "review":
+            return asyncio.run(
+                run_assumptions_review(
+                    settings,
+                    decision_id=args.decision,
+                    unevaluated=args.unevaluated,
+                    limit=args.limit,
+                )
+            )
+        if args.assumptions_command == "suggest":
+            return asyncio.run(
+                run_assumptions_suggest(
+                    settings, decision_id=args.decision, limit=args.limit
+                )
+            )
+        if args.assumptions_command == "group":
+            return asyncio.run(run_assumptions_group(settings, dry_run=args.dry_run))
+        if args.assumptions_command == "candidates":
+            return asyncio.run(
+                run_assumptions_candidates(
+                    settings, status=args.status, limit=args.limit
+                )
+            )
+        if args.assumptions_command == "accept":
+            return asyncio.run(
+                run_assumptions_accept(settings, candidate_id=args.candidate_id)
+            )
+        if args.assumptions_command == "reject":
+            return asyncio.run(
+                run_assumptions_reject(settings, candidate_id=args.candidate_id)
+            )
+        if args.assumptions_command == "stats":
+            return asyncio.run(run_assumptions_stats(settings))
 
     if args.command == "stats":
         return asyncio.run(run_stats(settings))

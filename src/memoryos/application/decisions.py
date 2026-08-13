@@ -39,7 +39,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
 from memoryos.domain.ids import new_id
-from memoryos.domain.values import DecisionStatus, EvidenceRelation, TimeProvenance
+from memoryos.domain.values import (
+    AssumptionVerdict,
+    DecisionStatus,
+    EvidenceRelation,
+    TimeProvenance,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -215,10 +220,15 @@ class AssumptionRow:
     id: UUID
     statement: str
     confidence: float | None
-    # Written by M5.2. None means nobody has judged it, which is deliberately
-    # not the same as False.
-    held: bool | None
+    # Written by M5.2, which widened it from a boolean to `held | failed |
+    # partially`: almost nothing anybody assumes is cleanly right or wrong, and
+    # a binary forced the interesting cases into the wrong box. None still means
+    # nobody has judged it, and is deliberately not `FAILED`.
+    held: AssumptionVerdict | None
     evaluated_at: datetime | None
+    # The evaluator's reasoning. Separate from `statement`, which is what was
+    # believed at the time and is never rewritten to match what happened.
+    note: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -642,8 +652,9 @@ async def show(
                 id=item.id,
                 statement=item.statement,
                 confidence=item.confidence,
-                held=item.held,
+                held=AssumptionVerdict(item.held) if item.held else None,
                 evaluated_at=item.evaluated_at,
+                note=item.note,
             )
             for item in assumptions
         ],

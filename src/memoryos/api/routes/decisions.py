@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from memoryos.application import decision_suggest, decisions, outcome_suggest, outcomes
 from memoryos.container import Container
 from memoryos.domain.values import (
+    AssumptionVerdict,
     DecisionStatus,
     EvidenceKind,
     EvidenceRelation,
@@ -115,9 +116,13 @@ class AssumptionOut(BaseModel):
     id: UUID
     statement: str
     confidence: float | None
-    # Null until M5.2 evaluates it, and deliberately not `false`.
-    held: bool | None
+    # `held | failed | partially`, or null when nobody has judged it — which is
+    # deliberately not `failed`. M5.2 widened this from a boolean because almost
+    # nothing anybody assumes is cleanly right or wrong.
+    held: AssumptionVerdict | None
     evaluated_at: datetime | None
+    # The evaluator's reasoning, separate from the statement they were judging.
+    note: str | None = None
 
 
 class EvidenceOut(BaseModel):
@@ -698,6 +703,7 @@ def _detail_out(
                 confidence=item.confidence,
                 held=item.held,
                 evaluated_at=item.evaluated_at,
+                note=item.note,
             )
             for item in detail.assumptions
         ],

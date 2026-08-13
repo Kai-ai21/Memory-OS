@@ -355,6 +355,47 @@ RESOLVED_VERDICTS: frozenset[OutcomeVerdict] = frozenset(
 )
 
 
+class AssumptionVerdict(StrEnum):
+    """Whether something a decision rested on turned out to be true.
+
+    **Three states, and the third is the reason this is not a boolean.** M5.0
+    declared `held` as `BOOLEAN NULL` and M5.2 widened it, because forcing a
+    binary produces noise rather than data: almost nothing anybody assumes is
+    cleanly right or wrong. "The free tier's rate limits are workable" was true
+    for six months of ordinary use and false the moment a corpus-wide extraction
+    ran. Recording that as `false` loses the half that was right, and recording
+    it as `true` loses the milestone it blocked.
+
+    The column keeps the name `held` even though `held = 'failed'` reads oddly,
+    because everything M5.0 wrote about it is still true and renaming a column
+    to improve one sentence is how a schema and its documentation drift apart.
+    `AssumptionVerdict.PARTIALLY` is what the sentence should say.
+
+    NULL remains "nobody has judged this yet" and is deliberately not `FAILED`.
+    A system that could not tell an unevaluated assumption from a broken one
+    would report every new decision as built on sand — M5.0's words, still the
+    rule.
+    """
+
+    HELD = auto()
+    FAILED = auto()
+    PARTIALLY = auto()
+
+
+# What a hold rate is computed over. Every evaluated verdict counts; the
+# unevaluated ones are absent from both halves of the fraction, exactly as
+# `too_early` is absent from a success rate.
+#
+# `PARTIALLY` is in the denominator and not the numerator, which is a judgement
+# rather than an obvious truth: a partially-held assumption is not a success,
+# and a rate that counted it as one would flatter every vague assumption
+# somebody wrote. It is reported separately as well, so the choice is visible
+# rather than buried in a percentage.
+EVALUATED_VERDICTS: frozenset[AssumptionVerdict] = frozenset(
+    {AssumptionVerdict.HELD, AssumptionVerdict.FAILED, AssumptionVerdict.PARTIALLY}
+)
+
+
 class EvidenceKind(StrEnum):
     """Whether an outcome was observed by a person or inferred by the system.
 

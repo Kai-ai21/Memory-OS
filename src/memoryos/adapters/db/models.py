@@ -38,6 +38,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from memoryos.domain.jobs import DEFAULT_MAX_ATTEMPTS, JobStatus
 from memoryos.domain.values import (
     HEX64_PATTERN,
+    AssumptionVerdict,
     DecisionStatus,
     EntityType,
     EventType,
@@ -1293,11 +1294,38 @@ class DecisionAssumption(Base):
     )
     statement: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float | None] = mapped_column(REAL)
-    # M5.2 writes both or neither.
-    held: Mapped[bool | None] = mapped_column(Boolean)
+    # M5.2 writes all three, or none of them.
+    #
+    # Widened from `BOOLEAN` in migration 0018. Forcing a binary produced noise
+    # rather than data: almost nothing anybody assumes is cleanly right or
+    # wrong, and `partially` is the answer for the ones that were true until the
+    # week they were not. The column keeps its M5.0 name — `held = 'failed'`
+    # reads oddly and renaming it to fix one sentence is how a schema and its
+    # documentation drift apart.
+    held: Mapped[str | None] = mapped_column(Text)
     evaluated_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    # Why the evaluator reached that verdict. Separate from the statement, which
+    # is what was believed at the time and must never be edited to match what
+    # happened — an assumption rewritten in hindsight is a decision record
+    # arguing with itself.
+    note: Mapped[str | None] = mapped_column(Text)
+    # M5.2's grouping. Null means ungrouped, which is the common case: an
+    # assumption nothing else in the corpus resembles is not a failure of the
+    # grouper, it is a belief held once.
+    #
+    # `ON DELETE SET NULL` rather than CASCADE: deleting a group must ungroup
+    # its members, never delete the assumptions themselves.
+    group_id: Mapped[UUID | None] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "assumption_groups.id",
+            name="fk_decision_assumptions_group_id",
+            ondelete="SET NULL",
+        ),
+    )
 
     __table_args__ = (
+        _enum_check("held", AssumptionVerdict, "ck_decision_assumptions_held"),
         CheckConstraint(
             "length(btrim(statement)) > 0", name="ck_decision_assumptions_statement"
         ),
@@ -1317,6 +1345,215 @@ class DecisionAssumption(Base):
 
 
 Index("ix_decision_assumptions_decision", DecisionAssumption.decision_id)
+
+# The stats query's read pattern: how many assumptions hold, grouped.
+Index("ix_decision_assumptions_held", DecisionAssumption.held)
+Index("ix_decision_assumptions_group", DecisionAssumption.group_id)
+
+
+class AssumptionGroup(Base):
+    """Assumptions from different decisions that say the same thing.
+
+    **This is what makes M5.3 possible.** A pattern is the same assumption
+    failing repeatedly, and "the same assumption" is not a string comparison:
+    "this will take two days", "the deploy is straightforward" and "integration
+    should be quick" are one recurring belief wearing three sentences. Without
+    grouping, every one of them is a sample of size one and no pattern can exist.
+
+    `label` is the statement of whichever member the group was built around,
+    kept as a human-readable handle rather than as a canonical form. There is
+    deliberately no attempt to synthesise a better label from the members: a
+    generated summary of three sentences is a fourth sentence nobody wrote, and
+    M5.3 would then be finding patterns in text this module invented.
+
+    The same asymmetry M3.2 states drives the thresholds: **a false grouping is
+    worse than a missed one.** A missed group leaves two beliefs looking
+    unrelated, which is visible and fixable by accepting a pending candidate. A
+    false group invents a recurrence — four members, one hold rate, a finding
+    about how somebody estimates — out of assumptions that have nothing to do
+    with each other.
+    """
+
+    __tablename__ = "assumption_groups"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    # Whether a person put this group together or the embedder did. The same
+    # distinction `EvidenceKind` makes for outcomes, and needed for the same
+    # reason: an auto-grouped set at 0.94 cosine and a hand-curated one are not
+    # equally trustworthy inputs to a claim about somebody's judgement.
+    strategy: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        _enum_check("strategy", MergeStrategy, "ck_assumption_groups_strategy"),
+        CheckConstraint("length(btrim(label)) > 0", name="ck_assumption_groups_label"),
+    )
+
+
+class AssumptionGroupCandidate(Base):
+    """Two assumptions the embedder thinks might be the same belief.
+
+    The review queue, and M3.2's `entity_merges` in miniature: a pair scoring
+    between the review floor and the auto threshold is information — "we looked
+    at these two and were not sure" — and a system that discarded it would
+    re-propose the same pair on every run forever.
+
+    Keyed on the *pair* rather than on a group, because at the first run there
+    are no groups to propose membership of. Accepting merges both sides into one
+    group, creating it if neither has one, which is the only formulation that
+    works whether zero, one or both are already grouped.
+
+    Rejections are kept for the reason M5.0's are: the pair is then excluded
+    from later runs, and the count of rejections is the only measurement of how
+    often the embedder proposes two beliefs that are not the same.
+    """
+
+    __tablename__ = "assumption_group_candidates"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    left_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decision_assumptions.id",
+            name="fk_assumption_group_candidates_left_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    right_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decision_assumptions.id",
+            name="fk_assumption_group_candidates_right_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    similarity: Mapped[float] = mapped_column(REAL, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text(f"'{MergeStatus.PENDING.value}'")
+    )
+    # The embedder that scored it. Part of the row for the reason M3.1's
+    # extractor version is: a different model produces different numbers, and a
+    # queue mixing two of them is a queue with no threshold.
+    model_id: Mapped[str] = mapped_column(Text, nullable=False)
+    proposed_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+
+    __table_args__ = (
+        _enum_check("status", MergeStatus, "ck_assumption_group_candidates_status"),
+        CheckConstraint(
+            "similarity BETWEEN 0.0 AND 1.0",
+            name="ck_assumption_group_candidates_similarity_range",
+        ),
+        # An assumption is not a candidate to be grouped with itself.
+        CheckConstraint(
+            "left_id <> right_id", name="ck_assumption_group_candidates_distinct"
+        ),
+        CheckConstraint(
+            "(status = 'pending') = (reviewed_at IS NULL)",
+            name="ck_assumption_group_candidates_review_pairing",
+        ),
+    )
+
+
+# The same pair is not proposed twice while a proposal is outstanding. Partial
+# for the `entity_merges` reason: a rejected pair legitimately becomes
+# proposable again under a different embedder.
+Index(
+    "uq_assumption_group_candidates_pending_pair",
+    AssumptionGroupCandidate.left_id,
+    AssumptionGroupCandidate.right_id,
+    unique=True,
+    postgresql_where=text("status = 'pending'"),
+)
+
+Index(
+    "ix_assumption_group_candidates_status",
+    AssumptionGroupCandidate.status,
+    AssumptionGroupCandidate.similarity,
+)
+
+
+class AssumptionEvidence(Base):
+    """A memory that bears on whether an assumption held.
+
+    The third table with this exact shape — `decision_evidence`,
+    `outcome_evidence`, and now this one — and the third for the same reasons.
+    The foreign keys cascade, so a memory leaving the corpus takes its links and
+    leaves the evaluation standing; the natural key beside the ids is what a
+    replay re-links against, because `TRUNCATE memories CASCADE` reaches this
+    table whatever `application/replay.py` classifies it as. It is listed in
+    `EVIDENCE_TABLES`, and a test derives that list from this metadata so that
+    forgetting the fourth fails the build.
+
+    **The evidence is attached by the person doing the evaluating, not by the
+    thing that proposed it.** `assumptions suggest` retrieves memories that bear
+    on an assumption and prints them; nothing here is written until somebody
+    evaluates the assumption and names which of them they actually used. An
+    evidence row is therefore a claim a human made, which is what M5.4 needs it
+    to be.
+    """
+
+    __tablename__ = "assumption_evidence"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    assumption_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decision_assumptions.id",
+            name="fk_assumption_evidence_assumption_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    memory_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "memories.id", name="fk_assumption_evidence_memory_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    chunk_id: Mapped[UUID | None] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "memory_chunks.id",
+            name="fk_assumption_evidence_chunk_id",
+            ondelete="CASCADE",
+        ),
+    )
+    source_name: Mapped[str] = mapped_column(Text, nullable=False)
+    external_key: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_ordinal: Mapped[int | None] = mapped_column(Integer)
+    occurred_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    linked_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "assumption_id",
+            "memory_id",
+            "chunk_id",
+            name="uq_assumption_evidence_link",
+            postgresql_nulls_not_distinct=True,
+        ),
+        CheckConstraint(
+            "chunk_ordinal IS NULL OR chunk_ordinal >= 0",
+            name="ck_assumption_evidence_chunk_ordinal_non_negative",
+        ),
+        CheckConstraint(
+            "(chunk_id IS NULL) = (chunk_ordinal IS NULL)",
+            name="ck_assumption_evidence_chunk_pairing",
+        ),
+        Index("ix_assumption_evidence_assumption", "assumption_id"),
+        Index("ix_assumption_evidence_memory", "memory_id"),
+    )
 
 
 class DecisionEvidence(Base):
