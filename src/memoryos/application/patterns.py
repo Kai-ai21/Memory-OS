@@ -31,7 +31,7 @@ need and the one a generated sentence could never have.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -641,8 +641,27 @@ def _calibration_candidate(
 
     # Under-confidence is the mirror image: the cases arguing for it are the
     # ones that *worked* despite a low stated number.
+    #
+    # **Relabelled, not reordered, and that distinction was a live bug.** This
+    # swapped the two local names, which changed the order of `evidence` and
+    # nothing else — every `EvidenceItem` kept the `relation` its caller had
+    # already baked in. `Candidate.supporting` filters on that field, so for
+    # every under-confident band it returned the *failures*: fourteen
+    # assumptions that all held reported zero supporting decisions and fourteen
+    # contradicting ones.
+    #
+    # Nothing failed and nothing was logged. `is_emittable` simply refused every
+    # under-confidence candidate for having no support, and
+    # `ck_patterns_support_positive` would have refused it again — so half of
+    # this detector could not fire at all, and the run that proved it looked
+    # exactly like a run finding nothing. The corpus that exposed it is the one
+    # in the README: "underconfident on assumptions stated 0.75-1.00", 10
+    # decisions, reported as 0 supporting.
     if direction == "under":
-        supporting, contradicting = contradicting, supporting
+        supporting, contradicting = (
+            _relabelled(contradicting, PatternRelation.SUPPORTS),
+            _relabelled(supporting, PatternRelation.CONTRADICTS),
+        )
 
     return Candidate(
         kind=PatternKind.OUTCOME,
@@ -670,6 +689,18 @@ def _calibration_candidate(
             else None
         ),
     )
+
+
+def _relabelled(
+    items: Sequence[EvidenceItem], relation: PatternRelation
+) -> list[EvidenceItem]:
+    """The same evidence, arguing the other way.
+
+    Rebuilt rather than mutated because `EvidenceItem` is frozen, and frozen
+    because a piece of evidence that can change which side it is on after the
+    counts were taken is the shape of the bug above.
+    """
+    return [replace(item, relation=relation) for item in items]
 
 
 def silent_detectors(

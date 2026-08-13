@@ -420,6 +420,64 @@ async def test_calibration_emits_when_the_sample_is_large_enough(
     assert pattern.confidence == pytest.approx(0.667, abs=1e-3)
 
 
+async def test_under_confidence_cites_the_successes_as_its_support(
+    harness: Harness,
+) -> None:
+    """The mirror image of the test above, and the one that was broken.
+
+    Twelve decisions stated at 0.30 of which eleven worked. The interval for
+    11/12 runs from about 65% to 99%, and 0.30 falls outside it, so this is a
+    gap the sample can resolve — in the *other* direction. The claim being
+    tested is "your stated confidence here is too low", so the cases arguing for
+    it are the eleven that worked and the one arguing against is the failure.
+
+    Before the fix in this milestone, `_calibration_candidate` swapped the two
+    lists' positions without relabelling the evidence rows, so this candidate
+    reported one supporting decision and eleven contradicting ones and was
+    refused for having no support. Half the detector could not fire, nothing
+    logged it, and a run proving it looked exactly like a run finding nothing.
+    """
+    for index in range(12):
+        decision_id = await a_decision(
+            harness.sessions,
+            question=f"Question {index}",
+            assumption=f"Belief {index}",
+            confidence=0.3,
+            days=index,
+        )
+        await record_outcome(
+            harness.sessions,
+            decision_id,
+            OutcomeDraft(
+                description="result",
+                verdict=(
+                    OutcomeVerdict.FAILED if index < 1 else OutcomeVerdict.WORKED
+                ),
+            ),
+            observed_at=DECIDED_AT + timedelta(days=index + 1),
+            observed_at_source=TimeProvenance.DECLARED,
+        )
+
+    await discover(harness.sessions)
+
+    calibration = [
+        row
+        for row in await list_patterns(harness.sessions)
+        if row.detector == "decision_calibration"
+    ]
+    assert len(calibration) == 1
+    pattern = calibration[0]
+    assert "Underconfident" in pattern.statement
+    assert pattern.support_count == 11
+    assert pattern.contradiction_count == 1
+    # And every cited row agrees with the count beside it, which is the property
+    # the swap broke: the evidence said "contradicts" while the statement said
+    # the opposite.
+    assert {item.relation for item in pattern.supporting} == {PatternRelation.SUPPORTS}
+    assert len(pattern.supporting) == 11
+    assert len(pattern.contradicting) == 1
+
+
 # --------------------------------------------------------------------------
 # Re-running, and refusing
 # --------------------------------------------------------------------------
