@@ -59,12 +59,6 @@ from memoryos.domain.values import (
 
 logger = structlog.get_logger(__name__)
 
-# Bumped when a detector's rule changes in a way that could change what it
-# emits. Recorded on nothing today — patterns are keyed on (detector,
-# subject_key) — and named here so the next change to a threshold is a decision
-# somebody makes rather than a silent shift in what the corpus claims.
-DETECTOR_VERSION = "v1"
-
 # Confidence bands for the calibration detectors. Quarters, because they are the
 # coarsest split that still separates "I was unsure" from "I was certain", and
 # because a finer grid over a corpus of this size would put one observation in
@@ -110,6 +104,11 @@ class Candidate:
     # `calibration()` reads these; without them it would have to parse the
     # sentence it is reporting, and a value recovered from a display string is
     # a value that can disagree with the rows printed under it.
+    #
+    # Filled by the calibration detectors and only by them, because they are the
+    # only ones with a reader. Every other detector's numbers are recoverable by
+    # counting its evidence lists, and a dict populated for nobody is a second
+    # copy of those counts that nothing keeps honest.
     metrics: dict[str, float] = field(default_factory=dict)
     # Why this candidate was not emitted, when it was not. Carried so the CLI
     # can report near-misses: on a small corpus the interesting output is
@@ -131,13 +130,6 @@ class Candidate:
             item.decision_id
             for item in self.evidence
             if item.relation is PatternRelation.CONTRADICTS
-        )
-
-    def emittable(self, *, min_support: int) -> bool:
-        if self.rejected_because is not None:
-            return False
-        return is_emittable(
-            len(self.supporting), len(self.contradicting), min_support=min_support
         )
 
     def confidence(self, *, min_support: int) -> float:
@@ -357,11 +349,6 @@ def detect_assumption_patterns(corpus: Corpus) -> list[Candidate]:
                 kind=PatternKind.ASSUMPTION,
                 detector="assumption_group",
                 subject_key=str(group_id),
-                metrics={
-                    "held": float(len(held)),
-                    "evaluated": float(len(evaluated)),
-                    "rate": rate,
-                },
                 statement=(
                     f"{finding}{label!r} held {rate:.0%} of {len(evaluated)} times "
                     f"it was evaluated, across "
@@ -788,11 +775,18 @@ async def discover(
             continue
         support = len(candidate.supporting)
         counter = len(candidate.contradicting)
-        if support < min_support:
-            report.below_support += 1
-            continue
-        if support <= counter:
-            report.outweighed_by_counter_evidence += 1
+        # The gate is `domain.is_emittable` and only that, so the rule lives in
+        # one place. The two branches below decide which *sentence* to count the
+        # refusal under; they do not decide the refusal. Written the other way
+        # round — two inline comparisons that happen to agree with the domain
+        # function — the two could drift, and the drift would be invisible: the
+        # table would gain a pattern the rule forbids and every test of the rule
+        # would still pass.
+        if not is_emittable(support, counter, min_support=min_support):
+            if support < min_support:
+                report.below_support += 1
+            else:
+                report.outweighed_by_counter_evidence += 1
             continue
 
         dates = [
