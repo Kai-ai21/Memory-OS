@@ -1523,6 +1523,11 @@
       },
       "FindingOut": {
         "properties": {
+          "advisory": {
+            "default": false,
+            "title": "Advisory",
+            "type": "boolean"
+          },
           "check": {
             "title": "Check",
             "type": "string"

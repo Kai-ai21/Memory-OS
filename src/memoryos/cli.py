@@ -762,9 +762,18 @@ async def run_doctor_command(settings: Settings) -> int:
         print(f"window:  {container.embedder.max_sequence_tokens} tokens")
         print(f"chunker: {container.chunker.version}\n")
         for finding in report.findings:
-            mark = "ok  " if finding.healthy else "FAIL"
+            # Three marks, not two. An advisory with a non-zero count is neither
+            # a pass nor a failure: it names a capability nobody has exercised,
+            # and printing `ok` beside a corpus with no entity extraction at all
+            # is how that state stayed invisible through two full replays.
+            if finding.advisory and finding.count:
+                mark = "note"
+            elif finding.healthy:
+                mark = "ok  "
+            else:
+                mark = "FAIL"
             print(f"[{mark}] {finding.check}: {finding.count}")
-            if not finding.healthy:
+            if mark != "ok  ":
                 print(f"        {finding.detail}")
                 for example in finding.examples:
                     print(f"        - {example}")

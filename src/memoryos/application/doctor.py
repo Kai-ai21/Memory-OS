@@ -22,10 +22,25 @@ class Finding:
     count: int
     detail: str
     examples: list[str] = field(default_factory=list)
+    # Reported and counted, but does not make the report unhealthy.
+    #
+    # The distinction is between damage and an absence. Every other check here
+    # names something that is *wrong* with data already written — a chunk past
+    # the model's window, a vector from the wrong model — and a non-zero count
+    # is a defect. Entity extraction not having run is a capability that has not
+    # been exercised: it needs an API key, a keyless deployment is legitimate
+    # and fully working for everything Phase 1 and Phase 2 do, and `doctor`
+    # exiting non-zero on a fresh corpus would be reporting an optional feature
+    # as corpus damage. Same judgement `GraphStatus.healthy` makes about an
+    # unreachable Neo4j.
+    #
+    # It is still a finding rather than nothing, because the state it reports is
+    # invisible otherwise and something downstream depends on it.
+    advisory: bool = False
 
     @property
     def healthy(self) -> bool:
-        return self.count == 0
+        return self.advisory or self.count == 0
 
 
 @dataclass(slots=True)
@@ -230,6 +245,49 @@ async def run_doctor(
                 count=len(empty),
                 detail="normalized text exists but produced no chunks",
                 examples=[row[0] for row in empty[:sample_limit]],
+            )
+        )
+
+        # The condition a replay creates and nothing reported until M5.1 needed
+        # it. `entities`, `entity_mentions` and `entity_relationships` are
+        # derived-and-not-rebuilt: a full replay truncates them and leaves them
+        # empty, because rebuilding means an LLM call per chunk against offsets
+        # that no longer point anywhere. `application/replay.py` says so and
+        # says to re-run extraction afterwards — and nothing checked whether
+        # anybody had.
+        #
+        # It matters more than a missing convenience. M5.1 narrows outcome
+        # candidates to memories sharing entities with a decision's evidence, so
+        # a corpus with no mentions makes that filter return nothing while
+        # looking exactly like a corpus where nothing shares an entity. Two
+        # full replays during M5.0 left this at zero and the only thing that
+        # noticed was a hand-written query.
+        unextracted = (
+            await session.execute(
+                select(func.count())
+                .select_from(models.Memory)
+                .where(
+                    models.Memory.is_current.is_(True),
+                    models.Memory.deleted_at.is_(None),
+                    models.Memory.entity_extractor_version.is_(None),
+                )
+            )
+        ).scalar_one()
+        mentions = (
+            await session.execute(select(func.count()).select_from(models.EntityMention))
+        ).scalar_one()
+        findings.append(
+            Finding(
+                check="memories_without_entity_extraction",
+                count=unextracted,
+                detail=(
+                    "current memories no extractor has run over; the graph and "
+                    "any entity-scoped query see nothing of them. A full replay "
+                    "truncates the entity tables and does not rebuild them — "
+                    "re-run `extract-entities`"
+                ),
+                examples=[f"{mentions} mention rows in the corpus"],
+                advisory=True,
             )
         )
 

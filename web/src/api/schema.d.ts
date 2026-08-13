@@ -1036,6 +1036,11 @@ export interface components {
         };
         /** FindingOut */
         FindingOut: {
+            /**
+             * Advisory
+             * @default false
+             */
+            advisory: boolean;
             /** Check */
             check: string;
             /** Count */

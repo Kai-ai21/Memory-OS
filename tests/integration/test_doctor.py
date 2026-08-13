@@ -64,6 +64,35 @@ async def test_oversized_chunks_are_reported(pipeline: Pipeline) -> None:
     assert "discarded" in oversized.detail
 
 
+async def test_a_corpus_nobody_has_extracted_is_reported_but_not_unhealthy(
+    pipeline: Pipeline,
+) -> None:
+    """The condition two full replays created during M5.0 and nothing reported.
+
+    A replay truncates the entity tables and does not rebuild them, which
+    `application/replay.py` says and says to fix by re-running extraction —
+    and until this check nothing anywhere reported whether anybody had. It
+    matters because M5.1 narrows outcome candidates to memories sharing entities
+    with a decision's evidence, and a corpus with no mentions makes that filter
+    return nothing while looking exactly like a corpus where nothing shares one.
+
+    Advisory rather than failing, and that is the same judgement `GraphStatus`
+    makes about an unreachable Neo4j: extraction needs an API key, a keyless
+    deployment is legitimate and fully working for everything Phase 1 and 2 do,
+    and exiting non-zero here would report an optional capability as damage.
+    """
+    await pipeline.ingest()
+    await pipeline.embed_all()
+
+    report = await run_doctor(pipeline.sessions, pipeline.embedder)
+
+    unextracted = finding(report, "memories_without_entity_extraction")
+    assert unextracted.count > 0
+    assert unextracted.advisory
+    # Reported, and the report still passes.
+    assert report.healthy
+
+
 async def test_a_memory_with_content_but_no_chunks_is_reported(
     pipeline: Pipeline, tmp_path: Path
 ) -> None:
