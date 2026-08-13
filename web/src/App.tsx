@@ -15,6 +15,7 @@ import { DecisionPage } from "./features/decisions/DecisionPage";
 import { DecisionsPage } from "./features/decisions/DecisionsPage";
 import { OutcomeQueue } from "./features/decisions/OutcomeQueue";
 import { PatternsPage } from "./features/decisions/PatternsPage";
+import { ReflectionsPage } from "./features/decisions/ReflectionsPage";
 import { ReviewQueue } from "./features/decisions/ReviewQueue";
 import { JudgementsPage } from "./features/judgements/JudgementsPage";
 import { MemoryPage } from "./features/memory/MemoryPage";
@@ -55,6 +56,11 @@ export function App() {
           <Route path="/decisions/outcomes" element={<OutcomeQueue />} />
           <Route path="/decisions/assumptions" element={<AssumptionsPage />} />
           <Route path="/decisions/patterns" element={<PatternsPage />} />
+          {/* Reachable, never delivered. There is deliberately no nav tab for
+              this route and nothing links to it from the home screen: a tool
+              that volunteers claims about your judgement is one you stop
+              trusting. You go and look at reflections, from the patterns view. */}
+          <Route path="/decisions/reflections" element={<ReflectionsPage />} />
           <Route path="/decisions/:id" element={<DecisionPage />} />
           <Route path="/judgements" element={<JudgementsPage />} />
           <Route path="/corpus" element={<CorpusPage />} />

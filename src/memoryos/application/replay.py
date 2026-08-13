@@ -163,6 +163,25 @@ USER_AUTHORED_TABLES: frozenset[str] = frozenset(
         # user-authored and never truncated. Nothing a replay does can reach it.
         "patterns",
         "pattern_evidence",
+        # M5.4's two, and the least arguable classification in this file since
+        # `query_judgements`.
+        #
+        # Nothing about a reflection is derived. Its text is what a language
+        # model wrote on one occasion, which no rebuild reproduces — not even
+        # approximately, and a replay that regenerated it would quietly replace
+        # sentences somebody had already read with different ones. Its
+        # `dismissed_at` is a person having read a behavioural claim about
+        # themselves and refused it, and `application/reflections.py` reads that
+        # column to decide never to generate for the pattern again. Truncating
+        # this table would un-reject every rejected claim and the next `reflect`
+        # would write them all back.
+        #
+        # `reflection_citations` follows its parent: it is the frozen numbering
+        # of one generated text, meaningless apart from it. Both reach only
+        # `patterns` and `decisions`, which are themselves user-authored and
+        # never truncated, so neither needs the snapshot the evidence tables do.
+        "reflections",
+        "reflection_citations",
     }
 )
 

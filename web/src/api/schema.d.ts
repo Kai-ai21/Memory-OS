@@ -570,6 +570,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/reflections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Reflections Route
+         * @description Reflections with their citations resolved.
+         *
+         *     Dismissed ones are excluded by default and that default is the feature. "This
+         *     is wrong about me" has to mean the sentence stops appearing, not that it
+         *     moves down the page.
+         */
+        get: operations["list_reflections_route_reflections_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reflections/{reflection_id}/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge Reflection
+         * @description Record that it was read. Not agreement, and nothing is weighted by it.
+         */
+        post: operations["acknowledge_reflection_reflections__reflection_id__acknowledge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reflections/{reflection_id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss Reflection
+         * @description "This is wrong about me." Permanent, and it stops regeneration too.
+         */
+        post: operations["dismiss_reflection_reflections__reflection_id__dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/search": {
         parameters: {
             query?: never;
@@ -1966,6 +2030,59 @@ export interface components {
              */
             status: "ok" | "degraded";
         };
+        /** ReflectionCitationOut */
+        ReflectionCitationOut: {
+            /**
+             * Decision Id
+             * Format: uuid
+             */
+            decision_id: string;
+            /** Decision Question */
+            decision_question: string;
+            /** Marker */
+            marker: number;
+            relation: components["schemas"]["PatternRelation"];
+        };
+        /** ReflectionOut */
+        ReflectionOut: {
+            /** Acknowledged At */
+            acknowledged_at: string | null;
+            /** Citation Rate */
+            citation_rate: number | null;
+            /** Citations */
+            citations: components["schemas"]["ReflectionCitationOut"][];
+            /** Contradiction Count */
+            contradiction_count: number;
+            /** Dismissed At */
+            dismissed_at: string | null;
+            /** Dismissed Reason */
+            dismissed_reason: string | null;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Model Id */
+            model_id: string;
+            /**
+             * Pattern Id
+             * Format: uuid
+             */
+            pattern_id: string;
+            /** Pattern Statement */
+            pattern_statement: string;
+            /** Support Count */
+            support_count: number;
+            /** Text */
+            text: string;
+            /** Uncited */
+            uncited: string[];
+        };
         /** SearchIn */
         SearchIn: {
             /** After */
@@ -3337,6 +3454,100 @@ export interface operations {
             header?: never;
             path: {
                 pattern_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DismissIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_reflections_route_reflections_get: {
+        parameters: {
+            query?: {
+                include_dismissed?: boolean;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReflectionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    acknowledge_reflection_reflections__reflection_id__acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reflection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dismiss_reflection_reflections__reflection_id__dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reflection_id: string;
             };
             cookie?: never;
         };

@@ -146,6 +146,67 @@ def pattern_confidence(
     return min(MAX_CONFIDENCE, agreement * sufficiency)
 
 
+# The bar a pattern has to clear before anything is written *about it in prose*,
+# and it is deliberately higher than the bar for the pattern itself.
+#
+# A pattern is a row: a statement assembled from counts, sitting beside the
+# decisions it came from, and a reader looks at both together. A reflection is
+# fluent English about a person's judgement, and it is read the way prose is read
+# — as a claim, not as a summary of a table. The riskier output needs the
+# stronger evidence, so the two thresholds are not the same number.
+#
+# Derived rather than picked: `pattern_confidence(3, 0)` is 0.50, the least that
+# counts as a pattern at all, and this is one more agreeing decision than that
+# with nothing against it — 0.667. Written as the expression rather than as the
+# decimal so that raising `DEFAULT_MIN_SUPPORT` raises this too. A literal here
+# would silently become the *lower* of the two bars the first time the floor
+# moved, which is the one direction this must never move on its own.
+REFLECTION_MIN_CONFIDENCE = pattern_confidence(DEFAULT_MIN_SUPPORT + 1, 0)
+
+
+def clears_reflection_bar(
+    confidence: float | None, *, threshold: float = REFLECTION_MIN_CONFIDENCE
+) -> bool:
+    """Whether a pattern may be described in prose at all.
+
+    `None` is not a near miss and is not treated as one: a pattern with no
+    confidence recorded is a row whose arithmetic was never run, and generating
+    a sentence about somebody from it would be the whole failure mode in one
+    line.
+    """
+    return confidence is not None and confidence >= threshold
+
+
+def support_needed_for_reflection(
+    supporting: int,
+    contradicting: int,
+    *,
+    min_support: int = DEFAULT_MIN_SUPPORT,
+    threshold: float = REFLECTION_MIN_CONFIDENCE,
+) -> int:
+    """How many *more* agreeing decisions this pattern would need.
+
+    The answer `reflect` prints when nothing clears the bar, and the reason that
+    output is a result rather than a failure: "not enough evidence" is a shrug,
+    and "two more decisions where this belief broke, with none where it held" is
+    something a person can go and look for.
+
+    Counted against the counter-evidence as it stands, because that is the
+    honest question — new agreeing evidence does not delete the decisions that
+    argue the other way. Always terminates: agreement and sufficiency both climb
+    monotonically with `supporting` and the product reaches the 0.95 ceiling,
+    which is above any threshold this function accepts.
+    """
+    if threshold > MAX_CONFIDENCE:
+        raise ValueError(
+            f"no amount of evidence reaches {threshold:.2f}; the ceiling is {MAX_CONFIDENCE:.2f}"
+        )
+    needed = max(supporting, min_support)
+    while pattern_confidence(needed, contradicting, min_support=min_support) < threshold:
+        needed += 1
+    return needed - supporting
+
+
 def is_emittable(
     supporting: int, contradicting: int, *, min_support: int = DEFAULT_MIN_SUPPORT
 ) -> bool:

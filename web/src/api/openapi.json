@@ -3262,6 +3262,151 @@
         "title": "Readiness",
         "type": "object"
       },
+      "ReflectionCitationOut": {
+        "properties": {
+          "decision_id": {
+            "format": "uuid",
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "decision_question": {
+            "title": "Decision Question",
+            "type": "string"
+          },
+          "marker": {
+            "title": "Marker",
+            "type": "integer"
+          },
+          "relation": {
+            "$ref": "#/components/schemas/PatternRelation"
+          }
+        },
+        "required": [
+          "marker",
+          "decision_id",
+          "decision_question",
+          "relation"
+        ],
+        "title": "ReflectionCitationOut",
+        "type": "object"
+      },
+      "ReflectionOut": {
+        "properties": {
+          "acknowledged_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledged At"
+          },
+          "citation_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citation Rate"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/ReflectionCitationOut"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "contradiction_count": {
+            "title": "Contradiction Count",
+            "type": "integer"
+          },
+          "dismissed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dismissed At"
+          },
+          "dismissed_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dismissed Reason"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "pattern_id": {
+            "format": "uuid",
+            "title": "Pattern Id",
+            "type": "string"
+          },
+          "pattern_statement": {
+            "title": "Pattern Statement",
+            "type": "string"
+          },
+          "support_count": {
+            "title": "Support Count",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "uncited": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Uncited",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "pattern_id",
+          "pattern_statement",
+          "text",
+          "citation_rate",
+          "model_id",
+          "generated_at",
+          "acknowledged_at",
+          "dismissed_at",
+          "dismissed_reason",
+          "support_count",
+          "contradiction_count",
+          "citations",
+          "uncited"
+        ],
+        "title": "ReflectionOut",
+        "type": "object"
+      },
       "SearchIn": {
         "properties": {
           "after": {
@@ -5875,6 +6020,150 @@
           }
         },
         "summary": "Dismiss Pattern",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/reflections": {
+      "get": {
+        "description": "Reflections with their citations resolved.\n\nDismissed ones are excluded by default and that default is the feature. \"This\nis wrong about me\" has to mean the sentence stops appearing, not that it\nmoves down the page.",
+        "operationId": "list_reflections_route_reflections_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "include_dismissed",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Dismissed",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ReflectionOut"
+                  },
+                  "title": "Response List Reflections Route Reflections Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Reflections Route",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/reflections/{reflection_id}/acknowledge": {
+      "post": {
+        "description": "Record that it was read. Not agreement, and nothing is weighted by it.",
+        "operationId": "acknowledge_reflection_reflections__reflection_id__acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "reflection_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Reflection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Acknowledge Reflection",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/reflections/{reflection_id}/dismiss": {
+      "post": {
+        "description": "\"This is wrong about me.\" Permanent, and it stops regeneration too.",
+        "operationId": "dismiss_reflection_reflections__reflection_id__dismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "reflection_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Reflection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DismissIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss Reflection",
         "tags": [
           "decisions"
         ]

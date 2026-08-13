@@ -31,7 +31,7 @@ need and the one a generated sentence could never have.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -58,12 +58,6 @@ from memoryos.domain.values import (
 )
 
 logger = structlog.get_logger(__name__)
-
-# Bumped when a detector's rule changes in a way that could change what it
-# emits. Recorded on nothing today — patterns are keyed on (detector,
-# subject_key) — and named here so the next change to a threshold is a decision
-# somebody makes rather than a silent shift in what the corpus claims.
-DETECTOR_VERSION = "v1"
 
 # Confidence bands for the calibration detectors. Quarters, because they are the
 # coarsest split that still separates "I was unsure" from "I was certain", and
@@ -110,6 +104,11 @@ class Candidate:
     # `calibration()` reads these; without them it would have to parse the
     # sentence it is reporting, and a value recovered from a display string is
     # a value that can disagree with the rows printed under it.
+    #
+    # Filled by the calibration detectors and only by them, because they are the
+    # only ones with a reader. Every other detector's numbers are recoverable by
+    # counting its evidence lists, and a dict populated for nobody is a second
+    # copy of those counts that nothing keeps honest.
     metrics: dict[str, float] = field(default_factory=dict)
     # Why this candidate was not emitted, when it was not. Carried so the CLI
     # can report near-misses: on a small corpus the interesting output is
@@ -131,13 +130,6 @@ class Candidate:
             item.decision_id
             for item in self.evidence
             if item.relation is PatternRelation.CONTRADICTS
-        )
-
-    def emittable(self, *, min_support: int) -> bool:
-        if self.rejected_because is not None:
-            return False
-        return is_emittable(
-            len(self.supporting), len(self.contradicting), min_support=min_support
         )
 
     def confidence(self, *, min_support: int) -> float:
@@ -357,11 +349,6 @@ def detect_assumption_patterns(corpus: Corpus) -> list[Candidate]:
                 kind=PatternKind.ASSUMPTION,
                 detector="assumption_group",
                 subject_key=str(group_id),
-                metrics={
-                    "held": float(len(held)),
-                    "evaluated": float(len(evaluated)),
-                    "rate": rate,
-                },
                 statement=(
                     f"{finding}{label!r} held {rate:.0%} of {len(evaluated)} times "
                     f"it was evaluated, across "
@@ -654,8 +641,27 @@ def _calibration_candidate(
 
     # Under-confidence is the mirror image: the cases arguing for it are the
     # ones that *worked* despite a low stated number.
+    #
+    # **Relabelled, not reordered, and that distinction was a live bug.** This
+    # swapped the two local names, which changed the order of `evidence` and
+    # nothing else — every `EvidenceItem` kept the `relation` its caller had
+    # already baked in. `Candidate.supporting` filters on that field, so for
+    # every under-confident band it returned the *failures*: fourteen
+    # assumptions that all held reported zero supporting decisions and fourteen
+    # contradicting ones.
+    #
+    # Nothing failed and nothing was logged. `is_emittable` simply refused every
+    # under-confidence candidate for having no support, and
+    # `ck_patterns_support_positive` would have refused it again — so half of
+    # this detector could not fire at all, and the run that proved it looked
+    # exactly like a run finding nothing. The corpus that exposed it is the one
+    # in the README: "underconfident on assumptions stated 0.75-1.00", 10
+    # decisions, reported as 0 supporting.
     if direction == "under":
-        supporting, contradicting = contradicting, supporting
+        supporting, contradicting = (
+            _relabelled(contradicting, PatternRelation.SUPPORTS),
+            _relabelled(supporting, PatternRelation.CONTRADICTS),
+        )
 
     return Candidate(
         kind=PatternKind.OUTCOME,
@@ -683,6 +689,18 @@ def _calibration_candidate(
             else None
         ),
     )
+
+
+def _relabelled(
+    items: Sequence[EvidenceItem], relation: PatternRelation
+) -> list[EvidenceItem]:
+    """The same evidence, arguing the other way.
+
+    Rebuilt rather than mutated because `EvidenceItem` is frozen, and frozen
+    because a piece of evidence that can change which side it is on after the
+    counts were taken is the shape of the bug above.
+    """
+    return [replace(item, relation=relation) for item in items]
 
 
 def silent_detectors(
@@ -788,11 +806,18 @@ async def discover(
             continue
         support = len(candidate.supporting)
         counter = len(candidate.contradicting)
-        if support < min_support:
-            report.below_support += 1
-            continue
-        if support <= counter:
-            report.outweighed_by_counter_evidence += 1
+        # The gate is `domain.is_emittable` and only that, so the rule lives in
+        # one place. The two branches below decide which *sentence* to count the
+        # refusal under; they do not decide the refusal. Written the other way
+        # round — two inline comparisons that happen to agree with the domain
+        # function — the two could drift, and the drift would be invisible: the
+        # table would gain a pattern the rule forbids and every test of the rule
+        # would still pass.
+        if not is_emittable(support, counter, min_support=min_support):
+            if support < min_support:
+                report.below_support += 1
+            else:
+                report.outweighed_by_counter_evidence += 1
             continue
 
         dates = [
