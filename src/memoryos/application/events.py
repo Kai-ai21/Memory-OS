@@ -40,7 +40,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
-from memoryos.application.ports import JobQueue
+from memoryos.adapters.db.job_queue import enqueue_in
 from memoryos.domain.events import Event, EventKind, RateLimit
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobSpec, JobType
@@ -124,6 +124,101 @@ class LogEventHandler:
         )
 
 
+class ContextEventHandler:
+    """M6.1's handler: assemble context for a trigger, and cache it.
+
+    **Subscribed to three kinds and assembles for two of them, which is the
+    whole precomputation policy in one line.**
+
+    A `MEETING_UPCOMING` is scheduled: something already knows it is coming, the
+    focus is its title, and the work has a deadline it must beat. An
+    `EDITOR_OPENED` is a repository somebody has just started working in, which
+    predicts a session rather than a glance. Both are worth building ahead of
+    being asked.
+
+    A `FILE_FOCUSED` is not. It fires on every file somebody glances at, and
+    assembling for each burns compute continuously to produce output nobody
+    asked for — which is exactly the push-system failure Phase 6 opened by
+    naming. So it is subscribed and deliberately does nothing: the decision is
+    visible in one place, with its reason, rather than being an omission from a
+    set literal that reads like an oversight.
+
+    That leaves `memoryos context` as the on-demand path, which shares the cache
+    with the precomputed ones. A focus that was precomputed is a hit; one that
+    was not is a build. The hit rate across both is the evidence for whether
+    precomputation earns its cost, and it is a column rather than a log line for
+    that reason.
+    """
+
+    name = "context"
+    kinds = frozenset(
+        {EventKind.EDITOR_OPENED, EventKind.FILE_FOCUSED, EventKind.MEETING_UPCOMING}
+    )
+    # The two whose triggers predict a real request. See the class docstring.
+    precompute = frozenset({EventKind.EDITOR_OPENED, EventKind.MEETING_UPCOMING})
+
+    def __init__(self, assemble: "ContextAssembler") -> None:
+        self._assemble = assemble
+
+    async def handle(self, event: Event) -> None:
+        focus = focus_of(event)
+        if event.kind not in self.precompute:
+            logger.info(
+                "context.not_precomputed",
+                event_id=str(event.id),
+                kind=event.kind.value,
+                focus=focus,
+                reason="fires too often to assemble speculatively",
+            )
+            return
+        if not focus:
+            # Nothing to assemble *about*. Logged rather than raised: a payload
+            # without a focus is a client's mistake, and dead-lettering the job
+            # would make one badly-formed plugin look like a broken queue.
+            logger.info(
+                "context.no_focus", event_id=str(event.id), kind=event.kind.value
+            )
+            return
+        await self._assemble(focus, event)
+
+
+class ContextAssembler(Protocol):
+    """What `ContextEventHandler` needs, without importing the engine.
+
+    A Protocol rather than the concrete class, and the reason is the import
+    graph: `application/context_engine.py` builds on search, the graph and the
+    token counter, and having the event bus depend on all of that would make the
+    bus unbuildable in a deployment that only wants to receive events. The
+    container supplies the real one.
+    """
+
+    async def __call__(self, focus: str, trigger: Event) -> None: ...
+
+
+# Where the focus lives in each kind's payload.
+#
+# Declared as data because the alternative is a chain of `if kind is ...` that
+# every new kind extends silently. A payload missing its key yields no focus,
+# and the handler logs that rather than inventing one — a context assembled
+# about "" is a context about the whole corpus, which is the least useful
+# possible answer and the most expensive to compute.
+_FOCUS_KEYS: dict[EventKind, tuple[str, ...]] = {
+    EventKind.EDITOR_OPENED: ("workspace", "path", "root"),
+    EventKind.FILE_FOCUSED: ("path", "file"),
+    EventKind.MEETING_UPCOMING: ("title", "subject"),
+    EventKind.MANUAL: ("focus", "query", "path"),
+}
+
+
+def focus_of(event: Event) -> str:
+    """The text this event is about, or empty when it says nothing."""
+    for key in _FOCUS_KEYS.get(event.kind, ()):
+        value = event.payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 # --------------------------------------------------------------------------
 # The bus
 # --------------------------------------------------------------------------
@@ -138,8 +233,7 @@ class EventBus:
     twice would mean two systems that can disagree about whether a handler ran.
     """
 
-    def __init__(self, queue: JobQueue) -> None:
-        self._queue = queue
+    def __init__(self) -> None:
         self._handlers: dict[str, EventHandler] = {}
 
     def subscribe(self, handler: EventHandler) -> None:
@@ -170,14 +264,28 @@ class EventBus:
             if kind in handler.kinds
         ]
 
-    async def dispatch(self, event: Event) -> list[UUID]:
-        """Enqueue one job per subscribed handler. Returns the job ids created.
+    async def dispatch(self, session: AsyncSession, event: Event) -> list[UUID]:
+        """Enqueue one job per subscribed handler, in the caller's transaction.
 
-        The dedupe key is `(event id, handler name)`, which makes dispatching the
-        same event twice idempotent per handler rather than per event. That
-        matters on the retry path: a POST that stored its event and then failed
-        to enqueue can be dispatched again without doubling the work of the
-        handlers that were already queued.
+        **The session is a parameter and not a convenience.** M6.0 shipped this
+        taking the `JobQueue` port, which opens its own transaction — so the
+        event was committed by one transaction and its jobs by another, leaving a
+        window in which the event exists and the work that processes it does not.
+        A crash inside that window strands the event forever: nothing re-reads
+        the table looking for events without jobs, and `events stats` reports it
+        as "pending", which is exactly what a correctly-queued event looks like.
+
+        That window is the one thing a jobs table exists to not have.
+        `application/sync.py` says so in its own comment — "this is the entire
+        reason the queue is a table rather than a broker: there is no window in
+        which the memory exists and the job that processes it does not" — and
+        M6.0, the first milestone with a new writer, opened one anyway.
+
+        So this enqueues through `enqueue_in`, the function that exists for
+        precisely this, and the caller commits both or neither.
+
+        The dedupe key is `(event id, handler name)`, which makes a re-dispatch
+        idempotent per handler rather than per event.
 
         An event nobody subscribes to returns an empty list and is *not* marked
         processed. That is the honest state — nothing was done about it — and the
@@ -192,12 +300,13 @@ class EventBus:
 
         enqueued: list[UUID] = []
         for handler in handlers:
-            job_id = await self._queue.enqueue(
+            job_id = await enqueue_in(
+                session,
                 JobSpec(
                     job_type=JobType.HANDLE_EVENT,
                     payload={"event_id": str(event.id), "handler": handler.name},
                     dedupe_key=f"{event.id}:{handler.name}",
-                )
+                ),
             )
             if job_id is not None:
                 enqueued.append(job_id)
@@ -264,7 +373,7 @@ async def receive(
         dedupe_key=dedupe_key,
     )
 
-    stored, created = await _store(sessions, event)
+    stored, created, jobs = await _store_and_dispatch(sessions, bus, event)
     if not created:
         # The tenth keystroke. Not an error and not a new unit of work: the
         # first delivery's job is still pending, and re-dispatching would only
@@ -277,7 +386,6 @@ async def receive(
         )
         return Received(event=stored, created=False)
 
-    jobs = await bus.dispatch(stored)
     return Received(event=stored, created=True, jobs=jobs)
 
 
@@ -313,10 +421,22 @@ async def _enforce_rate_limit(
         raise EventRateLimited(source, limit)
 
 
-async def _store(
-    sessions: async_sessionmaker[AsyncSession], event: Event
-) -> tuple[Event, bool]:
-    """Insert the event, or return the unprocessed one it collided with.
+async def _store_and_dispatch(
+    sessions: async_sessionmaker[AsyncSession], bus: EventBus, event: Event
+) -> tuple[Event, bool, list[UUID]]:
+    """Insert the event and enqueue its jobs, or neither.
+
+    **One transaction, which is the whole point.** Either the event and every job
+    that processes it are committed together, or nothing is. There is no state in
+    which an event is stored with no work queued against it, so nothing needs to
+    reconcile one later — and `events stats` reporting "pending" means one thing
+    rather than two.
+
+    The `flush()` is load-bearing and is not tidiness. Without it the INSERT is
+    deferred to commit time, so the unique index would fire *after* the jobs were
+    enqueued — and a duplicate keystroke would roll back having already done the
+    work of deciding it was a duplicate. Flushing forces the constraint to
+    arbitrate first.
 
     The collision is caught rather than checked for. A `SELECT` first would be a
     race: two deliveries of the same keystroke can both find nothing and both
@@ -336,14 +456,16 @@ async def _store(
     try:
         async with sessions.begin() as session:
             session.add(row)
+            await session.flush()
+            jobs = await bus.dispatch(session, event)
     except IntegrityError:
         existing = await _pending_with_key(sessions, event.kind, event.dedupe_key)
         if existing is None:
             # The index did not fire, so something else did. Nothing here can
             # make that a duplicate.
             raise
-        return existing, False
-    return event, True
+        return existing, False, []
+    return event, True, jobs
 
 
 async def _pending_with_key(
@@ -462,24 +584,6 @@ class EventStats:
         total = sum(count for _, count in weighted)
         return sum(mean * count for mean, count in weighted) / total
 
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "total": self.total,
-            "processed": self.processed,
-            "pending": self.pending,
-            "mean_latency_seconds": self.mean_latency_seconds,
-            "by_kind": {
-                row.kind.value: {
-                    "total": row.total,
-                    "processed": row.processed,
-                    "pending": row.pending,
-                    "mean_latency_seconds": row.mean_latency_seconds,
-                    "mean_delivery_lag_seconds": row.mean_delivery_lag_seconds,
-                }
-                for row in self.by_kind
-            },
-        }
-
 
 async def stats(sessions: async_sessionmaker[AsyncSession]) -> EventStats:
     """Counts and latencies per kind, computed in the database.
@@ -557,14 +661,14 @@ async def tail(
     return [_to_event(row) for row in reversed(rows)]
 
 
-def build_default_bus(queue: JobQueue, handlers: Sequence[EventHandler] | None = None) -> EventBus:
+def build_default_bus(handlers: Sequence[EventHandler] | None = None) -> EventBus:
     """The bus a worker and an API process both build.
 
     Both build it from the same function on purpose: the API dispatches by
     handler *name* and the worker looks that name up, so two lists that could
     drift would show up as jobs no worker can run.
     """
-    bus = EventBus(queue)
+    bus = EventBus()
     for handler in handlers if handlers is not None else [LogEventHandler()]:
         bus.subscribe(handler)
     return bus

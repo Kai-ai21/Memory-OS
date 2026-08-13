@@ -31,6 +31,7 @@ from memoryos.application import (
     assumption_groups,
     assumption_suggest,
     assumptions,
+    context_engine,
     decision_suggest,
     decisions,
     events,
@@ -2611,6 +2612,136 @@ async def run_patterns_calibration(settings: Settings) -> int:
 
 
 # --------------------------------------------------------------------------
+# Context
+# --------------------------------------------------------------------------
+
+
+def _print_context(assembled: context_engine.AssembledContext, *, explain: bool) -> None:
+    served = "cache" if assembled.cached else "built"
+    print(
+        f"{len(assembled.items)} item(s), {assembled.tokens_used} of "
+        f"{assembled.token_budget} tokens, {served} in {assembled.duration_ms}ms"
+    )
+
+    if explain and assembled.cached:
+        # Said rather than silently omitted. The cache stores the items, not the
+        # arithmetic that chose them, so `--explain` on a hit can show the
+        # per-item routes and not the per-source counts — and a reader who sees
+        # one section vanish should be told why rather than left to infer it.
+        print(
+            "\nserved from cache: the per-item routes below are stored, the "
+            "per-source\ncounts and the rejection list are not. Re-run with "
+            "--no-cache to see them."
+        )
+
+    if explain and assembled.sources:
+        # Which phase proposed how much, before fusion. The interesting number
+        # on a young corpus is usually the source that proposed nothing.
+        print("\nwhat each phase proposed")
+        for report in assembled.sources:
+            print(
+                f"  {report.source.value:<10} {report.proposed:>3} candidate(s)"
+                f"  {report.duration_ms:>4}ms"
+            )
+        print(f"  {'fused':<10} {assembled.candidates:>3} distinct")
+
+    for item in assembled.items:
+        print()
+        print("-" * 78)
+        print(f"[{item.position}] {item.title}   ({item.category.value})")
+        if explain:
+            # The whole point of --explain: which route found this, where it
+            # ranked there, and what diversity did about it. Two sources on one
+            # line is the case worth seeing — it means two independent routes
+            # agreed, which is why the item is as high as it is.
+            routes = ", ".join(
+                f"{source.value}#{rank}" for source, rank in sorted(
+                    item.sources.items(), key=lambda pair: pair[0].value
+                )
+            )
+            print(
+                f"     found by: {routes}   fused {item.relevance:.4f}   "
+                f"redundancy {item.redundancy:.2f}   {item.tokens} tokens"
+            )
+        for line in textwrap.wrap(item.text, width=76)[:12]:
+            print(f"  {line}")
+
+    if explain and assembled.rejected:
+        # What did not fit, and why. On a tight budget this is the useful half:
+        # "eight items" alone does not distinguish a rich corpus from an empty
+        # one, and a long `category_full` list means the caps are doing work.
+        print()
+        print("-" * 78)
+        counts: dict[str, int] = {}
+        for _, reason in assembled.rejected:
+            counts[reason.value] = counts.get(reason.value, 0) + 1
+        summary = ", ".join(f"{count} {reason}" for reason, count in sorted(counts.items()))
+        print(f"rejected: {summary}")
+
+
+async def run_context(
+    settings: Settings,
+    *,
+    focus: str,
+    budget: int,
+    max_items: int,
+    explain: bool,
+    use_cache: bool,
+) -> int:
+    """Assemble context for one focus and print it.
+
+    The on-demand half of M6.1. It shares a cache with the precomputed half, so
+    a focus a `MEETING_UPCOMING` already built is served from the same row this
+    would have written — which is what makes the hit rate mean anything.
+    """
+    container = Container.build(settings)
+    try:
+        assembled = await container.assemble_context()(
+            context_engine.ContextRequest(
+                focus=focus, token_budget=budget, max_items=max_items
+            ),
+            use_cache=use_cache,
+        )
+    finally:
+        await container.dispose()
+
+    if not assembled.items:
+        print(f"nothing to assemble for {focus!r}")
+        print(
+            "\nEvery source returned nothing, or nothing fitted the budget. "
+            "Check that\nthe corpus is ingested and embedded: `memoryos stats`."
+        )
+        return 0
+    _print_context(assembled, explain=explain)
+    return 0
+
+
+async def run_context_cache(settings: Settings) -> int:
+    """The number that decides whether precomputation earns its cost."""
+    container = Container.build(settings)
+    try:
+        stats = await context_engine.cache_stats(container.database.session_factory)
+    finally:
+        await container.dispose()
+
+    print(f"entries        {stats.entries} ({stats.live} unexpired)")
+    print(f"hits           {stats.hits}")
+    print(f"tokens stored  {stats.tokens}")
+    rate = stats.hit_rate
+    if rate is None:
+        print("\nNothing cached yet, so there is no hit rate.")
+    else:
+        print(f"\nhit rate       {rate:.0%} of {stats.entries + stats.hits} request(s)")
+        print(
+            "\nA low rate means context is being built for triggers nobody reads, "
+            "which is\nthe push-system failure this phase opened by naming. "
+            "Precomputation is\nrestricted to scheduled and session-opening "
+            "triggers for that reason."
+        )
+    return 0
+
+
+# --------------------------------------------------------------------------
 # Events
 # --------------------------------------------------------------------------
 
@@ -3895,6 +4026,43 @@ def build_parser() -> argparse.ArgumentParser:
     # The verb the milestone names, kept as its own top-level command rather than
     # `patterns reflect`: generating prose about somebody is a different act from
     # counting their decisions, and it should not read as a subcommand of it.
+    context_parser = commands.add_parser(
+        "context", help="assemble the context for one focus, and say what fits"
+    )
+    context_parser.add_argument("focus", help="a file path, a meeting title, or free text")
+    context_parser.add_argument(
+        "--budget",
+        type=int,
+        default=context_engine.DEFAULT_TOKEN_BUDGET,
+        help=(
+            f"tokens of context, counted with the real tokenizer "
+            f"(default {context_engine.DEFAULT_TOKEN_BUDGET})"
+        ),
+    )
+    context_parser.add_argument(
+        "--max-items",
+        dest="max_items",
+        type=int,
+        default=context_engine.DEFAULT_MAX_ITEMS,
+        help=f"how many items at most (default {context_engine.DEFAULT_MAX_ITEMS})",
+    )
+    context_parser.add_argument(
+        "--explain",
+        action="store_true",
+        help="which source proposed each item, its rank there, and what diversity did",
+    )
+    context_parser.add_argument(
+        "--no-cache",
+        dest="no_cache",
+        action="store_true",
+        help="assemble from scratch, and do not store the result",
+    )
+
+    context_cache_parser = commands.add_parser(
+        "context-cache", help="what the context cache holds, and its hit rate"
+    )
+    context_cache_parser.set_defaults(context_cache=True)
+
     events_parser = commands.add_parser(
         "events", help="the external event stream, and how fast it is drained"
     )
@@ -4482,6 +4650,21 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.patterns_command == "calibration":
             return asyncio.run(run_patterns_calibration(settings))
+
+    if args.command == "context":
+        return asyncio.run(
+            run_context(
+                settings,
+                focus=args.focus,
+                budget=args.budget,
+                max_items=args.max_items,
+                explain=args.explain,
+                use_cache=not args.no_cache,
+            )
+        )
+
+    if args.command == "context-cache":
+        return asyncio.run(run_context_cache(settings))
 
     if args.command == "events":
         if args.events_command == "tail":

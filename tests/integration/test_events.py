@@ -20,7 +20,7 @@ would be asserting them somewhere they are not enforced.
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -31,10 +31,12 @@ from memoryos.adapters.db import models
 from memoryos.adapters.db.job_queue import PostgresJobQueue
 from memoryos.api.app import create_app
 from memoryos.application.events import (
+    ContextEventHandler,
     EventBus,
     EventRateLimited,
     LogEventHandler,
     build_default_bus,
+    focus_of,
     load,
     mark_processed,
     receive,
@@ -74,7 +76,7 @@ class RecordingHandler:
 
 
 async def a_bus(sessions: async_sessionmaker[AsyncSession], *handlers: Any) -> EventBus:
-    bus = EventBus(PostgresJobQueue(sessions))
+    bus = EventBus()
     for handler in handlers:
         bus.subscribe(handler)
     return bus
@@ -290,7 +292,8 @@ async def test_dispatching_twice_does_not_double_the_work(harness: Harness) -> N
         harness.sessions, bus, kind=EventKind.MANUAL, source="cli"
     )
 
-    again = await bus.dispatch(result.event)
+    async with harness.sessions.begin() as session:
+        again = await bus.dispatch(session, result.event)
 
     assert again == []
     assert await count_jobs(harness.sessions) == 1
@@ -305,7 +308,7 @@ async def test_an_event_nobody_subscribes_to_is_stored_and_stays_pending(
     mean two things at once, and dropping it would lose the only record that a
     kind is arriving with nothing behind it.
     """
-    bus = EventBus(PostgresJobQueue(harness.sessions))
+    bus = EventBus()
 
     result = await receive(
         harness.sessions, bus, kind=EventKind.FILE_FOCUSED, source="vscode"
@@ -323,7 +326,7 @@ def test_two_handlers_cannot_share_a_name() -> None:
     # A job payload names the handler that should run it. Two under one name is a
     # payload that no longer identifies any code, and the failure would show up
     # as a worker silently doing the wrong work.
-    bus = EventBus(queue=None)  # type: ignore[arg-type]
+    bus = EventBus()
     bus.subscribe(RecordingHandler("log"))
     with pytest.raises(ValueError, match="already subscribed"):
         bus.subscribe(RecordingHandler("log"))
@@ -427,7 +430,7 @@ async def test_a_handler_this_build_does_not_have_fails_permanently(
     queue = PostgresJobQueue(harness.sessions)
     job = await queue.claim("worker-a", timedelta(minutes=1))
     assert job is not None
-    older = EventBus(queue)
+    older = EventBus()
     with pytest.raises(PermanentError, match="no handler"):
         await run_job(harness.sessions, older, job)
     # And the event is untouched, so nothing reports it as dealt with.
@@ -505,12 +508,14 @@ async def test_the_endpoint_stores_dispatches_and_reports_the_duplicate(
 
     assert first.status_code == 202
     assert first.json()["created"] is True
-    assert first.json()["jobs"] == 1
+    # One job per subscribed handler, and the default bus subscribes two: M6.0's
+    # log handler and M6.1's context handler, both of which take file focuses.
+    assert first.json()["jobs"] == 2
     # 200 rather than 202: nothing was accepted for processing the second time.
     assert second.status_code == 200
     assert second.json()["created"] is False
     assert second.json()["id"] == first.json()["id"]
-    assert await count_jobs(harness.sessions) == 1
+    assert await count_jobs(harness.sessions) == 2
 
 
 async def test_an_absent_occurred_at_becomes_received_at(client: AsyncClient) -> None:
@@ -598,7 +603,7 @@ async def test_the_default_bus_subscribes_the_log_handler(harness: Harness) -> N
     # The API and the worker both build the bus from this function, because the
     # API writes a handler name into a payload the worker looks up. Two lists
     # that could drift would show up as jobs no worker can run.
-    bus = build_default_bus(PostgresJobQueue(harness.sessions))
+    bus = build_default_bus()
 
     assert bus.handler("log") is not None
     assert {handler.name for handler in bus.subscribers(EventKind.MEETING_UPCOMING)} == {
@@ -625,3 +630,153 @@ async def test_the_worker_this_project_ships_can_run_a_handle_event_job(
         assert JobType.HANDLE_EVENT.value in container.registry().registered_types()
     finally:
         await container.dispose()
+
+
+async def test_an_event_is_never_stored_without_the_work_that_processes_it(
+    harness: Harness,
+) -> None:
+    """The window M6.0 shipped, closed.
+
+    That milestone stored the event in one transaction and enqueued its jobs in
+    another, so a crash in between left an event nothing would ever process —
+    permanently, because nothing re-reads the table looking for events without
+    jobs, and `events stats` reports such an event as "pending", which is exactly
+    what a correctly-queued event looks like.
+
+    `application/sync.py` states the invariant M6.0 broke in its own comment:
+    "this is the entire reason the queue is a table rather than a broker: there
+    is no window in which the memory exists and the job that processes it does
+    not, or the reverse."
+    """
+
+    class BrokenBus(EventBus):
+        async def dispatch(self, session: Any, event: Event) -> list[UUID]:
+            raise RuntimeError("the queue went away mid-dispatch")
+
+    bus = BrokenBus()
+    bus.subscribe(RecordingHandler("recorder"))
+
+    with pytest.raises(RuntimeError, match="mid-dispatch"):
+        await receive(harness.sessions, bus, kind=EventKind.MANUAL, source="cli")
+
+    # Neither the event nor any job. The alternative — an event with no job — is
+    # the state that cannot be detected after the fact.
+    async with harness.sessions() as session:
+        assert (
+            await session.execute(
+                select(func.count()).select_from(models.ExternalEvent)
+            )
+        ).scalar_one() == 0
+    assert await count_jobs(harness.sessions) == 0
+
+
+async def test_a_duplicate_rolls_back_before_enqueueing_anything(
+    harness: Harness,
+) -> None:
+    # The `flush()` in `_store_and_dispatch` is what makes this true. Without it
+    # the INSERT is deferred to commit, so the unique index fires *after* the
+    # jobs are enqueued and the transaction rolls back having already decided the
+    # duplicate was work.
+    bus = await a_bus(harness.sessions, RecordingHandler("recorder"))
+    first = await receive(
+        harness.sessions, bus, kind=EventKind.FILE_FOCUSED,
+        source="vscode", dedupe_key="a.py",
+    )
+    assert len(first.jobs) == 1
+
+    second = await receive(
+        harness.sessions, bus, kind=EventKind.FILE_FOCUSED,
+        source="vscode", dedupe_key="a.py",
+    )
+
+    assert not second.created
+    assert second.jobs == []
+    assert await count_jobs(harness.sessions) == 1
+
+
+# --------------------------------------------------------------------------
+# M6.1's handler, and the precomputation policy
+# --------------------------------------------------------------------------
+
+
+async def test_context_is_precomputed_for_scheduled_triggers_only(
+    harness: Harness,
+) -> None:
+    """The whole precomputation policy, asserted rather than described.
+
+    A meeting is scheduled and an editor opening predicts a session; both are
+    worth building ahead of being asked. A file focus fires on every file
+    somebody glances at, and assembling for each burns compute continuously to
+    produce output nobody asked for — which is the push-system failure Phase 6
+    opened by naming.
+    """
+    assembled: list[str] = []
+
+    async def assemble(focus: str, trigger: Event) -> None:
+        assembled.append(focus)
+
+    handler = ContextEventHandler(assemble)
+
+    await handler.handle(
+        Event(
+            id=uuid4(),
+            kind=EventKind.MEETING_UPCOMING,
+            source="calendar",
+            payload={"title": "phase 6 review"},
+        )
+    )
+    await handler.handle(
+        Event(
+            id=uuid4(),
+            kind=EventKind.EDITOR_OPENED,
+            source="vscode",
+            payload={"workspace": "Memory-OS"},
+        )
+    )
+    await handler.handle(
+        Event(
+            id=uuid4(),
+            kind=EventKind.FILE_FOCUSED,
+            source="vscode",
+            payload={"path": "src/memoryos/cli.py"},
+        )
+    )
+
+    assert assembled == ["phase 6 review", "Memory-OS"]
+    # And it is still subscribed to the one it skips, so the decision is visible
+    # in one place with its reason rather than being an omission from a set.
+    assert EventKind.FILE_FOCUSED in handler.kinds
+
+
+async def test_a_payload_with_no_focus_assembles_nothing(harness: Harness) -> None:
+    # A context assembled about "" is a context about the whole corpus, which is
+    # the least useful possible answer and the most expensive to compute. Logged
+    # rather than raised: a malformed payload is one client's mistake, and
+    # dead-lettering would make it look like a broken queue.
+    calls: list[str] = []
+
+    async def assemble(focus: str, trigger: Event) -> None:
+        calls.append(focus)
+
+    await ContextEventHandler(assemble).handle(
+        Event(
+            id=uuid4(),
+            kind=EventKind.MEETING_UPCOMING,
+            source="calendar",
+            payload={"organiser": "someone"},
+        )
+    )
+
+    assert calls == []
+
+
+def test_the_focus_is_read_from_the_payload_key_each_kind_uses() -> None:
+    for kind, payload, expected in (
+        (EventKind.FILE_FOCUSED, {"path": "a.py"}, "a.py"),
+        (EventKind.EDITOR_OPENED, {"workspace": "  repo  "}, "repo"),
+        (EventKind.MEETING_UPCOMING, {"subject": "standup"}, "standup"),
+        (EventKind.MANUAL, {"focus": "chunking"}, "chunking"),
+        (EventKind.MANUAL, {"unrelated": "x"}, ""),
+    ):
+        event = Event(id=uuid4(), kind=kind, source="test", payload=payload)
+        assert focus_of(event) == expected

@@ -30,9 +30,11 @@ measurement of how little decision-shaped content this corpus actually holds,
 [Reflections](#reflections) and the
 [Phase 5 retrospective](#phase-5-retrospective).
 **Phase 6 begun**: M6.0 (the event bus and triggers) inverts the direction — an
-event arrives and the system queues work nobody asked for. See
-[Events](#events), which measures whether a Postgres queue is fast enough to
-push through rather than guessing.
+event arrives and the system queues work nobody asked for — and M6.1 (context
+assembly) puts every earlier phase behind that trigger and decides what fits.
+See [Events](#events), which measures whether a Postgres queue is fast enough to
+push through rather than guessing, and [Context](#context), which is a budgeting
+problem wearing a retrieval problem's clothes.
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -151,6 +153,7 @@ such table fails the build rather than losing its rows in a cascade nobody watch
 | `reflections`      | M5.4. A pattern in prose. The only row a language model wrote. |
 | `reflection_citations` | Each `[n]` in that prose, frozen to the decision it points at. |
 | `events`           | M6.0. Something that happened outside. Operational, discardable. |
+| `context_cache`    | M6.1. An assembled context, keyed on a corpus fingerprint.      |
 
 Two design points carry the most weight:
 
@@ -3232,9 +3235,18 @@ dead-letters on its own, and carries its own error and traceback in a row anybod
 can query. **One handler failing cannot block another, because they were never in
 the same unit of work.**
 
-The job's dedupe key is `(event id, handler name)`, so dispatching an event twice
-is idempotent per handler — a POST that stored its event and then failed to
-enqueue can be retried without doubling the work already queued.
+**The event and its jobs commit in one transaction**, which is the property a
+jobs table exists to have and which M6.0 shipped without. Storing the event in
+one transaction and enqueueing in another leaves a window where the event exists
+and the work that processes it does not — and a crash inside it strands the event
+forever, because nothing re-reads the table looking for events without jobs and
+`events stats` reports one as "pending", which is what a correctly-queued event
+looks like too. `application/sync.py` had stated the invariant since M1.3: *"this
+is the entire reason the queue is a table rather than a broker: there is no
+window in which the memory exists and the job that processes it does not."*
+
+The job's dedupe key is `(event id, handler name)`, so a re-dispatch is
+idempotent per handler rather than per event.
 
 `processed_at` is written by the job, never by dispatch, and every handler job
 writes it unconditionally so the stored value is the *last* handler to finish.
@@ -3327,6 +3339,224 @@ The number that would change this answer is not throughput. It is a handler that
 must run in under 100ms — a completion inline in an editor, say — where a fifth
 of a second of queue plus a poll interval is the whole budget. Nothing in Phase 6
 as planned is that.
+
+## Context
+
+M6.1 assembles, for one focus, the context a person would want — and decides what
+fits.
+
+```bash
+memoryos context src/memoryos/application/search.py --explain
+memoryos context "chunking strategy" --budget 4000 --max-items 12
+memoryos context-cache
+```
+
+### Why this is a budgeting problem
+
+Five phases went into finding relevant material. **Retrieval returning fifty
+relevant memories is useless when eight fit**, and getting *which eight* wrong
+wastes all of it. Everything below is about the choosing.
+
+Four sources, one fusion:
+
+| | |
+| --- | --- |
+| Phase 2 | hybrid retrieval on the focus text |
+| Phase 3 | the graph neighbourhood of what retrieval found |
+| Phase 4 | the focused item by name, then recent activity |
+| Phase 5 | decisions whose recorded evidence cites what the others found |
+
+Fused with RRF, exactly as M2.2 fuses vector and keyword — **and that is also how
+deduplication happens.** A memory arriving from retrieval *and* from the graph is
+one key in two rankings: one entry, both contributions summed, ranked higher for
+the agreement. Third-of-three plus first-of-two beats a single first place
+(1/63 + 1/61 against 1/61), which is the same "agreement outweighs enthusiasm"
+property rank fusion was chosen for, applied to four rankings instead of two.
+
+### Diversity, and the value that made it real
+
+Naive top-k returns k variations of one idea. MMR subtracts a penalty for
+similarity to what is already chosen — and **the first value tried, λ = 0.7, does
+not change a single outcome.** Work the case it exists for: the top of the
+ranking is near-duplicates of one file at normalised relevance 0.96, a genuinely
+different perspective sits at 0.50, and the duplicate's similarity to what is
+chosen is 0.90.
+
+```
+lambda 0.7 -> duplicate 0.402  vs  distinct 0.350   duplicate still wins
+lambda 0.6 -> duplicate 0.216  vs  distinct 0.300   distinct wins
+lambda 0.5 -> duplicate 0.030  vs  distinct 0.250   distinct wins
+```
+
+At 0.7 the penalty is capped at 0.3 while the relevance gap it must overcome is
+0.7 times whatever normalisation produced, so MMR only reorders items that were
+already near-tied. "Trade a little relevance for coverage" is an even trade, and
+0.5 is where the trade is actually made. A test pins it, so a later tidy-up
+cannot raise it back.
+
+**Category caps are the rule MMR cannot express.** Twelve code files can be
+mutually dissimilar by cosine and still be a worse answer than nine files, a
+decision and a discussion — MMR only knows what the embedder knows. No category
+may take more than half the items, as a fraction rather than a count so the cap
+means the same thing at every budget, with a floor of one so the category most
+likely to round away (decisions, of which there are few) stays reachable.
+
+### An item that does not fit is dropped whole
+
+M2.6's rule, and it matters more here: a truncated memory may lose the very thing
+that made it relevant and nothing downstream can tell it was cut. The loop
+continues past a too-large item rather than stopping, because a shorter item
+further down may still fit. Counted with the real tokenizer, never estimated.
+
+**And the same rule applies to which end of a memory is shown.** The first
+version of this rendered each item from the head of its memory, which for a code
+file is a screen of imports — the function that made it relevant three screens
+down. That is the same defect as truncation arrived at from the other end, so an
+item is rendered from the *chunk that matched*, with M2.5's overlap prefix
+removed. Only the temporal source proposes memories with no matched chunk; those
+fall back to the head, which is honest rather than a guess.
+
+### Caching, and what it is keyed on
+
+```
+context_cache(cache_key UNIQUE, focus, payload JSONB, token_count,
+              built_at, expires_at, hit_count)
+```
+
+**The only cache in this schema whose entries can be wrong rather than merely
+stale.** `embedding_cache` is content-addressed, so a retained entry is correct
+by construction. A context is a function of the whole corpus: ingest one file and
+every context built before it is a confident answer whose evidence has moved, and
+nothing about the answer looks different.
+
+So the key is the focus, the budget *and* a fingerprint of the corpus. A sync
+changes the fingerprint, every key changes with it, and no writer has to know
+which focuses its change affected. Deliberately coarse — a per-focus dependency
+set would have to be maintained by every writer in the system, and getting it
+wrong serves context omitting the file somebody just edited. Over-invalidation
+costs a re-assembly of about a second.
+
+The budget is in the key because a 4,000-token context is not a truncation of a
+1,000-token one: different items were selected, not fewer.
+
+**Precomputation is restricted rather than speculative.** `ContextEventHandler`
+subscribes to three event kinds and assembles for two. A `MEETING_UPCOMING` is
+scheduled and an `EDITOR_OPENED` predicts a session; both are worth building
+ahead of being asked. A `FILE_FOCUSED` fires on every file glanced at, and
+assembling for each burns compute continuously to produce output nobody reads —
+which is the push-system failure this phase opened by naming. It stays subscribed
+and deliberately does nothing, so the decision is visible in one place with its
+reason rather than being an omission from a set literal.
+
+### Three defects only running it could find
+
+**A superseded version crowded out the file it was a copy of.** M1.4 deletes the
+chunks of every superseded version, so an old version has *no embedding* — which
+means MMR cannot measure its redundancy, scores it a flat zero penalty, and
+systematically promotes it over the live text. The current `search.py` lost its
+own context to last week's copy. Superseded versions are now excluded outright;
+version history is M4.2's view, where it reads as history instead of being
+mistaken for the file.
+
+**Decisions took five of twelve slots on the same mechanism.** A decision has no
+embedding either, so zero redundancy made it maximally novel by default. Treating
+a missing vector as a zero vector would have been the same free novelty with an
+extra step, so the gap is closed instead: a decision's question and choice are
+embedded like anything else, and it competes on measured similarity. It dropped
+from five slots to three.
+
+**Decision evidence pinned to a memory id stopped resolving after a re-sync.** A
+memory id names one *version*; re-ingest the file and the id changes, so the
+decision silently vanishes from the context of the file it is about — which is
+what happened to the RRF decision. `decision_evidence` carries
+`(source_name, external_key)` beside the id for exactly this, the fix M1.7 wrote
+down for `query_judgements`, and this is the first thing outside a replay to read
+those columns.
+
+### What it produced, and whether it is what I wanted
+
+Five real focuses, warm process, 4,000-token budget:
+
+```
+FOCUS: src/memoryos/application/events.py        11 items, 2227 tokens, 935ms
+  proposed: retrieval=30, graph=0, temporal=30, decisions=4
+  [1] src/memoryos/cli.py            retrieval#3, temporal#3    red=0.00
+  [2] src/memoryos/application/events.py  retrieval#6, temporal#1  red=0.60
+  [3] README.md                      retrieval#4, temporal#9    red=0.62
+  [4] tests/integration/test_events.py    retrieval#1, temporal#10  red=0.78
+  [5] tests/unit/test_replay_rules.py     retrieval#14, temporal#11 red=0.74
+  [6] src/memoryos/adapters/db/models.py  retrieval#16, temporal#7  red=0.79
+  [7] src/memoryos/api/routes/events.py   retrieval#2, temporal#22  red=0.82
+  [8-11] four decisions
+```
+
+```
+FOCUS: chunking strategy                          12 items, 2691 tokens, 1546ms
+  proposed: retrieval=30, graph=0, temporal=30, decisions=8
+  [1] src/memoryos/application/context_engine.py  retrieval#7, temporal#1
+  [2] README.md                                   retrieval#4, temporal#9
+  [3] decision: Where to split an oversized definition        decisions#3
+  [4] src/memoryos/cli.py                         temporal#2
+  [5] src/memoryos/application/events.py          temporal#4
+  [6] decision: What do a chunk's char_start and char_end index into
+  [7] decision: What stores the vectors — Postgres or a dedicated index
+  ...
+```
+
+**The honest judgement: two of five are what I would have assembled by hand, two
+are close, one is not.**
+
+`events.py` is right. Every file I would have opened is there — the module, its
+route, its tests, the classification test that constrains it — and the ordering
+is defensible. `chunking strategy` is right in a harder way: it found the two
+decisions actually about chunk boundaries, which no keyword match would have
+produced, because the link is recorded evidence rather than similarity.
+
+`context_engine.py` and `events.py`-adjacent focuses are close: the files are
+right and the decisions are generic. `domain/patterns.py` is the failure — it
+returned decision-adjacent files (`seed_decisions.py`, `routes/decisions.py`)
+rather than the arithmetic, because the focus is a *path* and a path embeds
+badly. The file itself reaches the context through its key, not its content.
+
+**The systematic weakness is that a handful of decisions appear everywhere.**
+"What stores the vectors" and "Which embedding model" cite the README and
+`cli.py`, which rank high for almost any focus. Ranking decisions by *which*
+memories they cite rather than how many helped — the chunk-boundary decisions
+now lead on a chunking focus — but did not eliminate it, and on this corpus it
+cannot: sixteen decisions cite a few dozen memories, and the popular ones are
+popular in every context.
+
+### Latency, and the cache
+
+| | |
+| --- | --- |
+| cold process, model load included | 18–21s |
+| **warm, per assembly** | **0.9–1.8s** |
+| retrieval's share, warm | 280–510ms |
+| graph, temporal, decisions | 2–9ms each |
+| served from cache | **39–53ms** |
+| cache hit rate, 7 requests | 29% |
+
+Retrieval is the assembly. Everything else is rounding error, which is worth
+knowing before optimising the part that is easy to see. The cold figure is the
+embedder and the cross-encoder loading — a worker pays it once, a CLI invocation
+pays it every time.
+
+**29% is too low to justify precomputation on its own**, and it is measured over
+seven requests, which is not enough to conclude anything. The number that matters
+is whether a precomputed context is ever *read*, and answering it needs the
+client integrations M6.2 builds. What can be said now: a hit costs 40ms against a
+second, so the cache pays for itself on any focus asked twice — and the
+fingerprint means it can never pay by being wrong.
+
+### The graph contributed nothing, and that is a corpus fact
+
+`graph=0` on every focus. `graph_expand.no_seed_entities` says why: entity
+extraction has not been run over this corpus, so the seed memories mention no
+entities and the expansion has nothing to walk. It is wired, it degrades to an
+empty ranking exactly as M3.5 designed, and fusion treats that as "this retriever
+found nothing" rather than as a failure. The right reading is that Phase 3's
+contribution to context is **unmeasured**, not zero.
 
 ## Migrations
 

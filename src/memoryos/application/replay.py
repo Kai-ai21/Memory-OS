@@ -316,6 +316,13 @@ DERIVED_TABLES: tuple[str, ...] = (
 # foreign key to the other today — the order is a property the truncation relies
 # on, so it is maintained rather than assumed absent.
 OPERATIONAL_TABLES: tuple[str, ...] = (
+    # M6.1's cache, and the clearest member this set has. Nothing is rebuilt
+    # from a cached context, no replay reproduces one, nobody wrote it, and
+    # dropping the table costs a re-assembly of a few hundred milliseconds. It
+    # is also the one table where *keeping* stale rows would be actively wrong —
+    # a context is a function of the whole corpus, and a replay changes the
+    # corpus fingerprint every key is built from anyway.
+    "context_cache",
     "events",
     "jobs",
 )
