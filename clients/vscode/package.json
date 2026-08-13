@@ -1,0 +1,66 @@
+{
+  "name": "memoryos",
+  "displayName": "Memory OS",
+  "description": "Context for the file you are looking at, from your own corpus. Local only.",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "type": "webview",
+          "id": "memoryos.context",
+          "name": "Memory OS",
+          "icon": "$(book)"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Memory OS",
+      "properties": {
+        "memoryos.apiUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "The local API. There is no authentication; see the README."
+        },
+        "memoryos.emitEvents": {
+          "type": "boolean",
+          "default": true,
+          "description": "POST file_focused when the active editor changes."
+        },
+        "memoryos.tokenBudget": {
+          "type": "number",
+          "default": 4000,
+          "description": "Tokens of context to ask for."
+        },
+        "memoryos.webUrl": {
+          "type": "string",
+          "default": "http://localhost:5173",
+          "description": "Where clicking an item opens it. The web UI from `make web`."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "node --test out/test/*.test.js",
+    "pretest": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.7.0"
+  }
+}

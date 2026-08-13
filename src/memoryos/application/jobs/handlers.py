@@ -7,6 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.blobs.filesystem import BlobNotFound
 from memoryos.adapters.parsers.registry import build_default_registry as build_parser_registry
+from memoryos.application.context_engine import (
+    DEFAULT_MAX_ITEMS,
+    DEFAULT_TOKEN_BUDGET,
+    AssembleContext,
+    ContextRequest,
+)
 from memoryos.application.embed import EmbedMemory
 from memoryos.application.events import EventBus, mark_processed
 from memoryos.application.events import load as load_event
@@ -160,6 +166,44 @@ def make_event_handler(
     return handle_event
 
 
+def make_context_handler(assemble: "AssembleContext") -> Handler:
+    """Build the `ASSEMBLE_CONTEXT` handler.
+
+    The job exists so the API can answer an editor in milliseconds. `GET
+    /context` serves whatever is cached and enqueues this on a miss; the worker
+    builds it, the next poll hits the cache, and no HTTP request was ever held
+    open while a model loaded.
+
+    Assembly is written through the cache rather than returned, which is the only
+    way this job means anything: nothing reads a job's return value, so the
+    result has to land somewhere the next request will look.
+    """
+
+    async def handle_assemble_context(ctx: JobContext) -> None:
+        focus = ctx.job.payload.get("focus")
+        if not focus or not str(focus).strip():
+            # A context assembled about "" is a context about the whole corpus:
+            # the least useful possible answer and the most expensive to compute.
+            raise PermanentError("assemble_context job has no focus in its payload")
+
+        request = ContextRequest(
+            focus=str(focus),
+            token_budget=int(ctx.job.payload.get("token_budget") or DEFAULT_TOKEN_BUDGET),
+            max_items=int(ctx.job.payload.get("max_items") or DEFAULT_MAX_ITEMS),
+        )
+        assembled = await assemble(request)
+        logger.info(
+            "context.job_finished",
+            job_id=str(ctx.job.id),
+            focus=request.focus,
+            items=len(assembled.items),
+            tokens=assembled.tokens_used,
+            cached=assembled.cached,
+        )
+
+    return handle_assemble_context
+
+
 def make_normalize_handler(
     session_factory: async_sessionmaker[AsyncSession],
     blob_store: BlobStore,
@@ -245,6 +289,7 @@ def build_default_registry(
     graph: GraphStore | None = None,
     queue: JobQueue | None = None,
     bus: EventBus | None = None,
+    assemble: AssembleContext | None = None,
 ) -> HandlerRegistry:
     """The registry a worker runs with.
 
@@ -283,6 +328,9 @@ def build_default_registry(
 
     if session_factory is not None and bus is not None:
         registry.register(JobType.HANDLE_EVENT, make_event_handler(session_factory, bus))
+
+    if assemble is not None:
+        registry.register(JobType.ASSEMBLE_CONTEXT, make_context_handler(assemble))
 
     if session_factory is not None and connector is not None and blob_store is not None:
         registry.register(

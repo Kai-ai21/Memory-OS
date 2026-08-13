@@ -143,6 +143,11 @@ class Container:
             # the first time this milestone was run end to end, and what the
             # `handle_event` registration test now pins.
             bus=self.event_bus(),
+            # M6.2. Built here rather than lazily, unlike the event handler's:
+            # a worker registering this type will run it, so there is nothing to
+            # defer and a failure to construct should surface at startup rather
+            # than on the first job.
+            assemble=self.assemble_context(),
         )
 
     def assemble_context(self) -> AssembleContext:

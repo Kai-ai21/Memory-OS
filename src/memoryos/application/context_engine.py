@@ -277,6 +277,45 @@ def cache_key_for(request: ContextRequest, fingerprint: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+async def read_cached(
+    sessions: async_sessionmaker[AsyncSession], key: str
+) -> AssembledContext | None:
+    """A cached context, or None. **Constructs nothing that loads a model.**
+
+    A module-level function rather than a method, and that is the whole point of
+    it: `AssembleContext` holds a search use case, an embedder and a
+    cross-encoder, so building one to read a row would load two models into the
+    API process — which is exactly the cost the cache exists to avoid, paid on
+    the path that exists to avoid it.
+
+    The hit is counted in the same transaction as the read. A hit rate assembled
+    from log lines is a hit rate nobody can query afterwards, and it is the
+    number that decides whether any of this precomputation earns its cost.
+    """
+    now = datetime.now(UTC)
+    async with sessions.begin() as session:
+        row = (
+            await session.execute(
+                sql_select(models.ContextCache).where(
+                    models.ContextCache.cache_key == key,
+                    models.ContextCache.expires_at > now,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        row.hit_count += 1
+        payload = dict(row.payload)
+
+    return AssembledContext(
+        focus=str(payload["focus"]),
+        items=[ContextItem.from_dict(item) for item in payload["items"]],
+        token_budget=int(payload["token_budget"]),
+        tokens_used=int(payload["tokens_used"]),
+        cached=True,
+    )
+
+
 # --------------------------------------------------------------------------
 # Assembly
 # --------------------------------------------------------------------------
@@ -804,31 +843,7 @@ class AssembleContext:
     # ----------------------------------------------------------------------
 
     async def _read_cache(self, key: str) -> AssembledContext | None:
-        now = datetime.now(UTC)
-        async with self._sessions.begin() as session:
-            row = (
-                await session.execute(
-                    sql_select(models.ContextCache).where(
-                        models.ContextCache.cache_key == key,
-                        models.ContextCache.expires_at > now,
-                    )
-                )
-            ).scalar_one_or_none()
-            if row is None:
-                return None
-            # Counted on the read, in the same transaction. A hit rate assembled
-            # from log lines is a hit rate nobody can query later, and this is
-            # the number that decides whether precomputation earns its cost.
-            row.hit_count += 1
-            payload = dict(row.payload)
-
-        return AssembledContext(
-            focus=str(payload["focus"]),
-            items=[ContextItem.from_dict(item) for item in payload["items"]],
-            token_budget=int(payload["token_budget"]),
-            tokens_used=int(payload["tokens_used"]),
-            cached=True,
-        )
+        return await read_cached(self._sessions, key)
 
     async def _write_cache(
         self, key: str, request: ContextRequest, assembled: AssembledContext

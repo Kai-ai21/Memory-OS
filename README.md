@@ -30,11 +30,13 @@ measurement of how little decision-shaped content this corpus actually holds,
 [Reflections](#reflections) and the
 [Phase 5 retrospective](#phase-5-retrospective).
 **Phase 6 begun**: M6.0 (the event bus and triggers) inverts the direction — an
-event arrives and the system queues work nobody asked for — and M6.1 (context
-assembly) puts every earlier phase behind that trigger and decides what fits.
+event arrives and the system queues work nobody asked for — M6.1 (context
+assembly) puts every earlier phase behind that trigger and decides what fits, and
+M6.2 (client integration) gets real events from a file watcher and a VS Code
+extension and surfaces the context where the work happens.
 See [Events](#events), which measures whether a Postgres queue is fast enough to
-push through rather than guessing, and [Context](#context), which is a budgeting
-problem wearing a retrieval problem's clothes.
+push through rather than guessing, [Context](#context), which is a budgeting
+problem wearing a retrieval problem's clothes, and [Clients](#clients).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -3558,6 +3560,201 @@ empty ranking exactly as M3.5 designed, and fusion treats that as "this retrieve
 found nothing" rather than as a failure. The right reading is that Phase 3's
 contribution to context is **unmeasured**, not zero.
 
+## Clients
+
+M6.2 gets real events from where the work happens and puts the context back
+there. Two integrations and no third one — a file watcher and a VS Code
+extension. Calendar needs OAuth and a hosted callback, which is a milestone of
+its own.
+
+```bash
+uv run memoryos watch . --debounce 30
+cd clients/vscode && npm install && npm run compile   # then F5 in VS Code
+```
+
+### The constraint is not correctness
+
+**A dev tool that throws errors while you are trying to work gets uninstalled
+within a day.** Everything in both clients follows from that. The API being
+stopped is the *normal* state of a laptop, not an exception, so an unreachable
+server, a 500, a rate limit and a body that is not JSON all resolve to the same
+thing: a logged line, a backoff, and a quiet message. There is no `raise` in the
+watcher's emit path and no `throw` in the extension's client, and neither has any
+code path that produces a modal.
+
+A missed event costs a context nobody asked for. A crashed watcher costs the
+feature.
+
+### Leading-edge debounce, which is the other way round from usual
+
+An editor writing a file produces several filesystem events per save, and a
+person editing saves every few seconds. The obvious debounce waits for the
+activity to stop and then emits — right when the *last* value is the one that
+matters, and exactly wrong here. What the event triggers is context assembly, and
+context is worth having when you **start** working on a file. A trailing debounce
+would deliver it thirty seconds after you stopped, which is after you have moved
+on, which M6.1 already said makes the whole feature worthless.
+
+So the first touch of a burst emits immediately and the rest of the window is
+silent. Still one event per burst; the other end of it.
+
+Three filters sit between a filesystem event and an HTTP request, in the order
+that discards the most for the least work:
+
+1. **The source's own globs**, reused from the connector rather than
+   reimplemented. A watcher firing on `.git` internals is worse than no watcher —
+   a rebase rewrites hundreds of objects in a second, each would consume the rate
+   limit's budget for the whole minute, and the events that mattered would be the
+   ones refused.
+2. **The debounce**, per path.
+3. **M6.0's dedupe index**, the backstop rather than the plan.
+
+The path sent is *relative to the source root*, because that is the corpus's
+`external_key`. An absolute path would be a focus that matches nothing by name,
+and the by-name half of M6.1's temporal source — the only one that can find the
+file you are actually looking at — would silently contribute nothing.
+
+### `GET /context` never assembles
+
+M6.1 measured assembly at 0.9–1.8s warm and 18–21s cold, because a cold process
+loads an embedder and a cross-encoder. The caller is a sidebar redrawn on every
+tab change. So the endpoint serves the cache and nothing else: on a miss it
+enqueues `ASSEMBLE_CONTEXT` at a priority above the ingestion chain, answers
+`202`, and the client's next poll finds it. "Cached-or-loading rather than
+blocking" is the only thing the endpoint can do, rather than a mode it can be put
+into.
+
+**A panel asking is what makes it worth building, and that is a change from
+M6.1.** That milestone refused to precompute for `FILE_FOCUSED` because the event
+fires on every file glanced at. This does precompute for the same file, and the
+two are consistent: an event is an editor mentioning a path, while a request here
+is a panel open on that file with somebody looking at it. The second predicts a
+read far better than the first.
+
+### The extension, and the auth it does not have
+
+Two features. On the active editor changing it posts `file_focused`; on the same
+change it asks for that file's context and renders it in a sidebar. No commands,
+no status bar item, **no notifications** — M6.3 is where anything is allowed to
+interrupt.
+
+It talks to `localhost:8000` with no token, no header and no TLS, and
+`clients/vscode/README.md` says so rather than pretending otherwise. A shared
+secret in a settings file, read by an extension, sent over plain HTTP to a
+process on the same machine, protects against nothing that localhost does not
+already protect against. Not published to the marketplace; loaded with `F5` or by
+symlinking into `~/.vscode/extensions`.
+
+`client.ts` and `panel.ts` deliberately do not import `vscode`, which is what
+makes the failure behaviour testable with `node --test` — "does it throw when the
+API is down" is otherwise answered by watching for a notification that should
+never appear.
+
+### What a real session produced
+
+The watcher ran against this repository while M6.2 itself was being written,
+which is the only honest way to test a tool meant to notice you working. Two
+runs, both real, and the numbers are small because the session was short —
+reported as measured rather than rounded up.
+
+**An interactive run, roughly twelve minutes of editing:** four events emitted —
+`README.md` twice, thirty seconds apart, and `domain/debounce.py` and
+`application/watcher.py` as they were written. One of the four came back `200`
+rather than `202`, which is M6.0's dedupe index working as the backstop: an
+unprocessed event for that path already existed, so the second delivery was
+collapsed rather than queued.
+
+**A bounded run over a `__pycache__` regeneration**, which is what happens on
+every branch switch and every dependency change:
+
+| | |
+| --- | --- |
+| filesystem events observed | 233 |
+| filtered by the source's globs | 232 |
+| **emitted as `file_focused`** | **1** |
+
+**Ninety-nine point six percent of what a watcher sees is not worth an event.**
+That ratio is the whole justification for filtering client-side rather than
+posting everything and letting the rate limit sort it out: 232 events in
+seventeen seconds would have consumed a minute's budget four times over, and the
+requests refused would have been the one edit that mattered.
+
+Every one of the 232 was a `.pyc` under `__pycache__`, which the connector
+already excluded. That is the argument for reusing its globs rather than writing
+a second list — the exclusion that saved this has been in the codebase since
+M1.3, for an unrelated reason.
+
+### Latency
+
+Measured against the running stack, on the path the panel actually takes — sixty
+requests across six real focuses:
+
+| | p50 | p95 |
+| --- | --- | --- |
+| `GET /context`, cache hit | **4.1ms** | **8.5ms** |
+| `GET /context`, miss (`202` + enqueue) | 7.0ms | 33ms |
+| assembly on the worker, warm | 1272ms | — (n=6) |
+| assembly on the worker, cold | 18.9s | first job only |
+
+**The 500ms target is met by two orders of magnitude**, because the hit path is
+one indexed `SELECT` and a JSON decode. The miss is just as fast because it does
+no work either — one `INSERT` into `jobs` and a `202` — and that symmetry is the
+design rather than a coincidence: neither branch is allowed to be slow, because
+the client cannot tell which one it will get before it asks.
+
+What takes a second is the worker, and nothing waits on it synchronously. The
+18.9s outlier is that worker's first job loading the two models; every job after
+it in the same process is warm.
+
+### Did I look at the panel?
+
+**I cannot answer this honestly, and saying so is the answer.**
+
+The milestone asks whether the novelty wore off — whether after ten minutes the
+panel became furniture. That is a question about sustained human attention across
+a working session, and I am not in a position to have that experience or report
+it. Writing "I found myself glancing at it less by the end" would be exactly the
+failure M5.4 was built to prevent, one layer up: a fluent, unfalsifiable
+first-person claim that reads like evidence.
+
+What the run does establish:
+
+**The mechanism works end to end.** Editing a file produced an event, the event
+produced a job, the worker assembled context, and the next request for that
+file's context was served from cache in four milliseconds.
+
+**The panel's content is M6.1's content, and M6.1's own judgement stands.** Two
+of five focuses were what I would have assembled by hand, two were close, one was
+not. Nothing here changes what is in the list — only where it appears and how
+fast. A panel showing a good context is useful; one showing `seed_decisions.py`
+for a focus on `domain/patterns.py` is noise. M6.2 surfaces both faithfully.
+
+**The integration's own finding is the ratio.** One useful event from 233
+filesystem notifications is a signal-to-noise problem solved client-side, and it
+is the number that would have made the feature unusable if it had been got
+wrong.
+
+The question the milestone actually wants answered — is this worth having open —
+needs a person using it for a week. That is a real gap in this phase's evidence
+and it is not one more test can close.
+
+### What the watcher's rate says about M6.1's precompute policy
+
+M6.1 refused to precompute for `FILE_FOCUSED` on the grounds that it "fires on
+every file somebody glances at". With a thirty-second leading-edge debounce in
+front of it, that turned out to be four events in twelve minutes — roughly one
+per file actually worked on, and no more frequent than `EDITOR_OPENED`.
+
+So the premise of that refusal is weaker than it looked, and the policy is
+deliberately **not** changed here. Four events from one short session is thinner
+evidence than the decision it would overturn, and the same corpus-wide caution
+that keeps `patterns discover` quiet applies to a policy change: the argument for
+precomputing is that it would turn the panel's first request from a `202` into a
+hit, and the argument against is that an undebounced client — the extension
+itself, which settles for 350ms rather than 30s — would still produce one
+assembly per tab passed through. What would settle it is a week of watcher events
+with the panel's hit rate beside them.
+
 ## Migrations
 
 ```bash
@@ -3641,6 +3838,7 @@ hash.
 | `POST /reflections/{id}/acknowledge` | Record that it was read. Not agreement.           |
 | `POST /reflections/{id}/dismiss` | "This is wrong about me." Stops regeneration too.     |
 | `POST /events`             | Accept one external event and queue a job per handler.      |
+| `GET /context`             | Cached context for a focus, or `202` and a build enqueued.   |
 
 There is no route that returns a reflection alongside anything else — not in a search result,
 not on a decision, not in a corpus summary. They are fetched from `GET /reflections` and nowhere
@@ -3721,6 +3919,9 @@ was once wrong:
   build their own registry. Only running it caught it.
 - `tests/integration/test_replay.py::test_versions_and_tombstones_survive_a_rebuild` — the test that
   caught the replay applying events without interleaving the pipeline, a defect no row count showed.
+- `clients/vscode/src/test/client.test.ts` — every way the API can fail, resolved to a value the
+  panel renders quietly. A dev tool that throws while you work is uninstalled the same day, and
+  the API being stopped is the normal state of a laptop rather than an exception.
 - `tests/unit/test_reflection_grounding.py::test_a_pattern_below_the_threshold_produces_no_reflection`
   — a deliberately weak pattern, two supporting and two contradicting, must produce no prose *and*
   must not call the model. M5.4's acceptance criterion, and the one guard that cannot be talked
