@@ -139,10 +139,11 @@ class Container:
         """The event bus, with M6.0's one handler subscribed.
 
         Built per call rather than cached, and that is safe because the bus holds
-        no state beyond its subscriptions — it enqueues rather than running
+        no state at all beyond its subscriptions — it enqueues into a transaction
+        the caller owns rather than running
         anything, so two instances cannot disagree about work in flight.
         """
-        return build_default_bus(self.queue)
+        return build_default_bus()
 
     def optional_extractor(self) -> LlmEntityExtractor | None:
         """The extractor, or None when no API key is configured.

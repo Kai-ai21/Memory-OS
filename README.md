@@ -3232,9 +3232,18 @@ dead-letters on its own, and carries its own error and traceback in a row anybod
 can query. **One handler failing cannot block another, because they were never in
 the same unit of work.**
 
-The job's dedupe key is `(event id, handler name)`, so dispatching an event twice
-is idempotent per handler — a POST that stored its event and then failed to
-enqueue can be retried without doubling the work already queued.
+**The event and its jobs commit in one transaction**, which is the property a
+jobs table exists to have and which M6.0 shipped without. Storing the event in
+one transaction and enqueueing in another leaves a window where the event exists
+and the work that processes it does not — and a crash inside it strands the event
+forever, because nothing re-reads the table looking for events without jobs and
+`events stats` reports one as "pending", which is what a correctly-queued event
+looks like too. `application/sync.py` had stated the invariant since M1.3: *"this
+is the entire reason the queue is a table rather than a broker: there is no
+window in which the memory exists and the job that processes it does not."*
+
+The job's dedupe key is `(event id, handler name)`, so a re-dispatch is
+idempotent per handler rather than per event.
 
 `processed_at` is written by the job, never by dispatch, and every handler job
 writes it unconditionally so the stored value is the *last* handler to finish.
