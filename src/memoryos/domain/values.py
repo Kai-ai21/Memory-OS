@@ -319,6 +319,61 @@ class EvidenceRelation(StrEnum):
     CONTRADICTS = auto()
 
 
+class OutcomeVerdict(StrEnum):
+    """What actually happened after a decision.
+
+    **`TOO_EARLY` is a verdict, not a gap.** Most decisions in a young project
+    have no outcome yet, and the difference between "we looked and it is too
+    soon to say" and "nobody has looked" is the difference between an honest
+    corpus and one with holes in it. Recording it explicitly is also what stops
+    a success rate from being computed over whatever happens to have been
+    judged: `too_early` is excluded from the denominator, so a project with two
+    successes and thirty unresolved decisions reports 100% of two rather than a
+    number that sounds like a track record.
+
+    `MIXED` earns its place for the same reason `Verdict.MISSING` does in M2.0a:
+    it is the answer that cannot be inferred from the other two. A decision that
+    achieved what it was for and cost something unforeseen is not half a success
+    and not a failure, and forcing it into either loses the only part M5.3 could
+    learn from.
+    """
+
+    WORKED = auto()
+    FAILED = auto()
+    MIXED = auto()
+    TOO_EARLY = auto()
+
+
+# The verdicts a success rate is computed over. `TOO_EARLY` is deliberately
+# absent from both halves — it is not a failure and it is not a denominator.
+#
+# One definition, here rather than in the query that uses it, because a second
+# place deciding what counts as resolved is how a dashboard and a report end up
+# disagreeing about the same corpus.
+RESOLVED_VERDICTS: frozenset[OutcomeVerdict] = frozenset(
+    {OutcomeVerdict.WORKED, OutcomeVerdict.FAILED, OutcomeVerdict.MIXED}
+)
+
+
+class EvidenceKind(StrEnum):
+    """Whether an outcome was observed by a person or inferred by the system.
+
+    Not the same distinction as `TimeProvenance.DECLARED`/`INFERRED`, which is
+    about how a *date* was arrived at. This is about the claim itself: whether
+    somebody watched the thing happen, or whether a language model read a
+    memory that occurred afterwards and judged it to be a consequence.
+
+    They are not equally trustworthy and nothing downstream may treat them as
+    though they were. A declared outcome is testimony; an inferred one is a
+    correlation in time plus a model's opinion, and M5.3 has to weight them
+    differently or its patterns will be built mostly on the cheaper kind,
+    because the cheaper kind is the one that scales.
+    """
+
+    DECLARED = auto()
+    INFERRED = auto()
+
+
 class SuggestionStatus(StrEnum):
     """Where a proposed decision record sits in review.
 

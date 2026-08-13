@@ -41,10 +41,12 @@ from memoryos.domain.values import (
     DecisionStatus,
     EntityType,
     EventType,
+    EvidenceKind,
     EvidenceRelation,
     MemoryKind,
     MergeStatus,
     MergeStrategy,
+    OutcomeVerdict,
     Predicate,
     SourceKind,
     SuggestionStatus,
@@ -1522,6 +1524,320 @@ Index(
     DecisionSuggestion.source_name,
     DecisionSuggestion.external_key,
     DecisionSuggestion.chunk_ordinal,
+    unique=True,
+    postgresql_where=text("status = 'pending'"),
+    postgresql_nulls_not_distinct=True,
+)
+
+
+class DecisionOutcome(Base):
+    """What actually happened after a decision.
+
+    **The verdict and the evidence kind are two different questions and the
+    second one is the load-bearing half.** `verdict` says what happened;
+    `evidence_kind` says whether anybody watched it happen. A `declared` outcome
+    is testimony — somebody observed the deployment, read the incident, saw the
+    number move. An `inferred` one is a correlation in time plus a language
+    model's opinion that the correlation means something. Both are worth
+    storing and nothing downstream may average them, because the inferred kind
+    is the one that scales and a pattern built mostly on it is a pattern built
+    on the cheapest possible evidence.
+
+    `too_early` is a real verdict rather than a null. Most decisions in a young
+    project have no outcome yet, and "we looked and it is too soon" is a
+    different fact from "nobody has looked" — the first is a corpus that has
+    been maintained and the second is one with holes. It is excluded from every
+    success rate, so a project with two wins and thirty unresolved decisions
+    reports two out of two rather than a number that reads like a record.
+
+    **Several outcomes per decision, deliberately, and no unique constraint on
+    `decision_id`.** A decision can work in the first month and fail in the
+    sixth, and collapsing that into one mutable row would destroy exactly the
+    sequence M5.3 exists to find. `observed_at` orders them, and a `too_early`
+    recorded early is not contradicted by a `worked` recorded later — it is the
+    honest first half of the story.
+
+    `confidence` is confidence in *this reading of what happened*, which is a
+    different quantity from the decision's own confidence at the time and is
+    stored on a different table for that reason. A manual outcome is 1.0 by
+    construction: you observed it.
+
+    No foreign key to `memories`. The decision does not have one either, for the
+    reason `query_judgements` does not — the evidence lives in
+    `outcome_evidence`, and a column here pointing at a row a replay recreates
+    would put this table inside `TRUNCATE memories CASCADE`.
+    """
+
+    __tablename__ = "decision_outcomes"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    decision_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decisions.id", name="fk_decision_outcomes_decision_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    verdict: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False)
+    # M1.1's provenance, on the outcome's own clock. A date somebody stated is
+    # `declared`; one taken from the mtime of the memory that evidences it is
+    # `filesystem`, and Phase 4's weighting applies to it unchanged.
+    observed_at_source: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(REAL)
+    created_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        _enum_check("verdict", OutcomeVerdict, "ck_decision_outcomes_verdict"),
+        _enum_check(
+            "evidence_kind", EvidenceKind, "ck_decision_outcomes_evidence_kind"
+        ),
+        _enum_check(
+            "observed_at_source", TimeProvenance, "ck_decision_outcomes_observed_at_source"
+        ),
+        # Same shape as `decisions.decided_at_source`: the column is NOT NULL,
+        # so there is no missing date for 'unknown' to describe.
+        CheckConstraint(
+            f"observed_at_source <> '{TimeProvenance.UNKNOWN.value}'",
+            name="ck_decision_outcomes_observed_at_known",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR confidence BETWEEN 0.0 AND 1.0",
+            name="ck_decision_outcomes_confidence_range",
+        ),
+        CheckConstraint(
+            "length(btrim(description)) > 0", name="ck_decision_outcomes_description"
+        ),
+        # An inferred outcome cannot claim certainty. Nothing produces one at 1.0
+        # today, and the constraint is what stops a future writer from doing it
+        # quietly: a model's reading of a correlation is never something anybody
+        # observed, and a 1.0 here would let M5.3 weight it as testimony.
+        CheckConstraint(
+            f"evidence_kind <> '{EvidenceKind.INFERRED.value}' "
+            f"OR confidence IS NULL OR confidence < 1.0",
+            name="ck_decision_outcomes_inferred_is_not_certain",
+        ),
+        Index("ix_decision_outcomes_decision", "decision_id", "observed_at"),
+        Index("ix_decision_outcomes_verdict", "verdict"),
+    )
+
+
+class OutcomeEvidence(Base):
+    """A memory that shows an outcome happened.
+
+    The same two-identity design as `decision_evidence`, for the same reasons
+    and with the same consequence. `memory_id` and `chunk_id` cascade, so a
+    memory leaving the corpus takes its evidence with it and leaves the outcome
+    standing; `(source_name, external_key, chunk_ordinal)` is what a replay
+    re-links against, because `TRUNCATE memories CASCADE` reaches this table
+    whatever `application/replay.py` classifies it as.
+
+    `occurred_at` is a *snapshot* of the evidence memory's own `occurred_at`,
+    copied at link time rather than joined on read. That looks like
+    denormalisation and is not: the whole claim an inferred outcome makes is
+    that this memory occurred after that decision, and the gap between the two
+    is the evidence. Joining for it would re-derive that number against whatever
+    the corpus says today — and a re-sync that moves an mtime would silently
+    change how strong a link somebody already reviewed and accepted.
+    """
+
+    __tablename__ = "outcome_evidence"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    outcome_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decision_outcomes.id",
+            name="fk_outcome_evidence_outcome_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    memory_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "memories.id", name="fk_outcome_evidence_memory_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    chunk_id: Mapped[UUID | None] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "memory_chunks.id",
+            name="fk_outcome_evidence_chunk_id",
+            ondelete="CASCADE",
+        ),
+    )
+    source_name: Mapped[str] = mapped_column(Text, nullable=False)
+    external_key: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_ordinal: Mapped[int | None] = mapped_column(Integer)
+    # When the evidence happened, as the corpus said at link time. Nullable
+    # because an undated memory can still be evidence a person points at — the
+    # domain refuses to invent a date, and so does this.
+    occurred_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    linked_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "outcome_id",
+            "memory_id",
+            "chunk_id",
+            name="uq_outcome_evidence_link",
+            postgresql_nulls_not_distinct=True,
+        ),
+        CheckConstraint(
+            "chunk_ordinal IS NULL OR chunk_ordinal >= 0",
+            name="ck_outcome_evidence_chunk_ordinal_non_negative",
+        ),
+        CheckConstraint(
+            "(chunk_id IS NULL) = (chunk_ordinal IS NULL)",
+            name="ck_outcome_evidence_chunk_pairing",
+        ),
+        Index("ix_outcome_evidence_outcome", "outcome_id"),
+        Index("ix_outcome_evidence_memory", "memory_id"),
+    )
+
+
+class OutcomeSuggestion(Base):
+    """A candidate outcome the temporal layer found and a model judged.
+
+    The M5.0 queue's shape, for a proposal that is easier to get wrong. A
+    decision suggestion at least has a passage that either does or does not
+    record a choice; this one asserts a *causal* relationship between two things
+    on the strength of one occurring after the other. Post hoc ergo propter hoc
+    is the oldest error there is and a language model shown two related-looking
+    documents will make it every time, fluently.
+
+    So the row stores the whole basis of the claim rather than only its
+    conclusion, and the review UI shows all of it: the candidate memory, the
+    gap in days, the window that admitted it, and which entities the two share.
+    A reviewer looking at "0.7 — this looks like an outcome" is being asked to
+    trust a number; one looking at "34 days later, shares `pgvector` and
+    `hnsw`, here is the passage" is being asked a question they can answer.
+
+    `entity_filter` records whether the entity constraint was *applied* or
+    *unavailable*, and the distinction is not pedantry. A corpus where nothing
+    has been extracted cannot fail the entity test, it simply cannot take it —
+    and a candidate found by time alone is much weaker evidence than one that
+    shares a resolved entity. Collapsing the two would mean a suggestion queue
+    that silently changes meaning depending on whether anybody has run
+    extraction lately, which is exactly what happened to this corpus.
+
+    Provenance is a natural key plus id snapshots with no foreign key to
+    `memories`, the same as `decision_suggestions`: this table is user-authored,
+    it carries somebody's accept or reject, and it has to outlive the replay its
+    provenance points into.
+    """
+
+    __tablename__ = "outcome_suggestions"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    decision_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decisions.id",
+            name="fk_outcome_suggestions_decision_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    # description, verdict, confidence and the model's own rationale. Shaped by
+    # `application/outcomes.OutcomeDraft`, which validates it both ways.
+    draft: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=_EMPTY_JSONB
+    )
+    source_text: Mapped[str] = mapped_column(Text, nullable=False)
+    source_name: Mapped[str] = mapped_column(Text, nullable=False)
+    external_key: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_ordinal: Mapped[int | None] = mapped_column(Integer)
+    memory_id: Mapped[UUID | None] = mapped_column(_UUID)
+    chunk_id: Mapped[UUID | None] = mapped_column(_UUID)
+    # The temporal claim, stored rather than recomputed. See `OutcomeEvidence`.
+    candidate_occurred_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False)
+    gap_days: Mapped[float] = mapped_column(REAL, nullable=False)
+    # The window this candidate was admitted under, so a queue reviewed weeks
+    # later can be read against the heuristic that produced it rather than
+    # against whatever the default is by then.
+    window_days: Mapped[float] = mapped_column(REAL, nullable=False)
+    # The resolved entity names the decision's evidence and this candidate share.
+    shared_entities: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    # `applied` or `unavailable`. Text rather than a boolean because the third
+    # state a boolean would invite — false meaning "no overlap" — is precisely
+    # the conflation this column exists to prevent: no overlap is a rejection,
+    # and no coverage is a missing test.
+    entity_filter: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text(f"'{SuggestionStatus.PENDING.value}'")
+    )
+    model_id: Mapped[str] = mapped_column(Text, nullable=False)
+    suggester_version: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome_id: Mapped[UUID | None] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decision_outcomes.id",
+            name="fk_outcome_suggestions_outcome_id",
+            ondelete="SET NULL",
+        ),
+    )
+    suggested_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+
+    __table_args__ = (
+        _enum_check("status", SuggestionStatus, "ck_outcome_suggestions_status"),
+        CheckConstraint(
+            "entity_filter IN ('applied', 'unavailable')",
+            name="ck_outcome_suggestions_entity_filter",
+        ),
+        CheckConstraint(
+            "length(btrim(source_text)) > 0", name="ck_outcome_suggestions_source_text"
+        ),
+        # The whole premise of the suggestion. A candidate that occurred before
+        # the decision is not a weak outcome, it is not an outcome — and the
+        # rule is enforced in the database as well as in the query that finds
+        # them, because a negative gap reaching this table would be a causal
+        # claim running backwards.
+        CheckConstraint("gap_days > 0", name="ck_outcome_suggestions_gap_positive"),
+        CheckConstraint("window_days > 0", name="ck_outcome_suggestions_window_positive"),
+        CheckConstraint(
+            "chunk_ordinal IS NULL OR chunk_ordinal >= 0",
+            name="ck_outcome_suggestions_chunk_ordinal_non_negative",
+        ),
+        CheckConstraint(
+            "(status = 'pending') = (reviewed_at IS NULL)",
+            name="ck_outcome_suggestions_review_pairing",
+        ),
+        CheckConstraint(
+            "outcome_id IS NULL OR status = 'accepted'",
+            name="ck_outcome_suggestions_outcome_requires_accept",
+        ),
+    )
+
+
+Index(
+    "ix_outcome_suggestions_status",
+    OutcomeSuggestion.status,
+    OutcomeSuggestion.suggested_at,
+)
+
+# One pending proposal per (decision, candidate memory). Partial for the
+# `entity_merges` reason: a rejected candidate legitimately leaves the pair free
+# to be proposed again under a different window or a better prompt.
+Index(
+    "uq_outcome_suggestions_pending_pair",
+    OutcomeSuggestion.decision_id,
+    OutcomeSuggestion.source_name,
+    OutcomeSuggestion.external_key,
+    OutcomeSuggestion.chunk_ordinal,
     unique=True,
     postgresql_where=text("status = 'pending'"),
     postgresql_nulls_not_distinct=True,
