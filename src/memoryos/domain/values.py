@@ -277,6 +277,66 @@ IDENTITY_PROPERTY: dict[GraphLabel, str] = {
 EDGE_IDENTITY_PROPERTIES: frozenset[str] = frozenset({"predicate"})
 
 
+class DecisionStatus(StrEnum):
+    """Whether a decision is still live, has been resolved, or was undone.
+
+    `OPEN` is the default and the honest one at capture time: almost nothing is
+    settled the moment it is decided. `SETTLED` means the question stopped being
+    a question — the choice held and nobody is revisiting it. `REVERSED` means
+    the choice was undone, which is not the same as the decision being wrong and
+    is deliberately not a judgement: M5.1 links outcomes, and this column must
+    not pre-empt that by encoding a verdict in the status.
+
+    Three states, closed. A fourth like `superseded` is tempting and would
+    duplicate `REVERSED` for the reader while splitting every query that asks
+    "what is no longer in force" into two.
+    """
+
+    OPEN = auto()
+    SETTLED = auto()
+    REVERSED = auto()
+
+
+class EvidenceRelation(StrEnum):
+    """How a memory relates to a decision.
+
+    **`INFORMED` and `RECORDS` are not the same relation and must not be
+    collapsed.** A design discussion informed the decision and existed before
+    it; an ADR records the decision and exists after it. Both are evidence and
+    only one is testimony. M5.1 needs to know which came first in order to say
+    anything about whether the decision predicted its outcome — a record written
+    afterwards agrees with the decision by construction, so treating it as
+    input would be reading the answer off the answer sheet.
+
+    `CONTRADICTS` is the one worth capturing deliberately, because nothing else
+    in the system will volunteer it: a memory that argues against the choice is
+    exactly what a later reflection needs and exactly what a suggestion pass
+    trained on agreement will never propose.
+    """
+
+    INFORMED = auto()
+    RECORDS = auto()
+    CONTRADICTS = auto()
+
+
+class SuggestionStatus(StrEnum):
+    """Where a proposed decision record sits in review.
+
+    The same shape as `MergeStatus`, for the same reason: a proposal nobody has
+    acted on is information, and a queue that forgot its rejections would
+    re-propose them on every run. `REJECTED` rows are kept and are what makes the
+    extractor's false-positive rate measurable at all.
+
+    Nothing here is ever `applied` in place. Accepting a suggestion *writes a
+    decision* and marks the suggestion accepted, so the decisions table holds
+    only rows a person committed to and the queue holds only drafts.
+    """
+
+    PENDING = auto()
+    ACCEPTED = auto()
+    REJECTED = auto()
+
+
 class EmbeddingRole(StrEnum):
     """Which side of a retrieval a piece of text is on.
 

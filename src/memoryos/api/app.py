@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from memoryos.api.routes import (
     answer,
+    decisions,
     evolution,
     health,
     judgements,
@@ -54,6 +55,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(memories.router)
     app.include_router(stats.router)
     app.include_router(judgements.router)
+    # `/decisions/suggestions` is registered inside this router *before*
+    # `/decisions/{decision_id}`, for the same registration-order reason
+    # `timeline` sits above `memories`.
+    app.include_router(decisions.router)
     app.include_router(answer.router)
     return app
 
@@ -91,6 +96,9 @@ def _install_cors(app: FastAPI, settings: Settings) -> None:
         # in this milestone — so credentials stay off. Turning them on later is a
         # decision to make alongside whatever introduces auth.
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        # PATCH joins the list in M5.0: editing a decision is the first write in
+        # this API that amends a row rather than creating one, and a browser
+        # preflight for a method not named here fails before the request is made.
+        allow_methods=["GET", "POST", "PATCH"],
         allow_headers=["Content-Type"],
     )

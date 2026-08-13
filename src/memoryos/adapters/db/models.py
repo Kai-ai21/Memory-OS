@@ -38,13 +38,16 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from memoryos.domain.jobs import DEFAULT_MAX_ATTEMPTS, JobStatus
 from memoryos.domain.values import (
     HEX64_PATTERN,
+    DecisionStatus,
     EntityType,
     EventType,
+    EvidenceRelation,
     MemoryKind,
     MergeStatus,
     MergeStrategy,
     Predicate,
     SourceKind,
+    SuggestionStatus,
     TimeProvenance,
     Verdict,
 )
@@ -1109,3 +1112,417 @@ class ChangeSummary(Base):
             "from_memory_id <> to_memory_id", name="ck_change_summaries_distinct_pair"
         ),
     )
+
+
+class Decision(Base):
+    """What was decided, what was considered, why, and what had to be true.
+
+    **The second `USER_AUTHORED` table, and the first one that is the product
+    rather than the measurement.** `query_judgements` records an opinion about a
+    search result; this records an opinion about the world, made at a moment,
+    under uncertainty. Neither is derivable from the log, and replay must
+    therefore neither truncate nor rebuild this — see `application/replay.py`.
+    Phase 5 reads this table for everything it does, so a row a machine invented
+    here becomes a behavioural claim in M5.3 and a reflection in M5.4, both of
+    which sound insightful and neither of which can be falsified. That is why
+    the extraction path writes to `decision_suggestions` and never here.
+
+    **No foreign key to `memories`, deliberately, and the lesson is M2.0a's.**
+    A decision is *about* something, and the memories that informed it are
+    linked through `decision_evidence`; the decision itself references nothing
+    that a rebuild recreates. Any column here pointing at `memories.id` would
+    put this table inside `TRUNCATE memories CASCADE` and every routine replay
+    would delete the corpus Phase 5 operates on.
+
+    `confidence` is confidence **at the time of deciding**, and it is never
+    refreshed. Its whole value is that it was recorded before the outcome was
+    known: a number updated in hindsight measures nothing, because everyone is
+    well calibrated about the past.
+
+    `decided_at_source` follows M1.1 exactly, and for the same reason. A date a
+    person typed is `declared`; a date read off an ADR's front matter is
+    `parsed`; a date taken from a file's mtime is `filesystem`. Phase 4's
+    weighting rules apply unchanged, which is what stops a decision dated by a
+    file's modification time from being ranked as though somebody had asserted
+    it. Unlike `memories.occurred_at` this column is NOT NULL — a decision with
+    no date is not a decision anybody can reason about later — so there is no
+    `unknown` pairing to enforce, and the CHECK forbids `unknown` outright.
+    """
+
+    __tablename__ = "decisions"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    chosen: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[float | None] = mapped_column(REAL)
+    expected_outcome: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False)
+    decided_at_source: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text(f"'{DecisionStatus.OPEN.value}'")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        _enum_check("status", DecisionStatus, "ck_decisions_status"),
+        _enum_check("decided_at_source", TimeProvenance, "ck_decisions_decided_at_source"),
+        # `decided_at` is NOT NULL, so the M1.1 pairing collapses into a
+        # prohibition: there is no null date for `unknown` to describe, and a
+        # row claiming unknown provenance for a date it has would be asserting
+        # two contradictory things about the same column.
+        CheckConstraint(
+            f"decided_at_source <> '{TimeProvenance.UNKNOWN.value}'",
+            name="ck_decisions_decided_at_known",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR confidence BETWEEN 0.0 AND 1.0",
+            name="ck_decisions_confidence_range",
+        ),
+        CheckConstraint("length(btrim(question)) > 0", name="ck_decisions_question"),
+        CheckConstraint("length(btrim(chosen)) > 0", name="ck_decisions_chosen"),
+        Index("ix_decisions_status_decided_at", "status", "decided_at"),
+    )
+
+
+class DecisionOption(Base):
+    """One thing that was on the table, chosen or not.
+
+    **The rejected rows are the reason this table exists.** A record with one
+    option is a description of what happened; the alternatives and why each lost
+    are what make it a decision, and `application/decisions.py` refuses to write
+    a decision that has none. That rule lives in the use case rather than here
+    because it is a statement about a *set* of rows: a CHECK sees one row at a
+    time, and the options are inserted in the same transaction as the decision
+    they belong to, so any constraint strong enough to catch the empty case
+    would also reject the moment before the first option is written.
+
+    `rejected_because` is separate from the decision's `reasoning` and they are
+    not two names for one field. The reasoning says why the winner won;
+    `rejected_because` says why *this particular* alternative lost, and the two
+    diverge constantly — an option can be rejected for a reason that has nothing
+    to do with what made the winner attractive.
+    """
+
+    __tablename__ = "decision_options"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    decision_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decisions.id", name="fk_decision_options_decision_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    was_chosen: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    rejected_because: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(btrim(description)) > 0", name="ck_decision_options_description"
+        ),
+        # An option that was taken cannot also carry a reason it was not taken.
+        # Reachable through an edit that flips `was_chosen` and leaves the old
+        # rejection text behind, which would then read as a rejection of the
+        # thing that was chosen.
+        CheckConstraint(
+            "NOT was_chosen OR rejected_because IS NULL",
+            name="ck_decision_options_chosen_has_no_rejection",
+        ),
+    )
+
+
+# Exactly one option per decision may be the chosen one. Partial, because the
+# constraint is about the chosen row rather than about the rejected ones — there
+# is no limit on how many alternatives were considered.
+Index(
+    "uq_decision_options_one_chosen",
+    DecisionOption.decision_id,
+    unique=True,
+    postgresql_where=text("was_chosen"),
+)
+
+Index("ix_decision_options_decision", DecisionOption.decision_id)
+
+
+class DecisionAssumption(Base):
+    """Something that had to be true for the choice to be the right one.
+
+    **The load-bearing table of Phase 5.** An outcome says a decision worked or
+    it did not, which is one bit about one decision and generalises to nothing.
+    An assumption says *why*, and assumptions repeat across decisions that have
+    nothing else in common. "Deployment will take two days" failing six times is
+    a pattern with a name and a fix; six unrelated bad projects is noise with a
+    mood.
+
+    It is also the field a person will not volunteer. Everyone can say what they
+    chose and most people can say why; almost nobody lists what they were taking
+    for granted unless asked, one at a time, which is what `decide --interactive`
+    does and why that prompt is doing real work rather than filling a form.
+
+    `held` and `evaluated_at` are written by M5.2 and are null until then. They
+    are declared now, unpopulated, for the reason `occurred_at` was declared in
+    M1.1: the column is cheap today and the *history* it would have recorded is
+    unrecoverable later. A NULL `held` means "not yet judged" and is
+    deliberately distinct from `false` — a system that could not tell an
+    unevaluated assumption from a broken one would report every new decision as
+    built on sand.
+    """
+
+    __tablename__ = "decision_assumptions"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    decision_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decisions.id",
+            name="fk_decision_assumptions_decision_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(REAL)
+    # M5.2 writes both or neither.
+    held: Mapped[bool | None] = mapped_column(Boolean)
+    evaluated_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(btrim(statement)) > 0", name="ck_decision_assumptions_statement"
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR confidence BETWEEN 0.0 AND 1.0",
+            name="ck_decision_assumptions_confidence_range",
+        ),
+        # A verdict without a date cannot be placed in time, and a date without a
+        # verdict claims an evaluation that produced nothing. The pairing is the
+        # same shape as M1.1's `occurred_at`/`occurred_at_source` rule and exists
+        # for the same reason: it stops a later writer filling in half of it.
+        CheckConstraint(
+            "(held IS NULL) = (evaluated_at IS NULL)",
+            name="ck_decision_assumptions_evaluation_pairing",
+        ),
+    )
+
+
+Index("ix_decision_assumptions_decision", DecisionAssumption.decision_id)
+
+
+class DecisionEvidence(Base):
+    """A memory that informed a decision, records it, or argues against it.
+
+    **Both keys, and each does a different job.** `memory_id` and `chunk_id` are
+    real foreign keys with `ON DELETE CASCADE`, so a memory that leaves the
+    corpus takes its evidence rows with it — a link to a document that no longer
+    exists is a citation to nothing, and this system spent M2.5 making sure a
+    citation always resolves. The decision itself is untouched by that, which is
+    the point: a decision survives losing a piece of its evidence.
+
+    `source_name`, `external_key` and `chunk_ordinal` are the same natural key
+    `query_judgements` uses, and they are here because the cascade above has a
+    consequence a replay makes routine. A full rebuild truncates `memories`, so
+    `TRUNCATE ... CASCADE` takes every row in this table with it — exactly the
+    trap M1.7 found for the golden set. The fix there was to key on something
+    that survives a rebuild, and that is what these three columns are: replay
+    snapshots this table before it truncates and re-links it afterwards by
+    natural key, so evidence outlives a rebuild even though the row itself does
+    not. See `ReplayCorpus._preserve_evidence`.
+
+    `chunk_ordinal` is part of the durable key for the reason it is part of a
+    judgement's: chunking is deterministic, so chunk 4 of a file is chunk 4
+    again after a replay, while `chunk_id` is minted per write.
+    """
+
+    __tablename__ = "decision_evidence"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    decision_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decisions.id", name="fk_decision_evidence_decision_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    memory_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "memories.id", name="fk_decision_evidence_memory_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    # Null links the whole memory; a value links the one chunk that carries the
+    # passage. M2.5's provenance, which is what a suggestion arrives with.
+    chunk_id: Mapped[UUID | None] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "memory_chunks.id",
+            name="fk_decision_evidence_chunk_id",
+            ondelete="CASCADE",
+        ),
+    )
+    # The durable identity of the same thing, for re-linking after a rebuild.
+    source_name: Mapped[str] = mapped_column(Text, nullable=False)
+    external_key: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_ordinal: Mapped[int | None] = mapped_column(Integer)
+    relation: Mapped[str] = mapped_column(Text, nullable=False)
+    linked_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        # One statement per (decision, item, relation). The same memory may
+        # legitimately both inform a decision and record it — two rows, two
+        # relations — but asserting the same relation twice is a duplicate, not
+        # extra evidence. `nulls_not_distinct` for the M2.0a reason: without it
+        # every memory-level link, which is most of them, stops colliding with
+        # itself.
+        UniqueConstraint(
+            "decision_id",
+            "memory_id",
+            "chunk_id",
+            "relation",
+            name="uq_decision_evidence_link",
+            postgresql_nulls_not_distinct=True,
+        ),
+        _enum_check("relation", EvidenceRelation, "ck_decision_evidence_relation"),
+        CheckConstraint(
+            "chunk_ordinal IS NULL OR chunk_ordinal >= 0",
+            name="ck_decision_evidence_chunk_ordinal_non_negative",
+        ),
+        # A chunk-level link needs the ordinal that survives a rebuild, or the
+        # re-link after a replay would silently widen it to the whole memory.
+        CheckConstraint(
+            "(chunk_id IS NULL) = (chunk_ordinal IS NULL)",
+            name="ck_decision_evidence_chunk_pairing",
+        ),
+        Index("ix_decision_evidence_decision", "decision_id"),
+        Index("ix_decision_evidence_memory", "memory_id"),
+    )
+
+
+class DecisionSuggestion(Base):
+    """A draft decision record an extractor proposed, waiting to be judged.
+
+    **Nothing here is a decision until a person says so.** The queue is the
+    whole safety property of the extraction path: a language model asked to find
+    decisions in a corpus of explanatory prose will find them, because prose
+    that explains a choice looks exactly like a record of one, and the fabricated
+    remainder — a confidence nobody held, an assumption nobody made — is
+    indistinguishable from the real thing once it is a row. Every later phase
+    reads `decisions`, so a fabricated record there produces a behavioural claim
+    that is both plausible and unfalsifiable.
+
+    The draft is stored as JSONB rather than as a half-populated decision with a
+    status. A pending suggestion is not a decision in an early state — it is a
+    model's reading of a passage, and giving it a row in `decisions` would mean
+    every query in Phase 5 had to remember to exclude it. One forgotten `WHERE`
+    is then a pattern built on drafts.
+
+    **Provenance is a natural key plus snapshots, and there is no foreign key to
+    `memories`.** This table is `USER_AUTHORED` — it carries somebody's accept
+    or reject — so it must survive the replay that its provenance points into,
+    which is only possible if the pointer is not a constraint. `memory_id` and
+    `chunk_id` are what the system pointed at when the suggestion was made, and
+    go null-shaped rather than dangling after a rebuild; `(source_name,
+    external_key, chunk_ordinal)` is what still resolves.
+
+    Rejections are kept. They are the only measurement of what the extractor
+    gets wrong, and a queue that deleted them would re-propose the same passage
+    on the next run and look like it had found something new.
+    """
+
+    __tablename__ = "decision_suggestions"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    # The proposal itself: question, chosen, reasoning, options, assumptions.
+    # Shaped by `application/decisions.DecisionDraft`, which is what validates it
+    # on the way in and on the way out.
+    draft: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=_EMPTY_JSONB
+    )
+    # The passage the model read, stored verbatim. The review queue shows it
+    # beside the draft so that accepting is a judgement about evidence rather
+    # than about plausibility — a draft alone always reads well.
+    source_text: Mapped[str] = mapped_column(Text, nullable=False)
+    source_name: Mapped[str] = mapped_column(Text, nullable=False)
+    external_key: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_ordinal: Mapped[int | None] = mapped_column(Integer)
+    memory_id: Mapped[UUID | None] = mapped_column(_UUID)
+    chunk_id: Mapped[UUID | None] = mapped_column(_UUID)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text(f"'{SuggestionStatus.PENDING.value}'")
+    )
+    model_id: Mapped[str] = mapped_column(Text, nullable=False)
+    suggester_version: Mapped[str] = mapped_column(Text, nullable=False)
+    # Set when an accept wrote a decision. `ON DELETE SET NULL` rather than
+    # CASCADE: deleting a decision must not erase the record that a suggestion
+    # was once accepted, which is part of how the extractor is scored.
+    decision_id: Mapped[UUID | None] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "decisions.id",
+            name="fk_decision_suggestions_decision_id",
+            ondelete="SET NULL",
+        ),
+    )
+    suggested_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+
+    __table_args__ = (
+        _enum_check("status", SuggestionStatus, "ck_decision_suggestions_status"),
+        CheckConstraint(
+            "length(btrim(source_text)) > 0", name="ck_decision_suggestions_source_text"
+        ),
+        CheckConstraint(
+            "chunk_ordinal IS NULL OR chunk_ordinal >= 0",
+            name="ck_decision_suggestions_chunk_ordinal_non_negative",
+        ),
+        # A reviewed suggestion has a review timestamp and a pending one does
+        # not, so the two representations of "has somebody looked at this"
+        # cannot disagree. The same shape as `entity_merges`.
+        CheckConstraint(
+            "(status = 'pending') = (reviewed_at IS NULL)",
+            name="ck_decision_suggestions_review_pairing",
+        ),
+        # Only an accepted suggestion may name a decision. A rejected draft
+        # pointing at a real record would make the extractor look right about a
+        # decision somebody wrote by hand.
+        CheckConstraint(
+            "decision_id IS NULL OR status = 'accepted'",
+            name="ck_decision_suggestions_decision_requires_accept",
+        ),
+    )
+
+
+# The queue's own read pattern, and the ordering the review UI walks.
+Index(
+    "ix_decision_suggestions_status",
+    DecisionSuggestion.status,
+    DecisionSuggestion.suggested_at,
+)
+
+# The same passage is not proposed twice while a proposal is outstanding. Keyed
+# on the durable identity rather than on `chunk_id`, so a re-run after a replay
+# does not fill the queue with copies of everything already in it. Partial for
+# the `entity_merges` reason: a rejected draft legitimately leaves the passage
+# free to be proposed again by a better prompt.
+Index(
+    "uq_decision_suggestions_pending_passage",
+    DecisionSuggestion.source_name,
+    DecisionSuggestion.external_key,
+    DecisionSuggestion.chunk_ordinal,
+    unique=True,
+    postgresql_where=text("status = 'pending'"),
+    postgresql_nulls_not_distinct=True,
+)

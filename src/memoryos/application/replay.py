@@ -31,6 +31,7 @@ import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum, auto
 from uuid import UUID
 
@@ -95,7 +96,37 @@ SOURCE_OF_TRUTH_TABLES: frozenset[str] = frozenset(
 # truncate it *and* must not write it. It is the input to M2.0's evaluation
 # harness, so losing it means losing the labelled data the next milestone is
 # measured against.
-USER_AUTHORED_TABLES: frozenset[str] = frozenset({"query_judgements"})
+#
+# M5.0 adds four more, and they are the same category rather than a new one. A
+# decision is somebody's account of a choice they made — the question, the
+# alternatives, the confidence they held at the time — and no amount of
+# replaying the log produces it. `decision_suggestions` belongs here for the
+# reason `entity_merges` was argued about and lost: it carries a person's accept
+# or reject, and unlike the merge ledger it has no foreign key forcing it into
+# the derived set. Its provenance is a natural key plus id snapshots, exactly as
+# `query_judgements` is, which is what lets it be classified by argument.
+#
+# `decision_evidence` is the uncomfortable member, and its discomfort is stated
+# rather than hidden. It *does* have foreign keys into `memories` and
+# `memory_chunks`, with ON DELETE CASCADE, because a link to a document that no
+# longer exists is a citation to nothing. So `TRUNCATE memories CASCADE` takes
+# it, whatever this set says — the same finding M1.7 made when the golden set
+# was specified with a foreign key. The difference is that this table was
+# designed knowing it: every row also carries `(source_name, external_key,
+# chunk_ordinal)`, and `_preserve_evidence` below reads those out before the
+# truncation and writes them back afterwards. Classified user-authored because
+# that is what it is; protected by a snapshot because a classification cannot
+# outvote a foreign key.
+USER_AUTHORED_TABLES: frozenset[str] = frozenset(
+    {
+        "query_judgements",
+        "decisions",
+        "decision_options",
+        "decision_assumptions",
+        "decision_evidence",
+        "decision_suggestions",
+    }
+)
 
 # Reconstructible from the tables above plus the blob store. Ordered
 # child-before-parent, so truncating or dropping them in sequence never fights a
@@ -288,6 +319,24 @@ class ReplayScope:
         return "  ".join(parts)
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceLink:
+    """One `decision_evidence` row, as its durable identity rather than its ids.
+
+    What survives a rebuild, and nothing else. `memory_id` and `chunk_id` are
+    deliberately absent: they are exactly the columns a replay invalidates, and
+    carrying them in the snapshot would tempt a later reader into writing them
+    back.
+    """
+
+    decision_id: UUID
+    source_name: str
+    external_key: str
+    chunk_ordinal: int | None
+    relation: str
+    linked_at: datetime
+
+
 @dataclass(slots=True)
 class ReplayReport:
     events: int = 0
@@ -304,6 +353,12 @@ class ReplayReport:
     # `_rebuild_graph` for why that is the honest outcome rather than a gap.
     graph_nodes: int = 0
     graph_edges: int = 0
+    # M5.0. Evidence links carried across the rebuild, and how many found their
+    # memory again on the other side. A gap between the two is not an error —
+    # a memory can legitimately have left the corpus — but it is the number that
+    # says how much of Phase 5's provenance a replay cost.
+    evidence_preserved: int = 0
+    evidence_relinked: int = 0
     duration_ms: int = 0
     into_shadow: bool = False
     cache_cleared: bool = False
@@ -321,6 +376,8 @@ class ReplayReport:
             "cache_hits": self.cache_hits,
             "graph_nodes": self.graph_nodes,
             "graph_edges": self.graph_edges,
+            "evidence_preserved": self.evidence_preserved,
+            "evidence_relinked": self.evidence_relinked,
             "duration_ms": self.duration_ms,
             "into_shadow": self.into_shadow,
             "cache_cleared": self.cache_cleared,
@@ -409,29 +466,188 @@ class ReplayCorpus:
         )
         log.info("replay.started")
 
-        if into_shadow:
-            make_shadow = self._require_shadow(resolved)
-            report = await self._into_shadow(
-                make_shadow, resolved, clear_cache=clear_cache
-            )
-        else:
-            report = await self._in_place(
-                self._sessions,
-                resolved,
-                clear_cache=clear_cache,
-                # Only a whole-corpus replay. A scoped one rebuilds part of the
-                # corpus, and the graph has no equivalent of `--source notes`
-                # until M3.1 gives its nodes a source to be narrowed by; clearing
-                # all of it would discard the other sources' projection to
-                # rebuild one.
-                clear_graph=resolved.is_complete,
-            )
+        # Before anything is destroyed, and outside the branch, because both
+        # paths cost the links: an in-place replay truncates `memories` and the
+        # cascade takes them, and a shadow swap drops the live `memories` table
+        # out from under the foreign key. See `_preserve_evidence`.
+        preserved = await self._preserve_evidence()
+
+        try:
+            if into_shadow:
+                make_shadow = self._require_shadow(resolved)
+                report = await self._into_shadow(
+                    make_shadow, resolved, clear_cache=clear_cache
+                )
+            else:
+                report = await self._in_place(
+                    self._sessions,
+                    resolved,
+                    clear_cache=clear_cache,
+                    # Only a whole-corpus replay. A scoped one rebuilds part of the
+                    # corpus, and the graph has no equivalent of `--source notes`
+                    # until M3.1 gives its nodes a source to be narrowed by; clearing
+                    # all of it would discard the other sources' projection to
+                    # rebuild one.
+                    clear_graph=resolved.is_complete,
+                )
+        except BaseException:
+            # A shadow replay that failed left the live corpus untouched, so the
+            # links still resolve and putting them back is a complete rollback.
+            # An in-place one that failed has a broken corpus either way, and
+            # restoring what still resolves is strictly better than leaving the
+            # decisions with no provenance at all.
+            await self._restore_evidence(preserved)
+            raise
+
+        report.evidence_preserved = len(preserved)
+        report.evidence_relinked = await self._restore_evidence(preserved)
 
         report.into_shadow = into_shadow
         report.cache_cleared = clear_cache
         report.duration_ms = int((time.monotonic() - started) * 1000)
         log.info("replay.finished", **report.as_dict())
         return report
+
+    # ----------------------------------------------------------------------
+    # Evidence, across the rebuild
+    # ----------------------------------------------------------------------
+
+    async def _preserve_evidence(self) -> list[EvidenceLink]:
+        """Read `decision_evidence` out by natural key, then empty it.
+
+        **The one place a classification is not enough.** `decisions` and its
+        options and assumptions are `USER_AUTHORED` and survive a replay because
+        nothing truncates them and nothing references a table that is truncated.
+        `decision_evidence` cannot be protected that way: it holds foreign keys
+        into `memories` and `memory_chunks` with ON DELETE CASCADE, deliberately,
+        because a citation that resolves to nothing is worse than no citation.
+        `TRUNCATE memories CASCADE` therefore takes it whatever set it is in —
+        the same finding M1.7 made when the golden set was specified with a
+        foreign key, arriving at a table that was designed knowing it.
+
+        So the row does not survive; the *link* does. `(source_name,
+        external_key, chunk_ordinal)` is stable across a rebuild for the reason
+        the golden set's key is: names outlive ids, and chunking is
+        deterministic, so chunk 4 of a file is chunk 4 again afterwards.
+
+        Emptied here rather than left to the cascade, because the shadow path
+        does not truncate anything — it drops the live `memories` table and moves
+        the workspace's in, and a foreign key pointing at a table that is going
+        away blocks the drop. `PostgresShadowSchema.swap_in` takes the
+        constraints off and puts them back; it can only put them back onto rows
+        that no longer reference anything, which is what this delete guarantees.
+        """
+        async with self._sessions.begin() as session:
+            rows = list(
+                await session.execute(
+                    select(
+                        models.DecisionEvidence.decision_id,
+                        models.DecisionEvidence.source_name,
+                        models.DecisionEvidence.external_key,
+                        models.DecisionEvidence.chunk_ordinal,
+                        models.DecisionEvidence.relation,
+                        models.DecisionEvidence.linked_at,
+                    )
+                )
+            )
+            if rows:
+                await session.execute(delete(models.DecisionEvidence))
+
+        preserved = [
+            EvidenceLink(
+                decision_id=row[0],
+                source_name=row[1],
+                external_key=row[2],
+                chunk_ordinal=row[3],
+                relation=row[4],
+                linked_at=row[5],
+            )
+            for row in rows
+        ]
+        if preserved:
+            logger.info("replay.evidence_preserved", links=len(preserved))
+        return preserved
+
+    async def _restore_evidence(self, preserved: Sequence[EvidenceLink]) -> int:
+        """Re-link the decisions to the rebuilt corpus, by natural key.
+
+        A link whose memory is no longer in the corpus is dropped rather than
+        written with a null pointer, and that is the honest outcome: the memory
+        genuinely left, the decision genuinely survived it, and a row asserting
+        evidence that cannot be opened is the thing M2.5 spent a milestone
+        making impossible. The count of dropped links is reported rather than
+        logged away.
+
+        `linked_at` is carried over rather than restamped. When somebody
+        attached a memory to a decision is a fact about them, not about the
+        rebuild, and re-dating it would move every link to whenever the corpus
+        was last replayed.
+        """
+        if not preserved:
+            return 0
+
+        restored = 0
+        async with self._sessions.begin() as session:
+            memories = {
+                (row[0], row[1]): row[2]
+                for row in await session.execute(
+                    select(
+                        models.Source.name,
+                        models.Memory.external_key,
+                        models.Memory.id,
+                    )
+                    .join(models.Source, models.Source.id == models.Memory.source_id)
+                    .where(
+                        models.Memory.is_current.is_(True),
+                        models.Memory.deleted_at.is_(None),
+                    )
+                )
+            }
+            chunks = {
+                (row[0], row[1]): row[2]
+                for row in await session.execute(
+                    select(
+                        models.MemoryChunk.memory_id,
+                        models.MemoryChunk.ordinal,
+                        models.MemoryChunk.id,
+                    )
+                )
+            }
+
+            for link in preserved:
+                memory_id = memories.get((link.source_name, link.external_key))
+                if memory_id is None:
+                    continue
+                chunk_id = None
+                if link.chunk_ordinal is not None:
+                    chunk_id = chunks.get((memory_id, link.chunk_ordinal))
+                    if chunk_id is None:
+                        # The memory came back and that chunk did not, which
+                        # happens when a re-chunk changed the boundaries. Widening
+                        # to the whole memory would silently move the citation, so
+                        # the link is dropped instead.
+                        continue
+                session.add(
+                    models.DecisionEvidence(
+                        id=new_id(),
+                        decision_id=link.decision_id,
+                        memory_id=memory_id,
+                        chunk_id=chunk_id,
+                        source_name=link.source_name,
+                        external_key=link.external_key,
+                        chunk_ordinal=link.chunk_ordinal,
+                        relation=link.relation,
+                        linked_at=link.linked_at,
+                    )
+                )
+                restored += 1
+
+        logger.info(
+            "replay.evidence_relinked",
+            restored=restored,
+            dropped=len(preserved) - restored,
+        )
+        return restored
 
     def _require_shadow(self, scope: ReplayScope) -> Callable[[], ShadowWorkspace]:
         """The workspace factory, if a workspace can legitimately serve this scope.

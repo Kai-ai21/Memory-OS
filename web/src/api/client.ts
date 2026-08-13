@@ -59,6 +59,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     throw new ApiError(response.status, await readDetail(response), path);
   }
+  // 204 has no body, and `response.json()` on an empty one throws a SyntaxError
+  // that reads like a malformed API rather than a successful request. The
+  // reject-a-suggestion route is the first endpoint here that returns one.
+  if (response.status === 204) return null as T;
   return (await response.json()) as T;
 }
 
@@ -128,6 +132,18 @@ export type EvolutionVersion = Evolution["versions"][number];
 export type VersionDiff = Evolution["diffs"][number];
 export type DiffSpan = VersionDiff["spans"][number];
 export type ChangeSummary = NonNullable<VersionDiff["summary"]>;
+export type DecisionSummary = Ok<paths["/decisions"]["get"]>[number];
+export type DecisionDetail = Ok<paths["/decisions/{decision_id}"]["get"]>;
+export type DecisionOption = DecisionDetail["options"][number];
+export type DecisionAssumption = DecisionDetail["assumptions"][number];
+export type DecisionEvidence = DecisionDetail["evidence"][number];
+export type DecisionIn =
+  paths["/decisions"]["post"]["requestBody"]["content"]["application/json"];
+export type DecisionEditIn =
+  paths["/decisions/{decision_id}"]["patch"]["requestBody"]["content"]["application/json"];
+export type DecisionStatus = NonNullable<DecisionSummary["status"]>;
+export type EvidenceRelation = DecisionEvidence["relation"];
+export type Suggestion = Ok<paths["/decisions/suggestions"]["get"]>[number];
 
 export interface SearchArgs {
   q: string;
@@ -201,6 +217,44 @@ export const api = {
     if (source) params.set("source", source);
     return request<Gap[]>(`/gaps?${params.toString()}`);
   },
+
+  decisions: (status?: DecisionStatus) => {
+    const params = new URLSearchParams();
+    // Omitted rather than sent empty: no status means every status, and a blank
+    // one would be a 422.
+    if (status) params.set("status", status);
+    const query = params.toString();
+    return request<DecisionSummary[]>(`/decisions${query ? `?${query}` : ""}`);
+  },
+
+  decision: (id: string) => request<DecisionDetail>(`/decisions/${id}`),
+
+  decide: (body: DecisionIn) =>
+    request<{ id: string }>("/decisions", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  editDecision: (id: string, body: DecisionEditIn) =>
+    request<DecisionDetail>(`/decisions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
+  suggestions: (status: Suggestion["status"] = "pending") =>
+    request<Suggestion[]>(`/decisions/suggestions?status=${status}`),
+
+  // Two calls rather than one with a verdict, because they are not symmetric:
+  // accepting writes a decision and rejecting writes nothing but a status. A
+  // single endpoint taking a verdict would hide that one of them is a create.
+  acceptSuggestion: (id: string, body?: DecisionIn) =>
+    request<{ id: string }>(`/decisions/suggestions/${id}/accept`, {
+      method: "POST",
+      body: body ? JSON.stringify(body) : "null",
+    }),
+
+  rejectSuggestion: (id: string) =>
+    request<null>(`/decisions/suggestions/${id}/reject`, { method: "POST" }),
 };
 
 export interface TimelineArgs {

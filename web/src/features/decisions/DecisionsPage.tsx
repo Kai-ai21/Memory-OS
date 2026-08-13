@@ -1,0 +1,140 @@
+/**
+ * The decision list, and the completeness of each record.
+ *
+ * The three counts on every row are the content, not decoration. A decision with
+ * two options, no assumptions and no evidence is one that M5.2 has nothing to
+ * evaluate and M5.3 cannot find a pattern in — and the only place that is
+ * visible is beside the ones that are complete. A list showing question and
+ * date alone would make a corpus of stubs look finished.
+ *
+ * `decided_at` carries its provenance the way every date in this interface does.
+ * The twelve seeded decisions are `parsed` — read out of the milestone they
+ * belong to — so every one of them wears a `~`, which is exactly right: nobody
+ * wrote the date down at the time.
+ */
+
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+
+import { api, type DecisionStatus } from "../../api/client";
+import { DateStamp } from "../../components/DateStamp";
+import { Empty, Failure, Loading, SectionHeading } from "../../components/primitives";
+import { count } from "../../lib/format";
+
+const STATUSES: (DecisionStatus | "all")[] = ["all", "open", "settled", "reversed"];
+
+export function DecisionsPage() {
+  const [status, setStatus] = useState<DecisionStatus | "all">("all");
+  const decisions = useQuery({
+    queryKey: ["decisions", status],
+    queryFn: () => api.decisions(status === "all" ? undefined : status),
+  });
+  const pending = useQuery({
+    queryKey: ["suggestions", "pending"],
+    queryFn: () => api.suggestions("pending"),
+  });
+
+  if (decisions.isLoading) return <Loading rows={5} />;
+  if (decisions.isError) return <Failure error={decisions.error} />;
+
+  const rows = decisions.data ?? [];
+  const queued = pending.data?.length ?? 0;
+  // What the corpus can actually be reasoned about. Reported rather than
+  // implied: a decision with no assumptions is invisible to M5.2.
+  const withAssumptions = rows.filter((row) => row.assumptions > 0).length;
+  const withEvidence = rows.filter((row) => row.evidence > 0).length;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <SectionHeading
+        right={
+          <span className="flex items-baseline gap-3">
+            <Link className="text-amber underline" to="/decisions/new">
+              record one
+            </Link>
+            <Link className="text-amber underline" to="/decisions/review">
+              review queue{queued ? ` (${queued})` : ""}
+            </Link>
+          </span>
+        }
+      >
+        decisions
+      </SectionHeading>
+
+      <div className="meta flex items-baseline gap-4 text-faint">
+        <span className="flex gap-2">
+          {STATUSES.map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setStatus(value)}
+              className={
+                value === status ? "text-amber underline" : "text-muted hover:text-ink"
+              }
+            >
+              {value}
+            </button>
+          ))}
+        </span>
+        <span>
+          {count(rows.length)} recorded · {count(withAssumptions)} with assumptions ·{" "}
+          {count(withEvidence)} with evidence
+        </span>
+      </div>
+
+      {rows.length === 0 ? (
+        <Empty title="nothing decided yet">
+          Record one with <code className="kbd">memoryos decide --interactive</code>, which
+          asks for the alternatives, the confidence you hold right now, and your assumptions
+          one at a time. A decision with no alternatives is refused — it is a description of
+          what happened rather than a decision.
+        </Empty>
+      ) : (
+        <table className="w-full border-collapse text-left">
+          <thead>
+            <tr className="border-b border-rule-strong">
+              {["question", "chosen", "status", "conf", "opts", "assum", "evid", "decided"].map(
+                (heading) => (
+                  <th key={heading} className="meta-label py-1 pr-4 font-normal">
+                    {heading}
+                  </th>
+                ),
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id} className="border-b border-rule/60 align-top">
+                <td className="py-1.5 pr-4">
+                  <Link className="prose-content text-sm text-amber" to={`/decisions/${row.id}`}>
+                    {row.question}
+                  </Link>
+                </td>
+                <td className="prose-content py-1.5 pr-4 text-sm">{row.chosen}</td>
+                <td className="meta py-1.5 pr-4 text-muted">{row.status}</td>
+                <td className="meta py-1.5 pr-4 text-ink">
+                  {/* Never rounded away and never defaulted: an absent confidence
+                      is a different claim from a low one. */}
+                  {row.confidence === null ? "—" : row.confidence.toFixed(2)}
+                </td>
+                <td className="meta py-1.5 pr-4 text-faint">{row.options}</td>
+                <td
+                  className={`meta py-1.5 pr-4 ${
+                    row.assumptions === 0 ? "text-deny" : "text-faint"
+                  }`}
+                >
+                  {row.assumptions}
+                </td>
+                <td className="meta py-1.5 pr-4 text-faint">{row.evidence}</td>
+                <td className="py-1.5">
+                  <DateStamp value={row.decided_at} provenance={row.decided_at_source} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}

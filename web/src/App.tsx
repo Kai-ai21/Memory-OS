@@ -9,6 +9,10 @@ import { NavLink, Route, Routes } from "react-router-dom";
 
 import { API_BASE } from "./api/client";
 import { CorpusPage } from "./features/corpus/CorpusPage";
+import { DecisionForm } from "./features/decisions/DecisionForm";
+import { DecisionPage } from "./features/decisions/DecisionPage";
+import { DecisionsPage } from "./features/decisions/DecisionsPage";
+import { ReviewQueue } from "./features/decisions/ReviewQueue";
 import { JudgementsPage } from "./features/judgements/JudgementsPage";
 import { MemoryPage } from "./features/memory/MemoryPage";
 import { SearchPage } from "./features/search/SearchPage";
@@ -23,6 +27,7 @@ export function App() {
           <nav className="flex items-baseline gap-4">
             <Tab to="/">search</Tab>
             <Tab to="/timeline">timeline</Tab>
+            <Tab to="/decisions">decisions</Tab>
             <Tab to="/judgements">judgements</Tab>
             <Tab to="/corpus">corpus</Tab>
           </nav>
@@ -37,6 +42,14 @@ export function App() {
           <Route path="/" element={<SearchPage />} />
           <Route path="/timeline" element={<TimelinePage />} />
           <Route path="/memory/:id" element={<MemoryPage />} />
+          {/* The two literal segments before the parameterised one. React Router
+              matches by specificity rather than order, so this is for the
+              reader rather than for the router — the grouping should be
+              obvious rather than lucky. */}
+          <Route path="/decisions" element={<DecisionsPage />} />
+          <Route path="/decisions/new" element={<DecisionForm />} />
+          <Route path="/decisions/review" element={<ReviewQueue />} />
+          <Route path="/decisions/:id" element={<DecisionPage />} />
           <Route path="/judgements" element={<JudgementsPage />} />
           <Route path="/corpus" element={<CorpusPage />} />
           <Route
