@@ -39,8 +39,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
 from memoryos.domain.ids import new_id
+from memoryos.domain.patterns import classify_confidence
 from memoryos.domain.values import (
     AssumptionVerdict,
+    ConfidenceHorizon,
     DecisionStatus,
     EvidenceRelation,
     TimeProvenance,
@@ -276,6 +278,7 @@ async def record(
     decided_at: datetime,
     decided_at_source: TimeProvenance,
     status: DecisionStatus = DecisionStatus.OPEN,
+    confidence_horizon: ConfidenceHorizon | None = None,
 ) -> UUID:
     """Write one decision, its options, its assumptions and its evidence.
 
@@ -287,9 +290,26 @@ async def record(
     caller's option list, so the winner named in the decision and the winner
     flagged in the options cannot disagree. A caller that also passes an option
     matching `chosen` gets one row, not two.
+
+    **`confidence_horizon` is derived, and a caller may only make it worse.**
+    `domain/patterns.classify_confidence` decides whether the number can be
+    calibrated against; a caller who knows the confidence was reconstructed can
+    pass `HINDSIGHT` and be believed, and a caller who passes `FORESIGHT` against
+    a derivation that says otherwise is not. That direction is the whole point —
+    the one error that matters is a reconstruction entering a calibration
+    population, and an API that lets a writer assert its way past the check would
+    make the column decorative.
     """
     validated = _validate(draft, decided_at=decided_at, decided_at_source=decided_at_source)
     decision_id = new_id()
+    horizon = classify_confidence(
+        validated.confidence,
+        decided_at=decided_at,
+        decided_at_source=decided_at_source,
+        recorded_at=datetime.now(UTC),
+    )
+    if confidence_horizon is ConfidenceHorizon.HINDSIGHT:
+        horizon = ConfidenceHorizon.HINDSIGHT
 
     async with session_factory.begin() as session:
         session.add(
@@ -299,6 +319,7 @@ async def record(
                 chosen=validated.chosen,
                 reasoning=validated.reasoning,
                 confidence=validated.confidence,
+                confidence_horizon=horizon.value,
                 expected_outcome=validated.expected_outcome,
                 decided_at=decided_at,
                 decided_at_source=decided_at_source.value,
@@ -316,6 +337,7 @@ async def record(
         question=validated.question,
         options=len(validated.options) + 1,
         assumptions=len(validated.assumptions),
+        confidence_horizon=horizon.value,
     )
     return decision_id
 

@@ -2565,15 +2565,26 @@ async def run_patterns_calibration(settings: Settings) -> int:
     """
     container = Container.build(settings)
     try:
-        bands = await patterns.calibration(container.database.session_factory)
+        report = await patterns.calibration(container.database.session_factory)
     finally:
         await container.dispose()
 
-    if not bands:
-        print("nothing to calibrate: no confidences recorded against verdicts")
+    if report.excluded:
+        # Printed first and unconditionally. An empty table below this line means
+        # something entirely different from an empty table without it.
+        print(
+            f"excluded from every band: {report.excluded_decisions} decision(s) and "
+            f"{report.excluded_assumptions} assumption(s)\n"
+            f"  their confidence was reconstructed after the fact, and hindsight "
+            f"cannot\n  measure foresight at any weight — see "
+            f"domain/values.ConfidenceHorizon"
+        )
+
+    if not report.bands:
+        print("\nnothing to calibrate: no confidence recorded before its outcome")
         return 0
 
-    for detector, values in sorted(bands.items()):
+    for detector, values in sorted(report.bands.items()):
         noun = "decisions" if detector.startswith("decision") else "assumptions"
         print(f"\n{noun} by stated confidence")
         print(f"  {'band':<12} {'n':>3}  {'stated':>7}  {'actual':>7}  95% CI")

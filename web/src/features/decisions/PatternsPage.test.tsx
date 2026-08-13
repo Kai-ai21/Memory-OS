@@ -44,6 +44,8 @@ const CALIBRATION = {
       miscalibrated: false,
     },
   ],
+  excluded_decisions: 0,
+  excluded_assumptions: 0,
 };
 
 const PATTERN = {
@@ -169,6 +171,29 @@ describe("the patterns page", () => {
     expect(posted?.body).toEqual({ reason: "one belief, three phrasings" });
   });
 
+  it("says what was excluded before showing an empty table", async () => {
+    // The empty table on its own reads as "nothing recorded yet". With this
+    // line above it, it reads as the measurement this corpus cannot support —
+    // which is the distinction Phase 5's retrospective called its largest defect.
+    stubFetch([
+      {
+        match: "/patterns/calibration",
+        body: {
+          decisions: [],
+          assumptions: [],
+          excluded_decisions: 12,
+          excluded_assumptions: 25,
+        },
+      },
+      { match: "/patterns", body: [] },
+    ]);
+    renderWithProviders(<PatternsPage />);
+
+    expect(
+      await screen.findByText(/hindsight cannot measure foresight at any weight/),
+    ).toBeInTheDocument();
+  });
+
   it("marks a band that falls outside its interval", async () => {
     stubFetch([
       {
@@ -176,6 +201,8 @@ describe("the patterns page", () => {
         body: {
           decisions: [{ ...CALIBRATION.decisions[0], miscalibrated: true }],
           assumptions: [],
+          excluded_decisions: 0,
+          excluded_assumptions: 0,
         },
       },
       { match: "/patterns", body: [] },

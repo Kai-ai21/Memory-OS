@@ -17,6 +17,9 @@ all held cannot distinguish "I am right 85% of the time" from "I am right always
 
 import math
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+
+from memoryos.domain.values import ConfidenceHorizon, TimeProvenance
 
 # 95%, two-sided. Not a knob anybody should turn to produce output: lowering it
 # widens nothing and narrows the interval, which is exactly how a system starts
@@ -88,6 +91,86 @@ def is_miscalibrated(stated: float, successes: int, n: int) -> bool:
     every time, because a gap is what small samples produce.
     """
     return not wilson_interval(successes, n).contains(stated)
+
+
+# --------------------------------------------------------------------------
+# Whether a stated confidence may be calibrated against at all
+#
+# Everything below this line is arithmetic over numbers. This part decides which
+# numbers are allowed in, and it matters more than any of the arithmetic: a
+# calibration table built on confidences reconstructed after the fact measures
+# hindsight, and it is indistinguishable from one built on foresight. Phase 5's
+# retrospective called this the largest single defect in the phase, and it is
+# here rather than in `application/` because it is the rule the whole calibration
+# claim rests on.
+# --------------------------------------------------------------------------
+
+# How long after deciding a confidence may be written down and still count as
+# having been written *at the time*.
+#
+# **This is the one threshold in this module with no measurement behind it, and
+# it is deliberately the weakest of the three tests below.** A decision written
+# down the next morning is still a record of what somebody believed; one written
+# the following week is a memory of what they believed, and they have had a week
+# to learn how it went. No experiment finds the boundary between those.
+#
+# The asymmetry is what makes an unmeasured threshold acceptable. Wrongly
+# classifying foresight as hindsight costs one row in a calibration population.
+# Wrongly classifying hindsight as foresight corrupts the whole table, silently,
+# in the direction that makes the system look most insightful.
+FORESIGHT_WINDOW = timedelta(days=1)
+
+
+def classify_confidence(
+    confidence: float | None,
+    *,
+    decided_at: datetime,
+    decided_at_source: TimeProvenance,
+    recorded_at: datetime,
+    outcome_already_observed: bool = False,
+    window: timedelta = FORESIGHT_WINDOW,
+) -> ConfidenceHorizon:
+    """Whether this confidence may be calibrated against.
+
+    Three ways to fail, and a corpus can fail any one without failing the others.
+    Foresight is what is left when none of them fires, which is the right way
+    round: the claim being made is that somebody predicted something, and the
+    burden is on the record to show it.
+
+    **An outcome already observed** settles it immediately. The person knew how
+    it went before they wrote the number down, whatever the dates say.
+
+    **A date that had to be recovered rather than asserted** settles it too, and
+    this is the test that does the work on real data. `decided_at_source` is
+    M1.1's provenance column, unchanged: `parsed` means the date was read out of
+    a document and `filesystem` means it came from an mtime. **If nobody wrote
+    the date down at the time, nobody wrote the confidence down at the time
+    either** — the two came from the same act of reconstruction. Only `declared`,
+    a date a person asserted, can carry a confidence that was asserted with it.
+
+    **A row written long after the decision** catches the remaining case: a
+    declared date, entered late. This is the window test, and it is the one with
+    a judgement call in it.
+
+    On this project's own corpus the second test is decisive and the third is not
+    needed. All twelve confidence-bearing decisions came from
+    `scripts/seed_decisions.py` with `decided_at_source = parsed`, because their
+    dates were read out of the README — and the window alone would have let two
+    of them through on a fourteen-hour gap, which is precisely the row nobody
+    would have checked.
+
+    A null confidence is `UNKNOWN`. There is no number, so there is nothing to
+    have been early or late about.
+    """
+    if confidence is None:
+        return ConfidenceHorizon.UNKNOWN
+    if outcome_already_observed:
+        return ConfidenceHorizon.HINDSIGHT
+    if decided_at_source is not TimeProvenance.DECLARED:
+        return ConfidenceHorizon.HINDSIGHT
+    if recorded_at - decided_at > window:
+        return ConfidenceHorizon.HINDSIGHT
+    return ConfidenceHorizon.FORESIGHT
 
 
 # The bar a pattern's supporting evidence has to clear, counted in **distinct

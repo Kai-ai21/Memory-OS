@@ -112,11 +112,25 @@ export function PatternsPage() {
             exactly as reliable as claimed — fourteen assumptions that all held cannot
             distinguish &quot;right 85% of the time&quot; from &quot;right always&quot;.
           </p>
+          {calibration.data.excluded_decisions + calibration.data.excluded_assumptions >
+          0 ? (
+            /* Above the tables, never below them. An empty table on its own reads
+               as "nothing recorded yet"; the same table under this line reads as
+               what it is, which is a measurement this corpus cannot support. */
+            <p className="meta max-w-prose leading-relaxed text-deny">
+              {calibration.data.excluded_decisions} decision(s) and{" "}
+              {calibration.data.excluded_assumptions} assumption(s) are excluded from every
+              band below: their confidence was reconstructed after the outcome was known,
+              and hindsight cannot measure foresight at any weight.
+            </p>
+          ) : null}
           <CalibrationTable title="decisions" bands={calibration.data.decisions} />
           <CalibrationTable title="assumptions" bands={calibration.data.assumptions} />
           <p className="meta max-w-prose leading-relaxed text-faint">
             Calibration is only meaningful when the confidence was written down before the
-            outcome was known. Nothing in the schema records whether it was.
+            outcome was known. <code className="kbd">confidence_horizon</code> records
+            which, derived from whether the decision&apos;s own date was asserted or
+            recovered.
           </p>
         </section>
       ) : null}
@@ -240,7 +254,7 @@ function CalibrationTable({
   if (bands.length === 0) {
     return (
       <p className="meta text-faint">
-        {title}: nothing recorded against a verdict yet.
+        {title}: nothing recorded before its outcome.
       </p>
     );
   }

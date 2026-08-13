@@ -348,6 +348,12 @@ class CalibrationBandOut(BaseModel):
 class CalibrationOut(BaseModel):
     decisions: list[CalibrationBandOut]
     assumptions: list[CalibrationBandOut]
+    # What never entered a band because its confidence was reconstructed after
+    # the fact. Sent always, because empty tables with and without these numbers
+    # mean opposite things: "nothing recorded yet" versus "nothing recorded in
+    # time to measure".
+    excluded_decisions: int
+    excluded_assumptions: int
 
 
 class SuccessRateOut(BaseModel):
@@ -800,12 +806,16 @@ async def pattern_calibration(container: ContainerDep) -> CalibrationOut:
     "here are the bands, and every stated confidence falls inside what its
     sample supports" are the same result and only the second is legible.
     """
-    bands = await patterns.calibration(container.database.session_factory)
+    report = await patterns.calibration(container.database.session_factory)
     return CalibrationOut(
-        decisions=[_band_out(band) for band in bands.get("decision_calibration", [])],
-        assumptions=[
-            _band_out(band) for band in bands.get("assumption_calibration", [])
+        decisions=[
+            _band_out(band) for band in report.bands.get("decision_calibration", [])
         ],
+        assumptions=[
+            _band_out(band) for band in report.bands.get("assumption_calibration", [])
+        ],
+        excluded_decisions=report.excluded_decisions,
+        excluded_assumptions=report.excluded_assumptions,
     )
 
 

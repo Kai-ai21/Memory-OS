@@ -44,7 +44,12 @@ from memoryos.application.decisions import (
 )
 from memoryos.config import get_settings
 from memoryos.container import Container
-from memoryos.domain.values import DecisionStatus, EvidenceRelation, TimeProvenance
+from memoryos.domain.values import (
+    ConfidenceHorizon,
+    DecisionStatus,
+    EvidenceRelation,
+    TimeProvenance,
+)
 
 SOURCE = "self"
 
@@ -746,6 +751,14 @@ async def main() -> None:
                 # down at the time.
                 decided_at_source=TimeProvenance.PARSED,
                 status=DecisionStatus.OPEN,
+                # Declared rather than left to be derived. `parsed` already
+                # implies it — see `domain/patterns.classify_confidence` — but
+                # this script is the one caller that *knows*, because its own
+                # docstring says the numbers are what the person believes they
+                # believed. Saying so here means a future change to the
+                # derivation cannot quietly promote these twelve rows into a
+                # calibration population.
+                confidence_horizon=ConfidenceHorizon.HINDSIGHT,
             )
             written += 1
 

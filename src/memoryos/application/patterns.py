@@ -51,6 +51,7 @@ from memoryos.domain.patterns import (
 )
 from memoryos.domain.values import (
     AssumptionVerdict,
+    ConfidenceHorizon,
     DecisionStatus,
     OutcomeVerdict,
     PatternKind,
@@ -189,6 +190,9 @@ class _Decision:
     question: str
     chosen: str
     confidence: float | None
+    # Whether that confidence may be calibrated against at all. See
+    # `domain/values.ConfidenceHorizon`; only `FORESIGHT` enters a population.
+    confidence_horizon: ConfidenceHorizon
     status: DecisionStatus
     decided_at: datetime
 
@@ -216,6 +220,21 @@ class Corpus:
     outcomes: tuple[_Outcome, ...]
 
     @property
+    def foresight_decisions(self) -> frozenset[UUID]:
+        """Decisions whose confidence was recorded before the answer was known.
+
+        The calibration population, and the only one. A confidence reconstructed
+        afterwards measures nothing — everybody is well calibrated about the past
+        — and a table mixing the two looks exactly like a table of the good kind.
+        Phase 5 shipped without this and said so only in prose.
+        """
+        return frozenset(
+            decision.id
+            for decision in self.decisions
+            if decision.confidence_horizon is ConfidenceHorizon.FORESIGHT
+        )
+
+    @property
     def latest_outcome(self) -> dict[UUID, _Outcome]:
         """One verdict per decision, the most recent by `observed_at`.
 
@@ -238,6 +257,7 @@ async def read_corpus(sessions: async_sessionmaker[AsyncSession]) -> Corpus:
                 question=row.question,
                 chosen=row.chosen,
                 confidence=row.confidence,
+                confidence_horizon=ConfidenceHorizon(row.confidence_horizon),
                 status=DecisionStatus(row.status),
                 decided_at=row.decided_at,
             )
@@ -511,9 +531,14 @@ def detect_calibration_patterns(corpus: Corpus) -> list[Candidate]:
 
     # Decisions: stated confidence against whether the decision worked.
     by_band: dict[tuple[float, float], list[tuple[_Decision, _Outcome]]] = {}
+    foresight = corpus.foresight_decisions
     for decision in corpus.decisions:
         outcome = latest.get(decision.id)
         if decision.confidence is None or outcome is None:
+            continue
+        if decision.id not in foresight:
+            # Reconstructed after the fact. Excluded rather than down-weighted:
+            # there is no weight at which hindsight is evidence about foresight.
             continue
         if outcome.verdict is OutcomeVerdict.TOO_EARLY:
             # Not a result. Counting it either way would make the calibration a
@@ -571,6 +596,12 @@ def detect_calibration_patterns(corpus: Corpus) -> list[Candidate]:
     assumption_bands: dict[tuple[float, float], list[_Assumption]] = {}
     for assumption in corpus.assumptions:
         if assumption.confidence is None or assumption.held is None:
+            continue
+        # An assumption's confidence is written in the same transaction as its
+        # decision, so it inherits that decision's horizon exactly. There is no
+        # separate column and there should not be one: two columns recording one
+        # act of writing is two columns that can disagree.
+        if assumption.decision_id not in foresight:
             continue
         assumption_bands.setdefault(_band_of(assumption.confidence), []).append(assumption)
 
@@ -1102,10 +1133,28 @@ class CalibrationBand:
         return self.interval.observed - self.stated
 
 
-async def calibration(
-    sessions: async_sessionmaker[AsyncSession],
-) -> dict[str, list[CalibrationBand]]:
-    """Every band with its interval, emitted or not.
+@dataclass(frozen=True, slots=True)
+class CalibrationReport:
+    """The bands, and what was kept out of them.
+
+    The exclusion counts are not a footnote. An empty table with no counts reads
+    as "nothing recorded yet"; an empty table beside "12 decisions and 37
+    assumptions excluded, their confidence reconstructed after the fact" reads as
+    what it is, which is the measurement this corpus cannot support. Phase 5's
+    retrospective called that distinction the largest single defect in the phase.
+    """
+
+    bands: dict[str, list[CalibrationBand]]
+    excluded_decisions: int
+    excluded_assumptions: int
+
+    @property
+    def excluded(self) -> int:
+        return self.excluded_decisions + self.excluded_assumptions
+
+
+async def calibration(sessions: async_sessionmaker[AsyncSession]) -> CalibrationReport:
+    """Every band with its interval, emitted or not, and what never entered one.
 
     Separate from `discover` because the table is worth reading even when — and
     especially when — nothing in it clears the bar. "No patterns found" and
@@ -1113,6 +1162,22 @@ async def calibration(
     sample supports" are the same result and only the second one is legible.
     """
     corpus = await read_corpus(sessions)
+    foresight = corpus.foresight_decisions
+    latest = corpus.latest_outcome
+    excluded_decisions = sum(
+        1
+        for decision in corpus.decisions
+        if decision.confidence is not None
+        and latest.get(decision.id) is not None
+        and decision.id not in foresight
+    )
+    excluded_assumptions = sum(
+        1
+        for assumption in corpus.assumptions
+        if assumption.confidence is not None
+        and assumption.held is not None
+        and assumption.decision_id not in foresight
+    )
     bands: dict[str, list[CalibrationBand]] = {}
     for candidate in detect_calibration_patterns(corpus):
         metrics = candidate.metrics
@@ -1131,7 +1196,11 @@ async def calibration(
         )
     for values in bands.values():
         values.sort(key=lambda band: band.low)
-    return bands
+    return CalibrationReport(
+        bands=bands,
+        excluded_decisions=excluded_decisions,
+        excluded_assumptions=excluded_assumptions,
+    )
 
 
 async def counts(sessions: async_sessionmaker[AsyncSession]) -> dict[str, int]:

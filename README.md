@@ -2755,14 +2755,35 @@ directionally right and poorly scaled — but with four, seven and fourteen
 observations that shape is indistinguishable from chance, and saying otherwise
 would be this system doing the exact thing it was built not to do.
 
-**And the confound that matters more than any of it.** Calibration is only
-meaningful when the confidence was written down before the outcome was known.
-Every confidence in this corpus was reconstructed: `scripts/seed_decisions.py`
-says so in its own docstring — *"the numbers here are what the person who made
-the call believes they believed"*. So the table above is calibration of
-hindsight, and it would look exactly like this if it were calibration of
-foresight. Nothing in the schema records which it is, and the CLI says so on
-every run.
+**And the confound that matters more than any of it — now enforced rather than
+noted.** Calibration is only meaningful when the confidence was written down
+before the outcome was known. Every confidence in this corpus was reconstructed:
+`scripts/seed_decisions.py` says so in its own docstring — *"the numbers here are
+what the person who made the call believes they believed"*.
+
+Phase 5 shipped with that stated in prose and nowhere else, which its own
+retrospective called the largest single defect in the phase. M6.0 fixed it first:
+`decisions.confidence_horizon` records `foresight`, `hindsight` or `unknown`, set
+once at capture and never updated, and **only `foresight` enters a calibration
+population**. The test that decides it is `decided_at_source`, which has been
+there since M1.1 — `parsed` means the date was read out of a document, so nobody
+wrote the date down at the time and nobody wrote the confidence down at the time
+either.
+
+So the table above is what the corpus *used to* claim. What it prints now:
+
+```
+excluded from every band: 12 decision(s) and 25 assumption(s)
+  their confidence was reconstructed after the fact, and hindsight cannot
+  measure foresight at any weight — see domain/values.ConfidenceHorizon
+
+nothing to calibrate: no confidence recorded before its outcome
+```
+
+Both readings are honest and only one of them is safe. An empty table beside its
+exclusion counts says "this corpus cannot support the measurement"; the table
+above, with a paragraph under it, says "here are five bands" to every reader who
+does not reach the paragraph.
 
 ### How many decisions this would need
 

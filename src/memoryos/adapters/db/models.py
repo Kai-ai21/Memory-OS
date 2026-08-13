@@ -39,6 +39,7 @@ from memoryos.domain.jobs import DEFAULT_MAX_ATTEMPTS, JobStatus
 from memoryos.domain.values import (
     HEX64_PATTERN,
     AssumptionVerdict,
+    ConfidenceHorizon,
     DecisionStatus,
     EntityType,
     EventType,
@@ -1144,6 +1145,17 @@ class Decision(Base):
     known: a number updated in hindsight measures nothing, because everyone is
     well calibrated about the past.
 
+    **`confidence_horizon` is the column that makes that sentence checkable, and
+    Phase 5 shipped without it.** Immutability guarantees the number did not
+    *move*; it guarantees nothing about when it was first written. A confidence
+    reconstructed a week later is still never refreshed, and the calibration
+    table built on it looks exactly like one built on real foresight — which is
+    what M5.3 measured and could not say. Set once at capture from
+    `domain/patterns.classify_confidence` and never updated, because a horizon
+    somebody can revise is a horizon somebody can revise into whichever answer
+    makes the table look better. The CHECK pairs it with `confidence` so a null
+    number and a claimed horizon cannot coexist.
+
     `decided_at_source` follows M1.1 exactly, and for the same reason. A date a
     person typed is `declared`; a date read off an ADR's front matter is
     `parsed`; a date taken from a file's mtime is `filesystem`. Phase 4's
@@ -1161,6 +1173,9 @@ class Decision(Base):
     chosen: Mapped[str] = mapped_column(Text, nullable=False)
     reasoning: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(REAL)
+    confidence_horizon: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text(f"'{ConfidenceHorizon.UNKNOWN.value}'")
+    )
     expected_outcome: Mapped[str | None] = mapped_column(Text)
     decided_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False)
     decided_at_source: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1188,6 +1203,15 @@ class Decision(Base):
         CheckConstraint(
             "confidence IS NULL OR confidence BETWEEN 0.0 AND 1.0",
             name="ck_decisions_confidence_range",
+        ),
+        _enum_check("confidence_horizon", ConfidenceHorizon, "ck_decisions_horizon"),
+        # A confidence with no horizon is a number nobody can calibrate against,
+        # and a horizon with no confidence is a claim about a number that is not
+        # there. Neither may exist.
+        CheckConstraint(
+            f"(confidence IS NULL) = "
+            f"(confidence_horizon = '{ConfidenceHorizon.UNKNOWN.value}')",
+            name="ck_decisions_horizon_pairing",
         ),
         CheckConstraint("length(btrim(question)) > 0", name="ck_decisions_question"),
         CheckConstraint("length(btrim(chosen)) > 0", name="ck_decisions_chosen"),
