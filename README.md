@@ -20,10 +20,11 @@ See [Time](#time) and the [Phase 4 retrospective](#phase-4-retrospective).
 **Phase 5 begun**: M5.0 (the decision schema and capture) — what was decided,
 what else was considered, why, and what had to be true — M5.1 (outcome linking),
 which connects a decision to what happened afterwards and is the milestone where
-Phase 4's temporal layer pays for itself, and M5.2 (assumption tracking), which
-evaluates which of those beliefs held. See [Decisions](#decisions), which opens
+Phase 4's temporal layer pays for itself, M5.2 (assumption tracking), which
+evaluates which of those beliefs held, and M5.3 (pattern discovery), which finds
+none and explains exactly why. See [Decisions](#decisions), which opens
 with the measurement of how little decision-shaped content this corpus actually
-holds, [Outcomes](#outcomes) and [Assumptions](#assumptions).
+holds, [Outcomes](#outcomes), [Assumptions](#assumptions) and [Patterns](#patterns).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -137,6 +138,8 @@ such table fails the build rather than losing its rows in a cascade nobody watch
 | `assumption_groups` | M5.2. Assumptions from different decisions saying one thing.    |
 | `assumption_group_candidates` | Pairs the embedder was unsure about.                  |
 | `assumption_evidence` | Memories bearing on whether an assumption held.              |
+| `patterns`         | M5.3. A behavioural claim, with the evidence that makes it one. |
+| `pattern_evidence` | Decisions that support a pattern, and decisions that contradict it. |
 
 Two design points carry the most weight:
 
@@ -2634,6 +2637,150 @@ and they are phrased differently enough that 0.88 does not join them and honest
 enough that this milestone does not join them by hand. M5.3 gets one group of
 two, and that constrains what it can claim.
 
+## Patterns
+
+M5.3 looks for behavioural patterns across decisions. **On this corpus it finds
+none, and that is the milestone's result rather than its failure.**
+
+```bash
+memoryos patterns discover [--min-support 3]
+memoryos patterns list [--kind assumption|timing|choice|outcome]
+memoryos patterns show <id>          # statement, evidence, counter-evidence
+memoryos patterns dismiss <id> --reason "..."
+memoryos patterns calibration        # the table worth reading when nothing emits
+```
+
+### The failure mode, stated first
+
+"You consistently underestimate deployment effort" is either a finding backed by
+five specific decisions or a horoscope — vague enough to feel true about anyone —
+and nothing in the sentence distinguishes the two. A system that produces
+confident behavioural claims from thin evidence is worse than one that stays
+silent, because it sounds exactly like the product working.
+
+Three gates, each rejecting for a different reason:
+
+1. **Support**, counted in *distinct decisions* rather than rows. Four
+   assumptions from two decisions is two observations of one person on two
+   occasions; a threshold counting rows would let one decision with five
+   assumptions manufacture a pattern about a career. Three is the floor.
+2. **Counter-evidence**, found by the same pass that finds the support so it
+   cannot be the query somebody forgets. A candidate with more contradicting
+   than supporting evidence is **not emitted at all** — not as a weak pattern,
+   because a weak pattern still puts the sentence in front of somebody.
+3. **Resolution**, for anything arithmetic. A calibration gap is evidence only
+   if it exceeds what the sample can distinguish.
+
+Two of those are CHECK constraints rather than conventions in one module:
+`support_count > 0` means a pattern that cannot cite is never written, and
+`support_count > contradiction_count` means the table itself refuses
+confirmation bias.
+
+### The interval is the real gate
+
+M2.3a measured a 0.0122 resolution floor for retrieval and M2.3b refused to ship
+a 0.0109 gain because it fell below it. This is the same rule applied to
+behaviour, using a Wilson score interval — Wilson rather than the normal
+approximation because the normal interval has **zero width at 0 and at 1**, so
+fourteen assumptions that all held would report "100%, ± nothing" and every
+comparison would find a gap.
+
+**Fourteen out of fourteen gives 78%–100%. A stated 0.85 is inside that.** The
+observed gap looks like underconfidence and is not evidence of it: a run of
+fourteen cannot distinguish being right 85% of the time from being right always.
+
+Confidence, when a pattern does emit, is derivable rather than assigned:
+
+```
+agreement   = supporting / (supporting + contradicting)
+sufficiency = min(1, supporting / (2 * min_support))
+confidence  = min(0.95, agreement * sufficiency)
+```
+
+Three supporting with nothing against scores 0.50, not 1.0 — the least that
+counts as anything should not read as certainty. The 0.95 ceiling exists because
+a rules-based detector over one person's own records cannot reach certainty
+however much agrees.
+
+### What discovery actually produced
+
+**Six candidates, zero emitted.**
+
+```
+candidates considered:  6
+minimum support:        3 distinct decisions
+emitted:                0
+below support:          1
+within sampling noise:  5
+
+detectors with nothing to propose:
+  slow_resolution: no outcome among 12 resolved arrived more than 90 days after its decision
+  reversal_rate:   no decision among 16 has been reversed
+```
+
+Two of the four detectors produced no candidate at all, and both for reasons
+that are facts about the corpus rather than gaps in the code. **Every outcome in
+this corpus was recorded on one afternoon**, so the timing detector measures when
+somebody sat down to write them rather than when anything resolved. And no
+decision has ever been reversed, so the reversal half of the choice detector has
+nothing to count.
+
+The one assumption group M5.2 found has two members and both held, so it has
+zero *supporting* evidence — a group that held is the opposite of the claim the
+detector makes.
+
+### Calibration, which is the honest one
+
+Arithmetic over numbers recorded before the answer was known, needing no
+interpretation. Every band, with the interval its sample supports:
+
+| population | band | n | stated | actual | 95% CI | |
+| --- | --- | --- | --- | --- | --- | --- |
+| assumptions | 0.25–0.50 | 4 | 0.41 | 0% | 0%–49% | within |
+| assumptions | 0.50–0.75 | 7 | 0.61 | 57% | 25%–84% | within |
+| assumptions | 0.75–1.00 | 14 | 0.85 | 100% | 78%–100% | within |
+| decisions | 0.50–0.75 | 2 | 0.55 | 0% | 0%–66% | within |
+| decisions | 0.75–1.00 | 6 | 0.89 | 100% | 61%–100% | within |
+
+**Every stated confidence falls inside the interval its own sample supports.**
+The shape suggests something — low-confidence beliefs did worse than claimed and
+high-confidence ones did better, which would be a person whose uncertainty is
+directionally right and poorly scaled — but with four, seven and fourteen
+observations that shape is indistinguishable from chance, and saying otherwise
+would be this system doing the exact thing it was built not to do.
+
+**And the confound that matters more than any of it.** Calibration is only
+meaningful when the confidence was written down before the outcome was known.
+Every confidence in this corpus was reconstructed: `scripts/seed_decisions.py`
+says so in its own docstring — *"the numbers here are what the person who made
+the call believes they believed"*. So the table above is calibration of
+hindsight, and it would look exactly like this if it were calibration of
+foresight. Nothing in the schema records which it is, and the CLI says so on
+every run.
+
+### How many decisions this would need
+
+Not a guess — the interval answers it directly. To distinguish a stated 0.85
+from an observed 100%, the lower bound has to clear 0.85:
+
+| n (all holding) | 95% lower bound | 0.85 inside? |
+| --- | --- | --- |
+| 14 | 0.785 | yes — not a finding |
+| 20 | 0.839 | yes — not a finding |
+| 25 | 0.867 | **no — a finding** |
+| 40 | 0.912 | no |
+
+So **around 25 observations in a single confidence band**, which at roughly two
+evaluated assumptions per decision means **50 to 60 decisions with their
+assumptions evaluated** — three to four times what this corpus holds. For a
+weaker miscalibration the number climbs fast: separating 0.85 from an observed
+90% needs several hundred.
+
+The assumption detector is cheaper: three decisions sharing one grouped belief
+that mostly broke. M5.2 found one group of two across 16 decisions, so the
+binding constraint there is not the threshold but how rarely the same belief is
+written down twice.
+
 ## Migrations
 
 ```bash
@@ -2710,6 +2857,9 @@ hash.
 | `GET /outcomes/rate`       | worked/failed/mixed, with `too_early` outside the rate.     |
 | `GET /assumptions`         | Assumptions with decision, outcome, group and evidence.     |
 | `GET /assumptions/stats`   | Totals, hold rate, and every group with more than one member. |
+| `GET /patterns`            | Patterns with both evidence lists, never one of them.       |
+| `GET /patterns/calibration`| Every confidence band with the interval its sample supports.|
+| `POST /patterns/{id}/dismiss` | Reject a pattern permanently. A reason is required.      |
 
 There is deliberately no `POST /decisions/suggest` and no `POST /outcomes/suggest`. Running
 either extractor costs a model call per candidate, and an endpoint that spends money is one
