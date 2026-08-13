@@ -54,6 +54,12 @@ class JobType(StrEnum):
     # draining this queue may be a different process on a different build from
     # the one that dispatched.
     HANDLE_EVENT = auto()
+    # M6.2. Assembling context takes about a second warm and twenty cold, and
+    # the process that wants it is an editor panel — so the API enqueues this
+    # and answers immediately rather than holding an HTTP request open while a
+    # cross-encoder loads. Deduped on the focus, because two panels open on one
+    # file is one piece of work.
+    ASSEMBLE_CONTEXT = auto()
 
     # Test types. The worker's success, retry, and dead-letter paths are
     # exercised through these rather than through real work.

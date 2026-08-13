@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from memoryos.api.routes import (
     answer,
+    context,
     decisions,
     events,
     evolution,
@@ -64,6 +65,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Phase 6's one endpoint, and the only route in this API that something
     # other than a person calls. No path collision with anything above it.
     app.include_router(events.router)
+    # M6.2's read path for the editor panel. Serves the cache and enqueues on a
+    # miss; it never assembles, because assembly loads two models.
+    app.include_router(context.router)
     return app
 
 

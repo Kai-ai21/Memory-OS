@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
+import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -21,8 +22,10 @@ from memoryos.adapters.connectors.filesystem import (
     DEFAULT_EXCLUDE,
     DEFAULT_INCLUDE,
     DEFAULT_MAX_FILE_BYTES,
+    FilesystemConfig,
 )
 from memoryos.adapters.db import models
+from memoryos.adapters.db.engine import Database
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.extraction.llm import ExtractionStats
 from memoryos.adapters.graph.schema import SCHEMA_VERSION
@@ -87,10 +90,12 @@ from memoryos.application.tuning import (
 )
 from memoryos.application.verification import compare, snapshot
 from memoryos.application.verify_citations import verify_citations
+from memoryos.application.watcher import WatchTree
 from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
 from memoryos.container import Container
 from memoryos.domain.backoff import wait_for
+from memoryos.domain.debounce import DEFAULT_WINDOW
 from memoryos.domain.entities import Source
 from memoryos.domain.events import Event, EventKind
 from memoryos.domain.fusion import DEFAULT_RRF_K
@@ -2612,6 +2617,106 @@ async def run_patterns_calibration(settings: Settings) -> int:
 
 
 # --------------------------------------------------------------------------
+# Watch
+# --------------------------------------------------------------------------
+
+
+async def run_watch(
+    settings: Settings, *, path: str, debounce: float, source_name: str | None
+) -> int:
+    """Watch a tree and emit `FILE_FOCUSED` for real file activity.
+
+    Runs beside you rather than being run by you, which is the whole constraint:
+    it never raises, whatever the API does. A missed event costs a context nobody
+    asked for; a crashed watcher costs the feature, because a dev tool that
+    throws while you are trying to work is uninstalled the same day.
+
+    The include and exclude globs come from the registered source when its root
+    contains the watched path, so the watcher and the sync agree on what the
+    corpus is by construction rather than by two lists being kept level. Falling
+    back to the connector defaults when no source matches is deliberate: a
+    watcher on an unregistered directory still filters `.git` and
+    `node_modules`, which is the failure worth preventing even when nothing will
+    ingest the files.
+    """
+    root = Path(path).expanduser().resolve()
+    if not root.is_dir():
+        print(f"not a directory: {root}")
+        return 1
+
+    # `Database.from_url` rather than `Container.build`, and the difference is
+    # ten seconds and half a gigabyte. Building the container constructs the
+    # embedder — it reaches HuggingFace and loads a model — and the watcher
+    # needs exactly one thing from the database: the globs of the source whose
+    # root contains this path. A process that sits idle waiting for file events
+    # has no business holding a model it will never call.
+    database = Database.from_url(settings.database_url, echo=settings.db_echo)
+    include, exclude, matched = await _watch_globs(
+        database.session_factory, root, source_name
+    )
+    api_url = settings.api_url
+
+    print(f"watching   {root}")
+    print(f"source     {matched or 'none registered — using connector defaults'}")
+    print(f"debounce   {debounce:.0f}s per path, leading edge")
+    print(f"api        {api_url}")
+    print("\nCtrl-C to stop. The API being down is not an error here.\n")
+
+    stop = asyncio.Event()
+    try:
+        async with httpx.AsyncClient() as client:
+            watcher = WatchTree(
+                root,
+                api_url=api_url,
+                include=include,
+                exclude=exclude,
+                window=timedelta(seconds=debounce),
+                client=client,
+            )
+            report = await watcher.run(stop=stop)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        await database.dispose()
+
+    print(
+        f"\nobserved {report.observed}, filtered {report.filtered}, "
+        f"debounced {report.debounced}, emitted {report.emitted}, "
+        f"failed {report.failed}"
+    )
+    return 0
+
+
+async def _watch_globs(
+    sessions: async_sessionmaker[AsyncSession], root: Path, source_name: str | None
+) -> tuple[list[str], list[str], str | None]:
+    """The globs of the source whose root contains this path.
+
+    Matched by containment rather than by equality, so watching a subdirectory
+    of a registered corpus still uses that corpus's rules — which is the common
+    case, since a person watches the package they are working in rather than the
+    repository root.
+    """
+    async with sessions() as session:
+        rows = list(
+            (await session.execute(select(models.Source))).scalars()
+        )
+
+    for row in rows:
+        if source_name is not None and row.name != source_name:
+            continue
+        raw_root = (row.config or {}).get("root")
+        if not raw_root:
+            continue
+        configured = Path(str(raw_root)).expanduser().resolve()
+        if root == configured or configured in root.parents:
+            config = FilesystemConfig.from_dict(dict(row.config or {}))
+            return config.include, config.exclude, row.name
+
+    return list(DEFAULT_INCLUDE), list(DEFAULT_EXCLUDE), None
+
+
+# --------------------------------------------------------------------------
 # Context
 # --------------------------------------------------------------------------
 
@@ -4026,6 +4131,26 @@ def build_parser() -> argparse.ArgumentParser:
     # The verb the milestone names, kept as its own top-level command rather than
     # `patterns reflect`: generating prose about somebody is a different act from
     # counting their decisions, and it should not read as a subcommand of it.
+    watch_parser = commands.add_parser(
+        "watch", help="emit file_focused events for a tree you are working in"
+    )
+    watch_parser.add_argument("path", help="the directory to watch")
+    watch_parser.add_argument(
+        "--debounce",
+        type=float,
+        default=DEFAULT_WINDOW.total_seconds(),
+        help=(
+            f"seconds of silence per path after an event "
+            f"(default {DEFAULT_WINDOW.total_seconds():.0f}). Leading edge: the "
+            f"first save of a burst emits, the rest of the window does not"
+        ),
+    )
+    watch_parser.add_argument(
+        "--source",
+        dest="watch_source",
+        help="use this source's include/exclude globs rather than the containing one",
+    )
+
     context_parser = commands.add_parser(
         "context", help="assemble the context for one focus, and say what fits"
     )
@@ -4650,6 +4775,16 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.patterns_command == "calibration":
             return asyncio.run(run_patterns_calibration(settings))
+
+    if args.command == "watch":
+        return asyncio.run(
+            run_watch(
+                settings,
+                path=args.path,
+                debounce=args.debounce,
+                source_name=args.watch_source,
+            )
+        )
 
     if args.command == "context":
         return asyncio.run(

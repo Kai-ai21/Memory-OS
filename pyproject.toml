@@ -24,6 +24,15 @@ dependencies = [
   "google-genai>=1.0",
   "groq>=0.13",
   "neo4j>=5.26",
+  # M6.2. The file watcher's only new runtime dependency: a cross-platform
+  # wrapper over inotify/FSEvents/ReadDirectoryChangesW, none of which have a
+  # usable common API otherwise.
+  "watchdog>=6.0",
+  # Promoted from the dev extras, where it was only the test client. The
+  # watcher is a long-running process that POSTs to the API, and stdlib
+  # urllib would mean either blocking the event loop or hand-rolling a thread
+  # pool around it.
+  "httpx>=0.27",
 ]
 
 [project.scripts]

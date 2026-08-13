@@ -145,9 +145,6 @@ class ContextItem:
     decision_id: UUID | None = None
     external_key: str | None = None
 
-    def render(self) -> str:
-        return f"[{self.position}] {self.title}\n{self.text}"
-
     def as_dict(self) -> dict[str, Any]:
         return {
             "key": self.key,
@@ -210,9 +207,6 @@ class AssembledContext:
     candidates: int = 0
     duration_ms: int = 0
     cached: bool = False
-
-    def render(self) -> str:
-        return "\n\n".join(item.render() for item in self.items)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -281,6 +275,45 @@ def cache_key_for(request: ContextRequest, fingerprint: str) -> str:
         f"\x00{request.lambda_}\x00{request.category_share}\x00{fingerprint}"
     )
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+async def read_cached(
+    sessions: async_sessionmaker[AsyncSession], key: str
+) -> AssembledContext | None:
+    """A cached context, or None. **Constructs nothing that loads a model.**
+
+    A module-level function rather than a method, and that is the whole point of
+    it: `AssembleContext` holds a search use case, an embedder and a
+    cross-encoder, so building one to read a row would load two models into the
+    API process — which is exactly the cost the cache exists to avoid, paid on
+    the path that exists to avoid it.
+
+    The hit is counted in the same transaction as the read. A hit rate assembled
+    from log lines is a hit rate nobody can query afterwards, and it is the
+    number that decides whether any of this precomputation earns its cost.
+    """
+    now = datetime.now(UTC)
+    async with sessions.begin() as session:
+        row = (
+            await session.execute(
+                sql_select(models.ContextCache).where(
+                    models.ContextCache.cache_key == key,
+                    models.ContextCache.expires_at > now,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        row.hit_count += 1
+        payload = dict(row.payload)
+
+    return AssembledContext(
+        focus=str(payload["focus"]),
+        items=[ContextItem.from_dict(item) for item in payload["items"]],
+        token_budget=int(payload["token_budget"]),
+        tokens_used=int(payload["tokens_used"]),
+        cached=True,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -509,6 +542,16 @@ class AssembleContext:
         logger.info(
             "context.assembled",
             focus=request.focus,
+            # Which event caused this, or None when a person asked directly.
+            # Recorded rather than carried unread: M6.2's whole question is
+            # whether context built for a trigger is ever looked at, and that is
+            # unanswerable if the assembly does not say what triggered it.
+            trigger_kind=(
+                None if request.trigger is None else request.trigger.kind.value
+            ),
+            trigger_id=(
+                None if request.trigger is None else str(request.trigger.id)
+            ),
             candidates=assembled.candidates,
             items=len(items),
             tokens_used=assembled.tokens_used,
@@ -557,7 +600,9 @@ class AssembleContext:
                         await session.execute(
                             sql_select(models.Memory.id)
                             .where(
-                                models.Memory.external_key.like(f"%{focus}"),
+                                models.Memory.external_key.like(
+                                    f"%{_like_literal(focus)}", escape="\\"
+                                ),
                                 models.Memory.is_current.is_(True),
                                 models.Memory.deleted_at.is_(None),
                             )
@@ -798,31 +843,7 @@ class AssembleContext:
     # ----------------------------------------------------------------------
 
     async def _read_cache(self, key: str) -> AssembledContext | None:
-        now = datetime.now(UTC)
-        async with self._sessions.begin() as session:
-            row = (
-                await session.execute(
-                    sql_select(models.ContextCache).where(
-                        models.ContextCache.cache_key == key,
-                        models.ContextCache.expires_at > now,
-                    )
-                )
-            ).scalar_one_or_none()
-            if row is None:
-                return None
-            # Counted on the read, in the same transaction. A hit rate assembled
-            # from log lines is a hit rate nobody can query later, and this is
-            # the number that decides whether precomputation earns its cost.
-            row.hit_count += 1
-            payload = dict(row.payload)
-
-        return AssembledContext(
-            focus=str(payload["focus"]),
-            items=[ContextItem.from_dict(item) for item in payload["items"]],
-            token_budget=int(payload["token_budget"]),
-            tokens_used=int(payload["tokens_used"]),
-            cached=True,
-        )
+        return await read_cached(self._sessions, key)
 
     async def _write_cache(
         self, key: str, request: ContextRequest, assembled: AssembledContext
@@ -916,6 +937,26 @@ async def cache_stats(sessions: async_sessionmaker[AsyncSession]) -> CacheStats:
     return CacheStats(
         entries=int(row[0]), live=int(row[1]), hits=int(row[2]), tokens=int(row[3])
     )
+
+
+def _like_literal(value: str) -> str:
+    """A focus, escaped so `LIKE` reads it as text rather than as a pattern.
+
+    **A focus of `%` matched all 239 memories in this corpus**, and the by-name
+    source silently became "the entire corpus, in arbitrary order, ranked as
+    though each row were the file you are looking at". Not SQL injection — the
+    value is parameterised — but the wrong query, which is the harder kind to
+    notice because nothing errors.
+
+    Live rather than theoretical from M6.2 onwards: the watcher and the editor
+    extension send *file paths* as the focus, and a path may legitimately
+    contain `%` or `_`. The underscore is the one that would have gone unnoticed
+    longest: `a_b.py` quietly also matches `aXb.py`.
+
+    The backslash is escaped first, or escaping the metacharacters would
+    introduce ones this pass then re-escapes.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _best_chunk_text(chunks: Sequence[Any]) -> str:

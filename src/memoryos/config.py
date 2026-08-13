@@ -174,6 +174,12 @@ class Settings(BaseSettings):
     # sit in. Deduplication is the first defence and catches the well-behaved
     # case; this catches the client that sets no dedupe key, or a fresh one each
     # time.
+    # Where the local clients post to and read from. Not a deployment setting —
+    # M6.2's watcher and editor extension are explicitly localhost-only and
+    # unauthenticated — and a setting anyway, because a person running the API
+    # on a second port should not have to edit source to point the watcher at
+    # it.
+    api_url: str = "http://localhost:8000"
     event_rate_limit: int = 60
     event_rate_window_seconds: int = 60
     answer_max_tokens: int = 1024
