@@ -2385,7 +2385,19 @@ This is not hypothetical. M5.0 ran two full replays, a replay truncates the
 entity tables and does not rebuild them, and the corpus spent a whole phase with
 **zero** entity mentions — discovered only when M5.1 went looking. `doctor` now
 reports it as an advisory, which is what the M5.0 follow-up commit on this branch
-added.
+added:
+
+```
+[note] memories_without_entity_extraction: 162
+        current memories no extractor has run over; the graph and any
+        entity-scoped query see nothing of them. A full replay truncates the
+        entity tables and does not rebuild them — re-run `extract-entities`
+        - 0 mention rows in the corpus
+```
+
+It happened again during this milestone, which is the point: M5.1's own
+verification replay emptied the tables a third time, and this time the check
+said so on the next `doctor` run instead of nobody noticing for a phase.
 
 ### What this corpus actually says
 
@@ -2422,6 +2434,52 @@ beside it:
 
 Both point at the same underlying thing, which is what M5.3 exists to notice and
 what this milestone deliberately does not claim to have found.
+
+### What `outcomes suggest` proposed, and why none of it survived review
+
+16 decisions examined, 22 candidates in window, 22 model calls, **4 queued and 0
+worth accepting**. A 100% false-positive rate, and the reasons are structural
+rather than the model behaving badly — it answered "no" 18 times out of 22,
+which is the behaviour the prompt asks for.
+
+Two distinct failure modes, and the second is the one to be afraid of:
+
+- **Same-session sibling files.** Two candidates were `embed.py` and
+  `evaluation.py` proposed as outcomes of the shadow-schema decision, **0
+  minutes** after it. That decision was accepted from an M5.0 suggestion, so its
+  `decided_at` is a file's mtime — and every other file written in the same bulk
+  save is seconds later. "Occurred after" here means "was saved later in the
+  same working session", which is not a temporal relationship at all.
+- **A document that restates the prediction.** Migration `0007_query_judgements`
+  was proposed as the outcome of the golden-set natural-key decision, and the
+  model's description quoted the decision's own `expected_outcome` back as
+  though it were a result. It is the decision *being carried out*, not a report
+  of what happened afterwards — M5.0 would have called that `records` evidence.
+  This is the dangerous shape, because the words match the expected outcome
+  exactly and a reviewer skimming would accept it.
+
+**13 of the 16 decisions had no entity coverage at all**, so their candidates
+were found by time alone — which is exactly the state `entity_filter` exists to
+make visible, and exactly why every one of those candidates was weak. The three
+decisions whose evidence *had* been extracted produced no false positives,
+because the overlap test threw the sibling files out before a model ever saw
+them. That is one data point and it is the right shape.
+
+The honest conclusion for M5.3: **inferred outcomes contribute nothing on this
+corpus.** All twelve real outcomes are `declared`, written by a person checking
+what the milestone reports say. A corpus whose entire history is 2 days 18 hours
+of filesystem mtimes cannot support the inference — the same limit the Phase 4
+retrospective named, reached from a different direction.
+
+### The free tier, hit live
+
+The M5.1 run exhausted Groq's daily token budget mid-milestone — 99,461 of
+100,000 on `llama-3.3-70b-versatile` — and the numbers above were produced by
+re-running the pass against `llama-3.1-8b-instant`, which has its own budget.
+That is the Groq decision's `mixed` outcome happening in real time during the
+milestone that records it, and it is why the prompt shows the model 3,000
+characters of a candidate rather than 6,000: a measurement nobody can afford to
+run is not a measurement.
 
 ## Migrations
 

@@ -303,6 +303,32 @@ async def _source_names(
     return {row[0]: row[1] for row in rows}
 
 
+async def _entities_by_memory(
+    sessions: async_sessionmaker[AsyncSession], memory_ids: tuple[UUID, ...]
+) -> dict[UUID, set[UUID]]:
+    """Resolved entity ids per memory, for a whole window at once.
+
+    The same merge-following `resolved_entities` does, grouped by memory rather
+    than flattened — so the overlap test is a set intersection in Python over
+    one query, instead of a query per candidate.
+    """
+    if not memory_ids:
+        return {}
+    winner = func.coalesce(models.Entity.merged_into_id, models.Entity.id)
+    stmt = (
+        select(models.EntityMention.memory_id, winner)
+        .join(models.Entity, models.Entity.id == models.EntityMention.entity_id)
+        .where(models.EntityMention.memory_id.in_(memory_ids))
+        .distinct()
+    )
+    async with sessions() as session:
+        rows = await session.execute(stmt)
+    grouped: dict[UUID, set[UUID]] = {}
+    for memory_id, entity_id in rows:
+        grouped.setdefault(memory_id, set()).add(entity_id)
+    return grouped
+
+
 async def find_candidates(
     sessions: async_sessionmaker[AsyncSession],
     decision: DecisionContext,
@@ -336,6 +362,14 @@ async def find_candidates(
     # once for the whole window rather than per candidate — there are a handful
     # of sources and one query says so.
     names = await _source_names(sessions)
+    # Entities for the whole window in one query rather than one per candidate.
+    # A wide window over this corpus admits 130-odd memories, and a query each
+    # is 130 round trips to answer a set-intersection the database can do once.
+    candidate_entities: dict[UUID, set[UUID]] = {}
+    if decision_entities:
+        candidate_entities = await _entities_by_memory(
+            sessions, tuple(memory.id for memory in in_window)
+        )
 
     kept: list[Candidate] = []
     for memory in in_window:
@@ -354,8 +388,7 @@ async def find_candidates(
 
         shared: tuple[str, ...] = ()
         if decision_entities:
-            candidate_entities = await resolved_entities(sessions, (memory.id,))
-            overlap = set(decision_entities) & set(candidate_entities)
+            overlap = decision_entities.keys() & candidate_entities.get(memory.id, set())
             if not overlap:
                 continue
             shared = tuple(sorted(decision_entities[key] for key in overlap))
