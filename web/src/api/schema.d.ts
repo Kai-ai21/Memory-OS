@@ -21,6 +21,132 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Decisions */
+        get: operations["list_decisions_decisions_get"];
+        put?: never;
+        /**
+         * Create Decision
+         * @description Record one decision, with its options, assumptions and evidence.
+         */
+        post: operations["create_decision_decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/decisions/suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Suggestions
+         * @description The review queue, each draft beside the passage it came from.
+         */
+        get: operations["list_suggestions_decisions_suggestions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/decisions/suggestions/{suggestion_id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Suggestion
+         * @description Turn a draft into a decision, optionally with the reviewer's edits.
+         *
+         *     The body is the accept-with-changes path and is the expected one: a reviewer
+         *     who has read the passage usually knows a confidence and at least one
+         *     assumption the model could not have. Accepting unedited is allowed and
+         *     leaves those fields empty, which is honest — an empty confidence is not the
+         *     same as a confidence of nothing.
+         */
+        post: operations["accept_suggestion_decisions_suggestions__suggestion_id__accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/decisions/suggestions/{suggestion_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Suggestion
+         * @description Mark a draft as not a decision. The row stays, and is the only measurement
+         *     of what the extractor gets wrong.
+         */
+        post: operations["reject_suggestion_decisions_suggestions__suggestion_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/decisions/{decision_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Show Decision */
+        get: operations["show_decision_decisions__decision_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Edit Decision */
+        patch: operations["edit_decision_decisions__decision_id__patch"];
+        trace?: never;
+    };
+    "/decisions/{decision_id}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link Evidence
+         * @description Attach one memory to a decision, resolving its natural key to ids.
+         */
+        post: operations["link_evidence_decisions__decision_id__evidence_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/doctor": {
         parameters: {
             query?: never;
@@ -445,6 +571,29 @@ export interface components {
             /** Verify Ms */
             verify_ms: number;
         };
+        /** AssumptionIn */
+        AssumptionIn: {
+            /** Confidence */
+            confidence?: number | null;
+            /** Statement */
+            statement: string;
+        };
+        /** AssumptionOut */
+        AssumptionOut: {
+            /** Confidence */
+            confidence: number | null;
+            /** Evaluated At */
+            evaluated_at: string | null;
+            /** Held */
+            held: boolean | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Statement */
+            statement: string;
+        };
         /**
          * BandOut
          * @description One `occurred_at_source` band of the corpus.
@@ -593,6 +742,143 @@ export interface components {
             /** Root */
             root: string;
         };
+        /** DecisionDetailOut */
+        DecisionDetailOut: {
+            /** Assumptions */
+            assumptions: components["schemas"]["AssumptionOut"][];
+            /** Chosen */
+            chosen: string;
+            /** Confidence */
+            confidence: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Decided At
+             * Format: date-time
+             */
+            decided_at: string;
+            decided_at_source: components["schemas"]["TimeProvenance"];
+            /** Evidence */
+            evidence: components["schemas"]["EvidenceOut"][];
+            /** Expected Outcome */
+            expected_outcome: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Options */
+            options: components["schemas"]["OptionOut"][];
+            /** Question */
+            question: string;
+            /** Reasoning */
+            reasoning: string | null;
+            status: components["schemas"]["DecisionStatus"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * DecisionEditIn
+         * @description What may be amended.
+         *
+         *     `confidence` and `decided_at` are absent by design; see
+         *     `application/decisions.DecisionEdit`. `options` and `assumptions` replace
+         *     the existing sets when present.
+         */
+        DecisionEditIn: {
+            /** Assumptions */
+            assumptions?: components["schemas"]["AssumptionIn"][] | null;
+            /** Chosen */
+            chosen?: string | null;
+            /** Expected Outcome */
+            expected_outcome?: string | null;
+            /** Options */
+            options?: components["schemas"]["OptionIn"][] | null;
+            /** Question */
+            question?: string | null;
+            /** Reasoning */
+            reasoning?: string | null;
+            status?: components["schemas"]["DecisionStatus"] | null;
+        };
+        /** DecisionIn */
+        DecisionIn: {
+            /** Assumptions */
+            assumptions?: components["schemas"]["AssumptionIn"][];
+            /** Chosen */
+            chosen: string;
+            /** Confidence */
+            confidence?: number | null;
+            /** Decided At */
+            decided_at?: string | null;
+            /** Evidence */
+            evidence?: components["schemas"]["EvidenceIn"][];
+            /** Expected Outcome */
+            expected_outcome?: string | null;
+            /** Options */
+            options?: components["schemas"]["OptionIn"][];
+            /** Question */
+            question: string;
+            /** Reasoning */
+            reasoning?: string | null;
+        };
+        /** DecisionOut */
+        DecisionOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+        };
+        /**
+         * DecisionStatus
+         * @description Whether a decision is still live, has been resolved, or was undone.
+         *
+         *     `OPEN` is the default and the honest one at capture time: almost nothing is
+         *     settled the moment it is decided. `SETTLED` means the question stopped being
+         *     a question — the choice held and nobody is revisiting it. `REVERSED` means
+         *     the choice was undone, which is not the same as the decision being wrong and
+         *     is deliberately not a judgement: M5.1 links outcomes, and this column must
+         *     not pre-empt that by encoding a verdict in the status.
+         *
+         *     Three states, closed. A fourth like `superseded` is tempting and would
+         *     duplicate `REVERSED` for the reader while splitting every query that asks
+         *     "what is no longer in force" into two.
+         * @enum {string}
+         */
+        DecisionStatus: "open" | "settled" | "reversed";
+        /** DecisionSummaryOut */
+        DecisionSummaryOut: {
+            /** Assumptions */
+            assumptions: number;
+            /** Chosen */
+            chosen: string;
+            /** Confidence */
+            confidence: number | null;
+            /**
+             * Decided At
+             * Format: date-time
+             */
+            decided_at: string;
+            decided_at_source: components["schemas"]["TimeProvenance"];
+            /** Evidence */
+            evidence: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Options */
+            options: number;
+            /** Question */
+            question: string;
+            status: components["schemas"]["DecisionStatus"];
+        };
         /** DiffOut */
         DiffOut: {
             /** Added Chars */
@@ -640,6 +926,58 @@ export interface components {
             /** Model Window */
             model_window: number;
         };
+        /** EvidenceIn */
+        EvidenceIn: {
+            /** Chunk Ordinal */
+            chunk_ordinal?: number | null;
+            /** External Key */
+            external_key: string;
+            /** @default informed */
+            relation: components["schemas"]["EvidenceRelation"];
+            /** Source Name */
+            source_name: string;
+        };
+        /** EvidenceOut */
+        EvidenceOut: {
+            /** Chunk Id */
+            chunk_id: string | null;
+            /** Chunk Ordinal */
+            chunk_ordinal: number | null;
+            /** External Key */
+            external_key: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Memory Id
+             * Format: uuid
+             */
+            memory_id: string;
+            relation: components["schemas"]["EvidenceRelation"];
+            /** Source Name */
+            source_name: string;
+        };
+        /**
+         * EvidenceRelation
+         * @description How a memory relates to a decision.
+         *
+         *     **`INFORMED` and `RECORDS` are not the same relation and must not be
+         *     collapsed.** A design discussion informed the decision and existed before
+         *     it; an ADR records the decision and exists after it. Both are evidence and
+         *     only one is testimony. M5.1 needs to know which came first in order to say
+         *     anything about whether the decision predicted its outcome — a record written
+         *     afterwards agrees with the decision by construction, so treating it as
+         *     input would be reading the answer off the answer sheet.
+         *
+         *     `CONTRADICTS` is the one worth capturing deliberately, because nothing else
+         *     in the system will volunteer it: a memory that argues against the choice is
+         *     exactly what a later reflection needs and exactly what a suggestion pass
+         *     trained on agreement will never propose.
+         * @enum {string}
+         */
+        EvidenceRelation: "informed" | "records" | "contradicts";
         /** EvolutionOut */
         EvolutionOut: {
             /** Diffs */
@@ -949,6 +1287,27 @@ export interface components {
             /** Version */
             version: number;
         };
+        /** OptionIn */
+        OptionIn: {
+            /** Description */
+            description: string;
+            /** Rejected Because */
+            rejected_because?: string | null;
+        };
+        /** OptionOut */
+        OptionOut: {
+            /** Description */
+            description: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Rejected Because */
+            rejected_because: string | null;
+            /** Was Chosen */
+            was_chosen: boolean;
+        };
         /**
          * Period
          * @description The calendar grain an activity histogram is bucketed at.
@@ -1174,6 +1533,53 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /** SuggestionOut */
+        SuggestionOut: {
+            /** Chunk Ordinal */
+            chunk_ordinal: number | null;
+            /** Decision Id */
+            decision_id: string | null;
+            /** Draft */
+            draft: {
+                [key: string]: unknown;
+            };
+            /** External Key */
+            external_key: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Model Id */
+            model_id: string;
+            /** Reviewed At */
+            reviewed_at: string | null;
+            /** Source Name */
+            source_name: string;
+            /** Source Text */
+            source_text: string;
+            status: components["schemas"]["SuggestionStatus"];
+            /**
+             * Suggested At
+             * Format: date-time
+             */
+            suggested_at: string;
+        };
+        /**
+         * SuggestionStatus
+         * @description Where a proposed decision record sits in review.
+         *
+         *     The same shape as `MergeStatus`, for the same reason: a proposal nobody has
+         *     acted on is information, and a queue that forgot its rejections would
+         *     re-propose them on every run. `REJECTED` rows are kept and are what makes the
+         *     extractor's false-positive rate measurable at all.
+         *
+         *     Nothing here is ever `applied` in place. Accepting a suggestion *writes a
+         *     decision* and marks the suggestion accepted, so the decisions table holds
+         *     only rows a person committed to and the queue holds only drafts.
+         * @enum {string}
+         */
+        SuggestionStatus: "pending" | "accepted" | "rejected";
         /** SummaryOut */
         SummaryOut: {
             /** Cached */
@@ -1205,6 +1611,15 @@ export interface components {
              */
             source_id: string;
         };
+        /**
+         * TimeProvenance
+         * @description How confidently `occurred_at` is known.
+         *
+         *     Retrieval that ranks or filters by time needs to know whether a timestamp was
+         *     stated by the source, extracted from text, taken from file metadata, or guessed.
+         * @enum {string}
+         */
+        TimeProvenance: "declared" | "parsed" | "filesystem" | "inferred" | "unknown";
         /**
          * TimelineOut
          * @description The histogram, plus what its dates are worth.
@@ -1466,6 +1881,270 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnswerOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_decisions_decisions_get: {
+        parameters: {
+            query?: {
+                /** @description open, settled or reversed */
+                status?: components["schemas"]["DecisionStatus"] | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionSummaryOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_decision_decisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_suggestions_decisions_suggestions_get: {
+        parameters: {
+            query?: {
+                /** @description pending, accepted or rejected */
+                status?: components["schemas"]["SuggestionStatus"] | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuggestionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_suggestion_decisions_suggestions__suggestion_id__accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DecisionIn"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_suggestion_decisions_suggestions__suggestion_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    show_decision_decisions__decision_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    edit_decision_decisions__decision_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionEditIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    link_evidence_decisions__decision_id__evidence_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvidenceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionOut"];
                 };
             };
             /** @description Validation Error */
