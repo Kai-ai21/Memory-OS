@@ -16,7 +16,12 @@ htmlcov/
 .vscode/
 .DS_Store
 .claude/settings.local.json
-# `var/*`, not `var/`: git cannot re-include a file whose parent directory is
+# `var/*
+# And any `var/` a command creates from a subdirectory. `HF_HOME` resolves
+# relative to the working directory, so running anything that loads the embedder
+# from `web/` writes a model cache there — 950K of weights that were committed
+# once and should never be again.
+*/var/`, not `var/`: git cannot re-include a file whose parent directory is
 # excluded, so the two negations below would silently do nothing.
 var/*
 # Two exceptions, and they are the same exception twice: neither of these can be

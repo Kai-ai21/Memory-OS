@@ -124,6 +124,101 @@ class LogEventHandler:
         )
 
 
+class ContextEventHandler:
+    """M6.1's handler: assemble context for a trigger, and cache it.
+
+    **Subscribed to three kinds and assembles for two of them, which is the
+    whole precomputation policy in one line.**
+
+    A `MEETING_UPCOMING` is scheduled: something already knows it is coming, the
+    focus is its title, and the work has a deadline it must beat. An
+    `EDITOR_OPENED` is a repository somebody has just started working in, which
+    predicts a session rather than a glance. Both are worth building ahead of
+    being asked.
+
+    A `FILE_FOCUSED` is not. It fires on every file somebody glances at, and
+    assembling for each burns compute continuously to produce output nobody
+    asked for — which is exactly the push-system failure Phase 6 opened by
+    naming. So it is subscribed and deliberately does nothing: the decision is
+    visible in one place, with its reason, rather than being an omission from a
+    set literal that reads like an oversight.
+
+    That leaves `memoryos context` as the on-demand path, which shares the cache
+    with the precomputed ones. A focus that was precomputed is a hit; one that
+    was not is a build. The hit rate across both is the evidence for whether
+    precomputation earns its cost, and it is a column rather than a log line for
+    that reason.
+    """
+
+    name = "context"
+    kinds = frozenset(
+        {EventKind.EDITOR_OPENED, EventKind.FILE_FOCUSED, EventKind.MEETING_UPCOMING}
+    )
+    # The two whose triggers predict a real request. See the class docstring.
+    precompute = frozenset({EventKind.EDITOR_OPENED, EventKind.MEETING_UPCOMING})
+
+    def __init__(self, assemble: "ContextAssembler") -> None:
+        self._assemble = assemble
+
+    async def handle(self, event: Event) -> None:
+        focus = focus_of(event)
+        if event.kind not in self.precompute:
+            logger.info(
+                "context.not_precomputed",
+                event_id=str(event.id),
+                kind=event.kind.value,
+                focus=focus,
+                reason="fires too often to assemble speculatively",
+            )
+            return
+        if not focus:
+            # Nothing to assemble *about*. Logged rather than raised: a payload
+            # without a focus is a client's mistake, and dead-lettering the job
+            # would make one badly-formed plugin look like a broken queue.
+            logger.info(
+                "context.no_focus", event_id=str(event.id), kind=event.kind.value
+            )
+            return
+        await self._assemble(focus, event)
+
+
+class ContextAssembler(Protocol):
+    """What `ContextEventHandler` needs, without importing the engine.
+
+    A Protocol rather than the concrete class, and the reason is the import
+    graph: `application/context_engine.py` builds on search, the graph and the
+    token counter, and having the event bus depend on all of that would make the
+    bus unbuildable in a deployment that only wants to receive events. The
+    container supplies the real one.
+    """
+
+    async def __call__(self, focus: str, trigger: Event) -> None: ...
+
+
+# Where the focus lives in each kind's payload.
+#
+# Declared as data because the alternative is a chain of `if kind is ...` that
+# every new kind extends silently. A payload missing its key yields no focus,
+# and the handler logs that rather than inventing one — a context assembled
+# about "" is a context about the whole corpus, which is the least useful
+# possible answer and the most expensive to compute.
+_FOCUS_KEYS: dict[EventKind, tuple[str, ...]] = {
+    EventKind.EDITOR_OPENED: ("workspace", "path", "root"),
+    EventKind.FILE_FOCUSED: ("path", "file"),
+    EventKind.MEETING_UPCOMING: ("title", "subject"),
+    EventKind.MANUAL: ("focus", "query", "path"),
+}
+
+
+def focus_of(event: Event) -> str:
+    """The text this event is about, or empty when it says nothing."""
+    for key in _FOCUS_KEYS.get(event.kind, ()):
+        value = event.payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 # --------------------------------------------------------------------------
 # The bus
 # --------------------------------------------------------------------------

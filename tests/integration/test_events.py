@@ -20,7 +20,7 @@ would be asserting them somewhere they are not enforced.
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -31,10 +31,12 @@ from memoryos.adapters.db import models
 from memoryos.adapters.db.job_queue import PostgresJobQueue
 from memoryos.api.app import create_app
 from memoryos.application.events import (
+    ContextEventHandler,
     EventBus,
     EventRateLimited,
     LogEventHandler,
     build_default_bus,
+    focus_of,
     load,
     mark_processed,
     receive,
@@ -506,12 +508,14 @@ async def test_the_endpoint_stores_dispatches_and_reports_the_duplicate(
 
     assert first.status_code == 202
     assert first.json()["created"] is True
-    assert first.json()["jobs"] == 1
+    # One job per subscribed handler, and the default bus subscribes two: M6.0's
+    # log handler and M6.1's context handler, both of which take file focuses.
+    assert first.json()["jobs"] == 2
     # 200 rather than 202: nothing was accepted for processing the second time.
     assert second.status_code == 200
     assert second.json()["created"] is False
     assert second.json()["id"] == first.json()["id"]
-    assert await count_jobs(harness.sessions) == 1
+    assert await count_jobs(harness.sessions) == 2
 
 
 async def test_an_absent_occurred_at_becomes_received_at(client: AsyncClient) -> None:
@@ -688,3 +692,91 @@ async def test_a_duplicate_rolls_back_before_enqueueing_anything(
     assert not second.created
     assert second.jobs == []
     assert await count_jobs(harness.sessions) == 1
+
+
+# --------------------------------------------------------------------------
+# M6.1's handler, and the precomputation policy
+# --------------------------------------------------------------------------
+
+
+async def test_context_is_precomputed_for_scheduled_triggers_only(
+    harness: Harness,
+) -> None:
+    """The whole precomputation policy, asserted rather than described.
+
+    A meeting is scheduled and an editor opening predicts a session; both are
+    worth building ahead of being asked. A file focus fires on every file
+    somebody glances at, and assembling for each burns compute continuously to
+    produce output nobody asked for — which is the push-system failure Phase 6
+    opened by naming.
+    """
+    assembled: list[str] = []
+
+    async def assemble(focus: str, trigger: Event) -> None:
+        assembled.append(focus)
+
+    handler = ContextEventHandler(assemble)
+
+    await handler.handle(
+        Event(
+            id=uuid4(),
+            kind=EventKind.MEETING_UPCOMING,
+            source="calendar",
+            payload={"title": "phase 6 review"},
+        )
+    )
+    await handler.handle(
+        Event(
+            id=uuid4(),
+            kind=EventKind.EDITOR_OPENED,
+            source="vscode",
+            payload={"workspace": "Memory-OS"},
+        )
+    )
+    await handler.handle(
+        Event(
+            id=uuid4(),
+            kind=EventKind.FILE_FOCUSED,
+            source="vscode",
+            payload={"path": "src/memoryos/cli.py"},
+        )
+    )
+
+    assert assembled == ["phase 6 review", "Memory-OS"]
+    # And it is still subscribed to the one it skips, so the decision is visible
+    # in one place with its reason rather than being an omission from a set.
+    assert EventKind.FILE_FOCUSED in handler.kinds
+
+
+async def test_a_payload_with_no_focus_assembles_nothing(harness: Harness) -> None:
+    # A context assembled about "" is a context about the whole corpus, which is
+    # the least useful possible answer and the most expensive to compute. Logged
+    # rather than raised: a malformed payload is one client's mistake, and
+    # dead-lettering would make it look like a broken queue.
+    calls: list[str] = []
+
+    async def assemble(focus: str, trigger: Event) -> None:
+        calls.append(focus)
+
+    await ContextEventHandler(assemble).handle(
+        Event(
+            id=uuid4(),
+            kind=EventKind.MEETING_UPCOMING,
+            source="calendar",
+            payload={"organiser": "someone"},
+        )
+    )
+
+    assert calls == []
+
+
+def test_the_focus_is_read_from_the_payload_key_each_kind_uses() -> None:
+    for kind, payload, expected in (
+        (EventKind.FILE_FOCUSED, {"path": "a.py"}, "a.py"),
+        (EventKind.EDITOR_OPENED, {"workspace": "  repo  "}, "repo"),
+        (EventKind.MEETING_UPCOMING, {"subject": "standup"}, "standup"),
+        (EventKind.MANUAL, {"focus": "chunking"}, "chunking"),
+        (EventKind.MANUAL, {"unrelated": "x"}, ""),
+    ):
+        event = Event(id=uuid4(), kind=kind, source="test", payload=payload)
+        assert focus_of(event) == expected

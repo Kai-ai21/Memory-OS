@@ -2496,3 +2496,76 @@ class ExternalEvent(Base):
             postgresql_where=text("processed_at IS NULL"),
         ),
     )
+
+
+class ContextCache(Base):
+    """An assembled context, kept so the next trigger does not rebuild it.
+
+    **The only cache in this schema whose entries can be *wrong* rather than
+    merely stale**, and the difference shapes every column. `embedding_cache` is
+    content-addressed: an entry is a pure function of (model, role, text), so a
+    retained one is correct by construction. A context is a function of the whole
+    corpus, and a corpus that has changed makes every context built before it a
+    confident answer to a question whose evidence has moved.
+
+    So `cache_key` carries a fingerprint of the corpus, not just the focus. A
+    sync that ingests one file changes the fingerprint, every key changes with
+    it, and nothing has to know which focuses were affected — see
+    `application/context_engine.corpus_fingerprint`. Over-invalidation costs a
+    re-assembly measured in hundreds of milliseconds; under-invalidation serves
+    context that omits the file somebody just changed, which is the failure the
+    cache exists to avoid rather than to cause.
+
+    `expires_at` is a second, weaker rule and answers a different question. The
+    fingerprint handles staleness of *content*; this handles staleness of
+    *intent*. A context assembled for a meeting three days ago is answering
+    something nobody is asking now, and keeping it is a row that will never be
+    read.
+
+    `hit_count` is the number this milestone is judged on. Precomputing context
+    for triggers that never get read burns compute continuously and produces
+    mostly waste, so the hit rate is the evidence for whether precomputation
+    earns its cost. Counted in the database on the read rather than in a log,
+    because a rate assembled from log lines is a rate nobody can query later.
+
+    `payload` is the rendered context rather than a list of ids. Storing ids
+    would mean re-reading and re-rendering every item on a hit, which is most of
+    the cost the cache exists to avoid — and it would let a hit return text that
+    no longer matches what selection actually saw.
+    """
+
+    __tablename__ = "context_cache"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    # Focus plus budget plus the corpus fingerprint, hashed. Unique because it
+    # *is* the identity: two rows under one key would mean two answers to the
+    # same question with nothing to choose between them.
+    cache_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    # Kept beside the key it is hashed into, so a person reading this table can
+    # see what a row is for. A hash nobody can reverse is a row nobody can debug.
+    focus: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=_EMPTY_JSONB
+    )
+    token_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    built_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False)
+    hit_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+
+    __table_args__ = (
+        CheckConstraint("length(btrim(focus)) > 0", name="ck_context_cache_focus"),
+        CheckConstraint("token_count >= 0", name="ck_context_cache_tokens"),
+        CheckConstraint("hit_count >= 0", name="ck_context_cache_hits"),
+        # A row that expires before it was built is a clock or a TTL bug, and it
+        # would be invisible otherwise: the entry simply never serves a hit.
+        CheckConstraint("expires_at > built_at", name="ck_context_cache_expiry_order"),
+        # The read path is `WHERE cache_key = ? AND expires_at > now()`, and the
+        # unique index on `cache_key` already serves it. This one is for the
+        # sweep that removes dead rows, which is otherwise a full scan of the
+        # table most likely to accumulate them.
+        Index("ix_context_cache_expires", "expires_at"),
+    )

@@ -30,8 +30,17 @@ from memoryos.adapters.parsers.registry import ParserRegistry
 from memoryos.adapters.parsers.registry import build_default_registry as build_parser_registry
 from memoryos.adapters.reranking.cross_encoder import CrossEncoderReranker
 from memoryos.application.answering import AnswerQuestion
+from memoryos.application.context_engine import (
+    AssembleContext,
+    ContextRequest,
+)
 from memoryos.application.embed import EmbedMemory
-from memoryos.application.events import EventBus, build_default_bus
+from memoryos.application.events import (
+    ContextEventHandler,
+    EventBus,
+    LogEventHandler,
+    build_default_bus,
+)
 from memoryos.application.extraction import ExtractEntities
 from memoryos.application.graph_expand import ExpandThroughGraph
 from memoryos.application.graph_sync import SyncGraph
@@ -45,6 +54,7 @@ from memoryos.application.resolution import DEFAULT_THRESHOLD, ResolveEntities
 from memoryos.application.search import FusionWeights, SearchMemories
 from memoryos.application.sync import SyncSource
 from memoryos.config import Settings
+from memoryos.domain.events import Event
 
 logger = structlog.get_logger(__name__)
 
@@ -135,6 +145,21 @@ class Container:
             bus=self.event_bus(),
         )
 
+    def assemble_context(self) -> AssembleContext:
+        """The context engine, wired to every phase that contributes to it.
+
+        The embedder doubles as the token counter, for M2.6's reason: it is the
+        counter the chunker already sizes against, so the budget is spent in the
+        same unit the corpus was built in.
+        """
+        return AssembleContext(
+            self.database.session_factory,
+            self.search(),
+            self.embedder,
+            self.embedder,
+            expand=self.graph_expansion(),
+        )
+
     def event_bus(self) -> EventBus:
         """The event bus, with M6.0's one handler subscribed.
 
@@ -143,7 +168,15 @@ class Container:
         the caller owns rather than running
         anything, so two instances cannot disagree about work in flight.
         """
-        return build_default_bus()
+        return build_default_bus(
+            [
+                LogEventHandler(),
+                # Assembly is built lazily, inside the handler's call, because
+                # constructing it loads the embedder — and a deployment that only
+                # receives events should not pay for a model it may never use.
+                ContextEventHandler(_LazyAssembler(self)),
+            ]
+        )
 
     def optional_extractor(self) -> LlmEntityExtractor | None:
         """The extractor, or None when no API key is configured.
@@ -377,3 +410,25 @@ def _assert_window_alignment(chunker: Chunker, embedder: Embedder) -> None:
             f"Size the chunker from the model: "
             f"ChunkerConfig.for_window({embedder.max_sequence_tokens})."
         )
+
+
+class _LazyAssembler:
+    """Builds the context engine on first use, not at subscription time.
+
+    `Container.event_bus()` is called wherever the bus is needed — including by
+    the API process, which subscribes handlers on every request that dispatches
+    one. Constructing `AssembleContext` eagerly there would load the embedder
+    into a process that may never assemble anything, and would do it on the
+    request path.
+
+    Holding the container rather than the engine also means the handler picks up
+    whatever the container is configured with at the moment it runs, which is the
+    behaviour a worker restarting after a settings change should have.
+    """
+
+    def __init__(self, container: "Container") -> None:
+        self._container = container
+
+    async def __call__(self, focus: str, trigger: Event) -> None:
+        assemble = self._container.assemble_context()
+        await assemble(ContextRequest(focus=focus, trigger=trigger))
