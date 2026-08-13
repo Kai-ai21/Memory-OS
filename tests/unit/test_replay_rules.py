@@ -24,13 +24,14 @@ from memoryos.application.replay import (
     DERIVED_PROJECTIONS,
     DERIVED_TABLES,
     EVIDENCE_TABLES,
+    OPERATIONAL_TABLES,
     REPLAYABLE_EVENT_TYPES,
     SHADOW_TABLES,
     SOURCE_OF_TRUTH_TABLES,
     USER_AUTHORED_TABLES,
     ReplayScope,
     ReplayStage,
-    derived_tables,
+    cleared_tables,
 )
 from memoryos.application.verification import digest_of
 from memoryos.domain.entities import IngestionEvent
@@ -72,14 +73,18 @@ def test_every_table_is_classified_exactly_once() -> None:
     nothing errors at runtime — the replay guarantee just quietly stops covering
     part of the schema. So the check lives here, against the real metadata.
 
-    Three sets, not two. M1.7 shipped with two and reported that the binary was
-    one short; `query_judgements` is the table that made that concrete.
+    Four sets, not two and no longer three. M1.7 shipped with two and reported
+    that the binary was one short; `query_judgements` made that concrete and
+    `USER_AUTHORED_TABLES` answered it. M6.0's `events` is the one after: not
+    rebuilt from, not rebuildable, not written by anybody, and discardable —
+    which is a property none of the other three carry.
     """
     known = {table.name for table in Base.metadata.sorted_tables}
     sets = {
         "SOURCE_OF_TRUTH_TABLES": SOURCE_OF_TRUTH_TABLES,
         "DERIVED_TABLES": frozenset(DERIVED_TABLES),
         "USER_AUTHORED_TABLES": USER_AUTHORED_TABLES,
+        "OPERATIONAL_TABLES": frozenset(OPERATIONAL_TABLES),
     }
     classified = frozenset().union(*sets.values())
 
@@ -271,7 +276,7 @@ def test_no_user_authored_table_is_ever_truncated() -> None:
     # `truncate_derived` names its tables explicitly, so this asserts the two
     # lists cannot overlap however the cache flag is set.
     for clear_cache in (False, True):
-        assert not (set(derived_tables(clear_cache=clear_cache)) & USER_AUTHORED_TABLES)
+        assert not (set(cleared_tables(clear_cache=clear_cache)) & USER_AUTHORED_TABLES)
 
 
 def test_a_user_authored_table_is_never_built_in_a_workspace() -> None:
@@ -318,10 +323,12 @@ def test_every_event_type_has_a_replay_rule() -> None:
 
 
 def test_the_cache_is_kept_by_default_and_cleared_on_request() -> None:
-    assert CACHE_TABLE not in derived_tables(clear_cache=False)
-    assert CACHE_TABLE in derived_tables(clear_cache=True)
+    assert CACHE_TABLE not in cleared_tables(clear_cache=False)
+    assert CACHE_TABLE in cleared_tables(clear_cache=True)
     # Keeping the cache must not spare anything else.
-    assert set(derived_tables(clear_cache=False)) == set(DERIVED_TABLES) - {CACHE_TABLE}
+    assert set(cleared_tables(clear_cache=False)) == (
+        set(DERIVED_TABLES) | set(OPERATIONAL_TABLES)
+    ) - {CACHE_TABLE}
 
 
 def test_the_graph_is_classified_as_derived_and_is_not_a_table() -> None:
@@ -339,13 +346,15 @@ def test_the_graph_is_classified_as_derived_and_is_not_a_table() -> None:
     # would fail that test, which is the intended safety net working.
     tables = set(DERIVED_TABLES) | SOURCE_OF_TRUTH_TABLES | USER_AUTHORED_TABLES
     assert not (DERIVED_PROJECTIONS & tables)
-    assert not (DERIVED_PROJECTIONS & set(derived_tables(clear_cache=True)))
+    assert not (DERIVED_PROJECTIONS & set(cleared_tables(clear_cache=True)))
 
 
 def test_the_shadow_workspace_copies_everything_except_the_cache() -> None:
     # The cache is content-addressed, so sharing the live one is correct rather
     # than merely convenient — and it keeps a verification run cheap.
-    assert set(SHADOW_TABLES) == set(DERIVED_TABLES) - {CACHE_TABLE}
+    assert set(SHADOW_TABLES) == (
+        set(DERIVED_TABLES) | set(OPERATIONAL_TABLES)
+    ) - {CACHE_TABLE}
 
 
 # --------------------------------------------------------------------------
@@ -505,3 +514,35 @@ def test_a_missing_vector_has_no_digest() -> None:
     # Distinct from any real digest, so "unembedded" cannot compare equal to
     # "embedded".
     assert digest_of(None) is None
+
+
+def test_operational_data_is_none_of_the_other_three() -> None:
+    """The fourth category, tested the way the third was.
+
+    Run `events` past each of the other classifications and all three refuse it.
+    Nothing is ever rebuilt *from* an event, so it is not source-of-truth. No
+    replay reproduces a keystroke somebody made in an editor, so it is not
+    derived. Nobody wrote it — a plugin fired — so it is not user-authored. What
+    is left is discardable, which is a property, not the absence of one.
+
+    `jobs` is asserted here too, and that is the point of the test rather than a
+    detail: M1.7's own retrospective said `jobs` was filed as derived because
+    truncating it happened to work, not because a replay rebuilds it. It was in
+    the wrong set for five phases and nothing failed, which is exactly how the
+    next misfiling would look.
+    """
+    for name in ("events", "jobs"):
+        assert name in OPERATIONAL_TABLES, name
+        assert name not in DERIVED_TABLES, name
+        assert name not in USER_AUTHORED_TABLES, name
+        assert name not in SOURCE_OF_TRUTH_TABLES, name
+
+
+def test_a_replay_empties_operational_tables_but_never_rebuilds_them() -> None:
+    # Emptied for a different reason from the derived ones — nothing needs them
+    # back — and the truncation has to include them anyway, or a replay would
+    # leave jobs pointing at memory ids that no longer exist.
+    for clear_cache in (True, False):
+        cleared = set(cleared_tables(clear_cache=clear_cache))
+        assert set(OPERATIONAL_TABLES) <= cleared
+    assert not (set(OPERATIONAL_TABLES) & USER_AUTHORED_TABLES)

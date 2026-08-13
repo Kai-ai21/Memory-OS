@@ -29,6 +29,10 @@ measurement of how little decision-shaped content this corpus actually holds,
 [Outcomes](#outcomes), [Assumptions](#assumptions), [Patterns](#patterns),
 [Reflections](#reflections) and the
 [Phase 5 retrospective](#phase-5-retrospective).
+**Phase 6 begun**: M6.0 (the event bus and triggers) inverts the direction — an
+event arrives and the system queues work nobody asked for. See
+[Events](#events), which measures whether a Postgres queue is fast enough to
+push through rather than guessing.
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -146,6 +150,7 @@ such table fails the build rather than losing its rows in a cascade nobody watch
 | `pattern_evidence` | Decisions that support a pattern, and decisions that contradict it. |
 | `reflections`      | M5.4. A pattern in prose. The only row a language model wrote. |
 | `reflection_citations` | Each `[n]` in that prose, frozen to the decision it points at. |
+| `events`           | M6.0. Something that happened outside. Operational, discardable. |
 
 Two design points carry the most weight:
 
@@ -3134,6 +3139,195 @@ M5.3's calibration detector, where under-confidence could not fire at all, is
 exactly the kind of thing that surfaces when the layer above finally asks the
 layer below for its evidence.
 
+## Events
+
+M6.0 lets something outside trigger work. **It is the plumbing and nothing else:
+no context is assembled, no relevance is predicted, and the one handler that
+exists writes a log line.** M6.1 puts real work behind it.
+
+```bash
+memoryos events tail [--kind file_focused] [--limit 20] [--follow]
+memoryos events stats
+```
+
+```bash
+curl -X POST localhost:8000/events -H 'Content-Type: application/json' \
+  -d '{"kind":"manual","source":"cli","payload":{}}'
+```
+
+### The inversion, and what it changes about being wrong
+
+Everything through Phase 5 is **pull**: you ask, the system answers. This phase
+is **push**: something happens, the system decides work is worth doing, and does
+it unasked.
+
+That changes the failure mode rather than the difficulty. A bad pull answer
+wastes one query and you move on. A bad push wastes compute continuously and
+teaches you to ignore the output — and a system whose output you ignore is worse
+than one that stays silent, which is the same argument M5.3 made about
+horoscopes, arriving from the opposite direction.
+
+M6.0 predicts nothing, so it cannot be wrong that way yet. What it *can* get
+wrong is volume, and the two defences are the whole milestone.
+
+### One keystroke, one unit of work
+
+```sql
+CREATE UNIQUE INDEX uq_events_pending_dedupe ON events (kind, dedupe_key)
+    WHERE processed_at IS NULL AND dedupe_key IS NOT NULL;
+```
+
+An editor firing a focus event on every keystroke is not ten units of work; it is
+one, repeated. The tenth delivery collides with the first and the queue never
+sees it — and every delivery gets the *same* event id back, so a client that
+retries is not left holding an id nothing will ever process.
+
+**`WHERE processed_at IS NULL` is the whole design.** The same file focused again
+tomorrow is genuinely new work, and an index over every row would refuse the
+second focus forever: a system that stops responding to you after the first time
+you open a file. `dedupe_key IS NOT NULL` is in the predicate for a different
+reason — Postgres treats nulls as distinct, so without it the index would be
+dead weight over every keyless row.
+
+The collision is caught rather than checked for. A `SELECT` first is a race: two
+deliveries of the same keystroke can both find nothing and both insert, and the
+index is what actually decides. Catching `IntegrityError` means the database
+arbitrates, which is the only arbiter that is right under concurrency.
+
+### The rate limit is counted, not bucketed
+
+Deduplication only helps a client that sets a key. A plugin that sets none, or a
+fresh one each time, is stopped by counting instead: sixty per source per minute,
+`429` with `Retry-After` past that.
+
+**Counted against stored rows rather than held in a token bucket**, and that is
+the decision worth recording. A bucket in the API process is per replica and
+resets on every deploy, while the queue it protects is shared by all of them — so
+two replicas would allow twice the limit and a restart would allow it again
+immediately. Counting costs one indexed range scan per POST and cannot be wrong
+about what was actually accepted.
+
+Per source, not global. The point is to stop one misbehaving plugin, and a global
+limit would let that plugin lock out every well-behaved client.
+
+### Dispatch enqueues. It does not run handlers.
+
+```python
+class EventHandler(Protocol):
+    name: str
+    kinds: frozenset[EventKind]
+    async def handle(self, event: Event) -> None: ...
+```
+
+Running handlers inline inside `dispatch` would be four lines shorter and wrong
+in four ways at once. The HTTP request would block until every handler finished,
+so a slow handler becomes a slow editor. A handler that raised would abort the
+ones after it, so the order of a `subscribe` call would decide whose work
+happened. A crash mid-dispatch would lose the rest with no record they were owed.
+And a retry would re-run the handlers that had already succeeded.
+
+One `HANDLE_EVENT` job per subscribed handler answers all four with machinery
+M1.2 already built: each retries on its own schedule with its own backoff,
+dead-letters on its own, and carries its own error and traceback in a row anybody
+can query. **One handler failing cannot block another, because they were never in
+the same unit of work.**
+
+The job's dedupe key is `(event id, handler name)`, so dispatching an event twice
+is idempotent per handler — a POST that stored its event and then failed to
+enqueue can be retried without doubling the work already queued.
+
+`processed_at` is written by the job, never by dispatch, and every handler job
+writes it unconditionally so the stored value is the *last* handler to finish.
+First-writer-wins would report the time to the fastest handler, which is the most
+flattering number available and the least useful.
+
+### Events are a fourth category
+
+`application/replay.py` has classified every table since M1.7 as
+source-of-truth, derived, or user-authored. An event is none of them: nothing is
+ever rebuilt from it, no replay reproduces a keystroke, and nobody wrote it. What
+it is, is **discardable** — emptying it loses information that exists nowhere
+else and costs nothing, because nothing downstream depends on it.
+
+M1.7's own retrospective predicted this one. The comment above
+`USER_AUTHORED_TABLES` still says: *"`jobs` is classified derived and truncating
+it works, but it is discardable, not reconstructible, which is a different
+property that happened to be safe."* `jobs` moves into `OPERATIONAL_TABLES` here,
+where it always belonged. Nothing about the replay changes — both sets are
+emptied, in the same order — only the reason is now correct.
+
+The consequence is real rather than bookkeeping: a full replay truncates
+`events`, so a `HANDLE_EVENT` job still pending afterwards refers to a row that
+no longer exists. That fails **permanently on the first attempt** rather than
+retrying five times, because a routine rebuild should not produce a burst of dead
+letters.
+
+### What it measured
+
+Eight events through `POST /events`, one worker running, one handler:
+
+```
+  kind              total   done  pending    latency  arrival
+  editor_opened         1      1        0     1.037s  0.000s
+  file_focused          5      5        0     1.020s  0.000s
+  manual                1      1        0     1.106s  0.000s
+  meeting_upcoming      1      1        0     1.039s  53.507s
+
+  mean received -> processed: 1.035s (weighted by kind)
+```
+
+`arrival` is `occurred_at -> received_at`, kept separate on purpose: a slow queue
+is this system's fault and a slow delivery is the network's, and one number
+covering both blames whichever component the reader already suspected. The 53
+seconds on the meeting is a client asserting a time in the past, which is M1.1's
+rule working — an event delivered after a hiccup happened earlier than it
+arrived.
+
+### Is Postgres adequate, or does this need a broker?
+
+**The first place in this project where that question has evidence rather than an
+opinion.** M1.2 chose a table over a broker and said the ceiling was "low
+thousands of jobs per second"; here is the measurement, from 50 events posted
+back to back with a worker already awake:
+
+| | |
+| --- | --- |
+| POST throughput | 167 events/s through the API, single client |
+| queue latency, p50 | **0.218s** |
+| queue latency, p95 | 0.240s |
+| queue latency, max | 0.243s |
+| whole burst | first received to last processed, 0.506s — **99 events/s** end to end |
+| single event, idle queue | ~1.0s |
+
+Two numbers and they answer different halves.
+
+**0.22s is what the database costs**, and it is three round trips per event —
+claim, `processed_at`, complete — against a handler that does nothing. That is
+the floor a Postgres queue imposes, and it is not close to mattering.
+
+**The ~1.0s for a single event on an idle queue is not the database at all.** It
+is `WorkerConfig.poll_max_seconds = 2.0`: the poll backs off when the queue is
+empty, so an event arriving at a random point in that cycle waits half an
+interval. It is a constant, not a property of the storage.
+
+So: **Postgres is adequate, and by a margin that makes the question uninteresting
+until something else changes.** M6.1 puts retrieval and a model call behind these
+triggers — seconds of work — so a fifth of a second of queue is noise, and a
+`meeting_upcoming` fired five minutes ahead has four orders of magnitude of slack.
+99 events/s from one worker against roughly 10/s from an editor firing on
+keystrokes is ten times the headroom, and workers are horizontal.
+
+If the idle second ever did matter, the fix is `poll_min_seconds` or a
+`LISTEN/NOTIFY` wake-up on the existing table — not a broker. The property the
+table buys is the one a broker cannot: **enqueueing a job and writing the data it
+refers to happen in one transaction.** The standard fix for that with a broker is
+a jobs table in the database anyway.
+
+The number that would change this answer is not throughput. It is a handler that
+must run in under 100ms — a completion inline in an editor, say — where a fifth
+of a second of queue plus a poll interval is the whole budget. Nothing in Phase 6
+as planned is that.
+
 ## Migrations
 
 ```bash
@@ -3216,6 +3410,7 @@ hash.
 | `GET /reflections`         | Reflections with citations resolved. Dismissed ones excluded.|
 | `POST /reflections/{id}/acknowledge` | Record that it was read. Not agreement.           |
 | `POST /reflections/{id}/dismiss` | "This is wrong about me." Stops regeneration too.     |
+| `POST /events`             | Accept one external event and queue a job per handler.      |
 
 There is no route that returns a reflection alongside anything else — not in a search result,
 not on a decision, not in a corpus summary. They are fetched from `GET /reflections` and nowhere
@@ -3290,6 +3485,10 @@ was once wrong:
   thing standing between this pipeline and one that fills the column with plausible garbage.
 - `tests/unit/test_replay_rules.py::test_every_table_is_classified_exactly_once` — fails when a new
   table is added without deciding whether it can be rebuilt. That omission is otherwise invisible.
+- `tests/integration/test_events.py::test_the_worker_this_project_ships_can_run_a_handle_event_job` —
+  asserts against the *container's* registry rather than a fixture's. M6.0 shipped its first run with
+  the bus wired into the API and not into the worker, and every unit test passed, because they all
+  build their own registry. Only running it caught it.
 - `tests/integration/test_replay.py::test_versions_and_tombstones_survive_a_rebuild` — the test that
   caught the replay applying events without interleaving the pipeline, a defect no row count showed.
 - `tests/unit/test_reflection_grounding.py::test_a_pattern_below_the_threshold_produces_no_reflection`
