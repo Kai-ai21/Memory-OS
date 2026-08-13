@@ -170,25 +170,42 @@ export function DecisionPage() {
   );
 }
 
+/**
+ * Four states, not two, and the fourth is the absence of the other three.
+ *
+ * `partially` is a verdict rather than a rounding: almost nothing anybody
+ * assumes is cleanly right or wrong, and the interesting cases are exactly the
+ * ones a binary would force into the wrong box. `unevaluated` stays neutral
+ * because it is not a bad result — it is nobody having looked, and colouring it
+ * would report every new decision as built on sand.
+ */
+const ASSUMPTION_TONE: Record<string, string> = {
+  held: "text-affirm",
+  failed: "text-deny",
+  partially: "text-amber",
+};
+
 function AssumptionRow({ assumption }: { assumption: DecisionAssumption }) {
-  // Three states, not two. `null` means nobody has judged it yet, which is
-  // deliberately distinct from "it broke" — an interface that collapsed them
-  // would report every new decision as built on sand.
-  const verdict =
-    assumption.held === null ? "unevaluated" : assumption.held ? "held" : "broke";
-  const tone =
-    assumption.held === null
-      ? "text-faint"
-      : assumption.held
-        ? "text-affirm"
-        : "text-deny";
+  const verdict = assumption.held ?? "unevaluated";
+  const tone = ASSUMPTION_TONE[verdict] ?? "text-faint";
   return (
-    <li className="flex items-baseline gap-3 border-b border-rule/60 pb-1">
-      <span className={`meta-label w-24 shrink-0 ${tone}`}>{verdict}</span>
-      <span className="prose-content flex-1 text-sm text-ink">{assumption.statement}</span>
-      <span className="meta shrink-0 text-faint">
-        {assumption.confidence === null ? "—" : assumption.confidence.toFixed(2)}
-      </span>
+    <li className="border-b border-rule/60 pb-1">
+      <div className="flex items-baseline gap-3">
+        <span className={`meta-label w-24 shrink-0 ${tone}`}>{verdict}</span>
+        <span className="prose-content flex-1 text-sm text-ink">
+          {assumption.statement}
+        </span>
+        <span className="meta shrink-0 text-faint" title="confidence at the time">
+          {assumption.confidence === null ? "—" : assumption.confidence.toFixed(2)}
+        </span>
+      </div>
+      {assumption.note ? (
+        // The evaluator's reasoning, kept apart from the statement they were
+        // judging. An assumption is never rewritten to match what happened.
+        <p className="meta ml-[6.75rem] mt-0.5 max-w-prose leading-relaxed text-muted">
+          {assumption.note}
+        </p>
+      ) : null}
     </li>
   );
 }

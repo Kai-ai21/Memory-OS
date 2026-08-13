@@ -21,9 +21,16 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
-from memoryos.application import decision_suggest, decisions, outcome_suggest, outcomes
+from memoryos.application import (
+    assumptions,
+    decision_suggest,
+    decisions,
+    outcome_suggest,
+    outcomes,
+)
 from memoryos.container import Container
 from memoryos.domain.values import (
+    AssumptionVerdict,
     DecisionStatus,
     EvidenceKind,
     EvidenceRelation,
@@ -115,9 +122,13 @@ class AssumptionOut(BaseModel):
     id: UUID
     statement: str
     confidence: float | None
-    # Null until M5.2 evaluates it, and deliberately not `false`.
-    held: bool | None
+    # `held | failed | partially`, or null when nobody has judged it — which is
+    # deliberately not `failed`. M5.2 widened this from a boolean because almost
+    # nothing anybody assumes is cleanly right or wrong.
+    held: AssumptionVerdict | None
     evaluated_at: datetime | None
+    # The evaluator's reasoning, separate from the statement they were judging.
+    note: str | None = None
 
 
 class EvidenceOut(BaseModel):
@@ -225,6 +236,56 @@ class OutcomeSuggestionOut(BaseModel):
     suggested_at: datetime
     reviewed_at: datetime | None
     outcome_id: UUID | None
+
+
+class AssumptionDetailOut(BaseModel):
+    id: UUID
+    decision_id: UUID
+    # The decision travels with the assumption. A claim made in service of a
+    # choice, read away from the choice, is a sentence with its subject removed.
+    decision_question: str
+    statement: str
+    confidence: float | None
+    held: AssumptionVerdict | None
+    evaluated_at: datetime | None
+    note: str | None
+    group_id: UUID | None
+    group_label: str | None
+    # Context, never a gate. An assumption on a `too_early` decision is still
+    # evaluable — some beliefs are checkable long before the decision they
+    # supported is.
+    outcome_verdict: OutcomeVerdict | None
+    evidence: list[OutcomeEvidenceOut]
+
+
+class AssumptionGroupOut(BaseModel):
+    id: UUID
+    label: str
+    strategy: str
+    members: int
+    evaluated: int
+    held: int
+    failed: int
+    partially: int
+    # None when nothing in the group is evaluated. Zero would read as "none of
+    # these held", and a group nobody has looked at says nothing at all.
+    hold_rate: float | None
+    # Deliberately not one minus the hold rate: `partially` counts as a failure
+    # here and not as a success there. A belief that half held is a belief that
+    # half broke, and the view that surfaces recurring trouble should show it.
+    failure_rate: float | None
+    statements: list[str]
+
+
+class AssumptionStatsOut(BaseModel):
+    total: int
+    evaluated: int
+    unevaluated: int
+    held: int
+    failed: int
+    partially: int
+    hold_rate: float | None
+    groups: list[AssumptionGroupOut]
 
 
 class SuccessRateOut(BaseModel):
@@ -532,6 +593,90 @@ async def reject_outcome_suggestion(
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
+@router.get("/assumptions", response_model=list[AssumptionDetailOut])
+async def list_assumptions_route(
+    container: ContainerDep,
+    decision: Annotated[UUID | None, Query()] = None,
+    unevaluated: Annotated[bool, Query()] = False,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+) -> list[AssumptionDetailOut]:
+    """Assumptions with their decision, outcome, group and evidence."""
+    rows = await assumptions.list_assumptions(
+        container.database.session_factory,
+        decision_id=decision,
+        unevaluated_only=unevaluated,
+        limit=limit,
+    )
+    return [
+        AssumptionDetailOut(
+            id=row.id,
+            decision_id=row.decision_id,
+            decision_question=row.decision_question,
+            statement=row.statement,
+            confidence=row.confidence,
+            held=row.held,
+            evaluated_at=row.evaluated_at,
+            note=row.note,
+            group_id=row.group_id,
+            group_label=row.group_label,
+            outcome_verdict=row.outcome_verdict,
+            evidence=[
+                OutcomeEvidenceOut(
+                    id=item.id,
+                    memory_id=item.memory_id,
+                    chunk_id=item.chunk_id,
+                    source_name=item.source_name,
+                    external_key=item.external_key,
+                    chunk_ordinal=item.chunk_ordinal,
+                    occurred_at=item.occurred_at,
+                )
+                for item in row.evidence
+            ],
+        )
+        for row in rows
+    ]
+
+
+@router.get("/assumptions/stats", response_model=AssumptionStatsOut)
+async def assumption_stats(container: ContainerDep) -> AssumptionStatsOut:
+    """Totals, hold rate, and every group with its rates.
+
+    `unevaluated` is beside the rate rather than inside it, the same way
+    `too_early` sits beside a success rate: a percentage over whatever happened
+    to get attention is not a measurement.
+    """
+    report = await assumptions.stats(container.database.session_factory)
+    return AssumptionStatsOut(
+        total=report.total,
+        evaluated=report.evaluated,
+        unevaluated=report.unevaluated,
+        held=report.held,
+        failed=report.failed,
+        partially=report.partially,
+        hold_rate=report.hold_rate,
+        groups=[
+            AssumptionGroupOut(
+                id=group.id,
+                label=group.label,
+                strategy=group.strategy,
+                members=group.members,
+                evaluated=group.evaluated,
+                held=group.held,
+                failed=group.failed,
+                partially=group.partially,
+                hold_rate=group.hold_rate,
+                failure_rate=group.failure_rate,
+                statements=group.statements,
+            )
+            # Only the recurring ones. A group of one is an assumption nothing
+            # else resembles — a fact about the corpus, not a finding about
+            # anybody's judgement — and a view listing them would bury the two
+            # that mean something under thirty that do not.
+            for group in report.recurring
+        ],
+    )
+
+
 @router.get("/outcomes/rate", response_model=SuccessRateOut)
 async def get_success_rate(container: ContainerDep) -> SuccessRateOut:
     """How decisions turned out, with `too_early` outside the rate."""
@@ -698,6 +843,7 @@ def _detail_out(
                 confidence=item.confidence,
                 held=item.held,
                 evaluated_at=item.evaluated_at,
+                note=item.note,
             )
             for item in detail.assumptions
         ],

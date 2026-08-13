@@ -9,6 +9,7 @@ import { NavLink, Route, Routes } from "react-router-dom";
 
 import { API_BASE } from "./api/client";
 import { CorpusPage } from "./features/corpus/CorpusPage";
+import { AssumptionsPage } from "./features/decisions/AssumptionsPage";
 import { DecisionForm } from "./features/decisions/DecisionForm";
 import { DecisionPage } from "./features/decisions/DecisionPage";
 import { DecisionsPage } from "./features/decisions/DecisionsPage";
@@ -51,6 +52,7 @@ export function App() {
           <Route path="/decisions/new" element={<DecisionForm />} />
           <Route path="/decisions/review" element={<ReviewQueue />} />
           <Route path="/decisions/outcomes" element={<OutcomeQueue />} />
+          <Route path="/decisions/assumptions" element={<AssumptionsPage />} />
           <Route path="/decisions/:id" element={<DecisionPage />} />
           <Route path="/judgements" element={<JudgementsPage />} />
           <Route path="/corpus" element={<CorpusPage />} />

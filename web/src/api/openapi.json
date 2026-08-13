@@ -235,6 +235,209 @@
         "title": "AnswerTimingOut",
         "type": "object"
       },
+      "AssumptionDetailOut": {
+        "properties": {
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "decision_id": {
+            "format": "uuid",
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "decision_question": {
+            "title": "Decision Question",
+            "type": "string"
+          },
+          "evaluated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluated At"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/OutcomeEvidenceOut"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          },
+          "group_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Label"
+          },
+          "held": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssumptionVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "outcome_verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutcomeVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "statement": {
+            "title": "Statement",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "decision_id",
+          "decision_question",
+          "statement",
+          "confidence",
+          "held",
+          "evaluated_at",
+          "note",
+          "group_id",
+          "group_label",
+          "outcome_verdict",
+          "evidence"
+        ],
+        "title": "AssumptionDetailOut",
+        "type": "object"
+      },
+      "AssumptionGroupOut": {
+        "properties": {
+          "evaluated": {
+            "title": "Evaluated",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "failure_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Rate"
+          },
+          "held": {
+            "title": "Held",
+            "type": "integer"
+          },
+          "hold_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Rate"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "members": {
+            "title": "Members",
+            "type": "integer"
+          },
+          "partially": {
+            "title": "Partially",
+            "type": "integer"
+          },
+          "statements": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Statements",
+            "type": "array"
+          },
+          "strategy": {
+            "title": "Strategy",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "strategy",
+          "members",
+          "evaluated",
+          "held",
+          "failed",
+          "partially",
+          "hold_rate",
+          "failure_rate",
+          "statements"
+        ],
+        "title": "AssumptionGroupOut",
+        "type": "object"
+      },
       "AssumptionIn": {
         "properties": {
           "confidence": {
@@ -290,18 +493,28 @@
           "held": {
             "anyOf": [
               {
-                "type": "boolean"
+                "$ref": "#/components/schemas/AssumptionVerdict"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Held"
+            ]
           },
           "id": {
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
           },
           "statement": {
             "title": "Statement",
@@ -317,6 +530,74 @@
         ],
         "title": "AssumptionOut",
         "type": "object"
+      },
+      "AssumptionStatsOut": {
+        "properties": {
+          "evaluated": {
+            "title": "Evaluated",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/AssumptionGroupOut"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "held": {
+            "title": "Held",
+            "type": "integer"
+          },
+          "hold_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Rate"
+          },
+          "partially": {
+            "title": "Partially",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "unevaluated": {
+            "title": "Unevaluated",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "evaluated",
+          "unevaluated",
+          "held",
+          "failed",
+          "partially",
+          "hold_rate",
+          "groups"
+        ],
+        "title": "AssumptionStatsOut",
+        "type": "object"
+      },
+      "AssumptionVerdict": {
+        "description": "Whether something a decision rested on turned out to be true.\n\n**Three states, and the third is the reason this is not a boolean.** M5.0\ndeclared `held` as `BOOLEAN NULL` and M5.2 widened it, because forcing a\nbinary produces noise rather than data: almost nothing anybody assumes is\ncleanly right or wrong. \"The free tier's rate limits are workable\" was true\nfor six months of ordinary use and false the moment a corpus-wide extraction\nran. Recording that as `false` loses the half that was right, and recording\nit as `true` loses the milestone it blocked.\n\nThe column keeps the name `held` even though `held = 'failed'` reads oddly,\nbecause everything M5.0 wrote about it is still true and renaming a column\nto improve one sentence is how a schema and its documentation drift apart.\n`AssumptionVerdict.PARTIALLY` is what the sentence should say.\n\nNULL remains \"nobody has judged this yet\" and is deliberately not `FAILED`.\nA system that could not tell an unevaluated assumption from a broken one\nwould report every new decision as built on sand \u2014 M5.0's words, still the\nrule.",
+        "enum": [
+          "held",
+          "failed",
+          "partially"
+        ],
+        "title": "AssumptionVerdict",
+        "type": "string"
       },
       "BandOut": {
         "description": "One `occurred_at_source` band of the corpus.",
@@ -3902,6 +4183,105 @@
         "summary": "Answer",
         "tags": [
           "answer"
+        ]
+      }
+    },
+    "/assumptions": {
+      "get": {
+        "description": "Assumptions with their decision, outcome, group and evidence.",
+        "operationId": "list_assumptions_route_assumptions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "decision",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Decision"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unevaluated",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Unevaluated",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AssumptionDetailOut"
+                  },
+                  "title": "Response List Assumptions Route Assumptions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Assumptions Route",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/assumptions/stats": {
+      "get": {
+        "description": "Totals, hold rate, and every group with its rates.\n\n`unevaluated` is beside the rate rather than inside it, the same way\n`too_early` sits beside a success rate: a percentage over whatever happened\nto get attention is not a measurement.",
+        "operationId": "assumption_stats_assumptions_stats_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssumptionStatsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Assumption Stats",
+        "tags": [
+          "decisions"
         ]
       }
     },

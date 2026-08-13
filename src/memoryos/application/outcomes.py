@@ -26,7 +26,6 @@ decision has one outcome. `latest_verdict` reads the most recent by
 intact for M5.3, which is the milestone that cares about it.
 """
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -389,18 +388,26 @@ async def for_decision(
                 )
             ).scalars()
         )
-        evidence = list(
-            (
-                await session.execute(
-                    select(models.OutcomeEvidence)
-                    .where(
-                        models.OutcomeEvidence.outcome_id.in_(
-                            [row.id for row in rows] or [new_id()]
+        # Skipped rather than run with an empty `IN`, which SQLAlchemy renders
+        # as a constant-false predicate and a warning. The earlier version
+        # padded the list with a fresh UUID to keep it non-empty, which worked
+        # and read like a bug.
+        evidence = (
+            list(
+                (
+                    await session.execute(
+                        select(models.OutcomeEvidence)
+                        .where(
+                            models.OutcomeEvidence.outcome_id.in_(
+                                [row.id for row in rows]
+                            )
                         )
+                        .order_by(models.OutcomeEvidence.external_key)
                     )
-                    .order_by(models.OutcomeEvidence.external_key)
-                )
-            ).scalars()
+                ).scalars()
+            )
+            if rows
+            else []
         )
 
     by_outcome: dict[UUID, list[EvidenceRow]] = {}
@@ -433,18 +440,6 @@ def _to_row(row: models.DecisionOutcome, evidence: list[EvidenceRow]) -> Outcome
         created_at=row.created_at,
         evidence=evidence,
     )
-
-
-async def counts_by_decision(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> dict[UUID, int]:
-    """How many outcomes each decision has. What the list view needs."""
-    async with session_factory() as session:
-        rows = await session.execute(
-            select(models.DecisionOutcome.decision_id, func.count())
-            .group_by(models.DecisionOutcome.decision_id)
-        )
-    return {row[0]: row[1] for row in rows}
 
 
 async def latest_verdict(
@@ -502,14 +497,3 @@ async def success_rate(
         # is somebody having looked.
         undecided=max(total - len(latest), 0),
     )
-
-
-def verdicts_for_rate(outcomes: Sequence[OutcomeRow]) -> list[OutcomeRow]:
-    """The outcomes a success rate is computed over.
-
-    A function rather than a comprehension at each call site, because "which
-    verdicts count" is a decision and two places making it separately is how a
-    dashboard and a report end up disagreeing about the same corpus. The set
-    itself lives in `domain.values.RESOLVED_VERDICTS`.
-    """
-    return [outcome for outcome in outcomes if outcome.resolved]

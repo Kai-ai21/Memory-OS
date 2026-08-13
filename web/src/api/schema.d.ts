@@ -21,6 +21,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/assumptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Assumptions Route
+         * @description Assumptions with their decision, outcome, group and evidence.
+         */
+        get: operations["list_assumptions_route_assumptions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assumptions/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Assumption Stats
+         * @description Totals, hold rate, and every group with its rates.
+         *
+         *     `unevaluated` is beside the rate rather than inside it, the same way
+         *     `too_early` sits beside a success rate: a percentage over whatever happened
+         *     to get attention is not a measurement.
+         */
+        get: operations["assumption_stats_assumptions_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/decisions": {
         parameters: {
             query?: never;
@@ -673,6 +717,65 @@ export interface components {
             /** Verify Ms */
             verify_ms: number;
         };
+        /** AssumptionDetailOut */
+        AssumptionDetailOut: {
+            /** Confidence */
+            confidence: number | null;
+            /**
+             * Decision Id
+             * Format: uuid
+             */
+            decision_id: string;
+            /** Decision Question */
+            decision_question: string;
+            /** Evaluated At */
+            evaluated_at: string | null;
+            /** Evidence */
+            evidence: components["schemas"]["OutcomeEvidenceOut"][];
+            /** Group Id */
+            group_id: string | null;
+            /** Group Label */
+            group_label: string | null;
+            held: components["schemas"]["AssumptionVerdict"] | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Note */
+            note: string | null;
+            outcome_verdict: components["schemas"]["OutcomeVerdict"] | null;
+            /** Statement */
+            statement: string;
+        };
+        /** AssumptionGroupOut */
+        AssumptionGroupOut: {
+            /** Evaluated */
+            evaluated: number;
+            /** Failed */
+            failed: number;
+            /** Failure Rate */
+            failure_rate: number | null;
+            /** Held */
+            held: number;
+            /** Hold Rate */
+            hold_rate: number | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Label */
+            label: string;
+            /** Members */
+            members: number;
+            /** Partially */
+            partially: number;
+            /** Statements */
+            statements: string[];
+            /** Strategy */
+            strategy: string;
+        };
         /** AssumptionIn */
         AssumptionIn: {
             /** Confidence */
@@ -686,16 +789,60 @@ export interface components {
             confidence: number | null;
             /** Evaluated At */
             evaluated_at: string | null;
-            /** Held */
-            held: boolean | null;
+            held: components["schemas"]["AssumptionVerdict"] | null;
             /**
              * Id
              * Format: uuid
              */
             id: string;
+            /** Note */
+            note?: string | null;
             /** Statement */
             statement: string;
         };
+        /** AssumptionStatsOut */
+        AssumptionStatsOut: {
+            /** Evaluated */
+            evaluated: number;
+            /** Failed */
+            failed: number;
+            /** Groups */
+            groups: components["schemas"]["AssumptionGroupOut"][];
+            /** Held */
+            held: number;
+            /** Hold Rate */
+            hold_rate: number | null;
+            /** Partially */
+            partially: number;
+            /** Total */
+            total: number;
+            /** Unevaluated */
+            unevaluated: number;
+        };
+        /**
+         * AssumptionVerdict
+         * @description Whether something a decision rested on turned out to be true.
+         *
+         *     **Three states, and the third is the reason this is not a boolean.** M5.0
+         *     declared `held` as `BOOLEAN NULL` and M5.2 widened it, because forcing a
+         *     binary produces noise rather than data: almost nothing anybody assumes is
+         *     cleanly right or wrong. "The free tier's rate limits are workable" was true
+         *     for six months of ordinary use and false the moment a corpus-wide extraction
+         *     ran. Recording that as `false` loses the half that was right, and recording
+         *     it as `true` loses the milestone it blocked.
+         *
+         *     The column keeps the name `held` even though `held = 'failed'` reads oddly,
+         *     because everything M5.0 wrote about it is still true and renaming a column
+         *     to improve one sentence is how a schema and its documentation drift apart.
+         *     `AssumptionVerdict.PARTIALLY` is what the sentence should say.
+         *
+         *     NULL remains "nobody has judged this yet" and is deliberately not `FAILED`.
+         *     A system that could not tell an unevaluated assumption from a broken one
+         *     would report every new decision as built on sand — M5.0's words, still the
+         *     rule.
+         * @enum {string}
+         */
+        AssumptionVerdict: "held" | "failed" | "partially";
         /**
          * BandOut
          * @description One `occurred_at_source` band of the corpus.
@@ -2169,6 +2316,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_assumptions_route_assumptions_get: {
+        parameters: {
+            query?: {
+                decision?: string | null;
+                unevaluated?: boolean;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssumptionDetailOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assumption_stats_assumptions_stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssumptionStatsOut"];
                 };
             };
         };

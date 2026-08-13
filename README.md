@@ -18,12 +18,12 @@ zero). See [Graph](#graph) and [Graph-augmented retrieval](#graph-augmented-retr
 M4.2 (evolution and change detection) and M4.3 (time-aware retrieval, measured).
 See [Time](#time) and the [Phase 4 retrospective](#phase-4-retrospective).
 **Phase 5 begun**: M5.0 (the decision schema and capture) — what was decided,
-what else was considered, why, and what had to be true — and M5.1 (outcome
-linking), which connects a decision to what happened afterwards and is the
-milestone where Phase 4's temporal layer pays for itself. See
-[Decisions](#decisions), which opens with the measurement of how little
-decision-shaped content this corpus actually holds, and
-[Outcomes](#outcomes).
+what else was considered, why, and what had to be true — M5.1 (outcome linking),
+which connects a decision to what happened afterwards and is the milestone where
+Phase 4's temporal layer pays for itself, and M5.2 (assumption tracking), which
+evaluates which of those beliefs held. See [Decisions](#decisions), which opens
+with the measurement of how little decision-shaped content this corpus actually
+holds, [Outcomes](#outcomes) and [Assumptions](#assumptions).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -108,11 +108,11 @@ rebuilds them from the first group plus the blob store. The split is declared as
 not classified.
 
 Later phases added a third group rather than widening either of these. `query_judgements`
-(M2.0a), the five decision tables (M5.0) and the three outcome tables (M5.1) are
-**user-authored**: neither rebuildable nor ingestion input, never truncated and never
-written by a replay. Two of them — `decision_evidence` and `outcome_evidence` — hold
-cascading foreign keys into `memories` anyway, so a replay snapshots their links by natural
-key and re-links them afterwards; a test derives that list from the metadata, so a third
+(M2.0a), the five decision tables (M5.0), the three outcome tables (M5.1) and the
+three assumption tables (M5.2) are **user-authored**: neither rebuildable nor ingestion input, never truncated and never
+written by a replay. Three of them — `decision_evidence`, `outcome_evidence` and `assumption_evidence`
+— hold cascading foreign keys into `memories` anyway, so a replay snapshots their links by natural
+key and re-links them afterwards; a test derives that list from the metadata, so a fourth
 such table fails the build rather than losing its rows in a cascade nobody watched. See
 [Replay](#replay), [Decisions](#decisions) and [Outcomes](#outcomes).
 
@@ -134,6 +134,9 @@ such table fails the build rather than losing its rows in a cascade nobody watch
 | `decision_outcomes` | M5.1. What happened afterwards, and whether anybody watched it. |
 | `outcome_evidence` | Memories showing an outcome happened, with the date snapshotted. |
 | `outcome_suggestions` | Candidates, with the temporal gap and shared entities kept.   |
+| `assumption_groups` | M5.2. Assumptions from different decisions saying one thing.    |
+| `assumption_group_candidates` | Pairs the embedder was unsure about.                  |
+| `assumption_evidence` | Memories bearing on whether an assumption held.              |
 
 Two design points carry the most weight:
 
@@ -2481,6 +2484,156 @@ milestone that records it, and it is why the prompt shows the model 3,000
 characters of a candidate rather than 6,000: a measurement nobody can afford to
 run is not a measurement.
 
+## Assumptions
+
+M5.2 fills the `held` and `evaluated_at` columns M5.0 declared, and groups the
+assumptions that say the same thing across different decisions.
+
+**Assumptions matter more than outcomes, and that is the whole argument for this
+milestone.** An outcome tells you a decision worked: one bit, about one decision,
+transferable to nothing. "pgvector will be fast enough at my scale" holding or
+failing teaches you something you can apply to the next storage decision. "The
+pgvector decision worked out" teaches you nothing at all.
+
+```bash
+memoryos assumptions review [--decision ID] [--unevaluated]
+memoryos assumption <id> --held true|false|partially --note "..."
+memoryos assumptions suggest [--decision ID]    # proposes evidence, never a verdict
+memoryos assumptions group [--dry-run]
+memoryos assumptions candidates                 # pairs the embedder was unsure about
+memoryos assumptions accept <id> | reject <id>
+memoryos assumptions stats
+```
+
+### `held` stops being a boolean
+
+Migration 0018 widens it to `held | failed | partially`, NULL still meaning
+nobody has judged it. Forcing a binary produces noise rather than data: "the free
+tier's rate limits are workable for a corpus of this size" was true through
+months of ordinary use and false the first time a corpus-wide extraction ran, and
+recording that as either verdict loses half of what happened.
+
+The column keeps its M5.0 name. `held = 'failed'` reads oddly, and renaming a
+column to improve one sentence is how a schema and its documentation drift apart.
+
+`partially` sits **in the denominator of the hold rate and not the numerator**,
+which is a judgement rather than an obvious truth — a rate that counted it as a
+success would flatter every vague assumption anybody wrote. It is reported on its
+own line so the choice stays visible. In the groups view it counts towards
+*failure*, and the two rates are deliberately not complements: a belief that half
+held is a belief that half broke, and the view whose job is surfacing recurring
+trouble should say so.
+
+### The one proposal path with no model in it
+
+`application/assumption_suggest.py` contains no `LanguageModel`, and that absence
+is the design rather than an omission. M5.0 asks a model to draft decisions and
+M5.1 asks one to judge outcomes, both behind a review queue. Here the retrieval
+*is* the proposal: passages that bear on the assumption, with the reason each
+surfaced, and nothing that resembles a verdict.
+
+**The system proposes evidence; you judge.** A model asked "did your assumption
+hold" produces a fluent guess dressed as an evaluation, and M5.4's reflections
+read these values — so a model's opinion here becomes a claim about how a person
+thinks, stated as fact and impossible to falsify.
+
+Two filters, and the temporal one is doing real work. A memory that predates the
+decision cannot be evidence about whether the belief later held; it is part of
+what the belief was formed from, and offering it as a test would be circular.
+Measured over six assumptions: 150 passages retrieved, **46 dropped for
+predating the decision**. Undated memories go the same way — an unknown date is
+not evidence of any date.
+
+### Grouping, and the bar it has to clear
+
+M3.2's machinery over assumption statements, with M3.2's asymmetry intact and a
+higher threshold: **0.95 to group automatically, 0.88 to reach the review queue**,
+against M3.2's 0.93 and 0.86 for entity names. Assumption statements are full
+sentences in one voice about one project, so the whole population sits closer
+together than entity names did, and a threshold tuned by intuition would collapse
+the corpus into one blob.
+
+A false grouping is worse here than it was for entities. A missed group leaves
+two beliefs looking unrelated — visible, and fixed by accepting a pending
+candidate. A false group *invents a recurrence*: four members, one hold rate, and
+a confident finding about how somebody estimates, assembled from assumptions with
+nothing to do with each other. M5.3 reads exactly this table.
+
+When nothing clears the floor the report prints the closest pairs, because "0
+groups" does not distinguish a corpus that came close from one nowhere near, and
+those call for different next steps.
+
+### What this corpus says
+
+**37 assumptions. 25 evaluated, 12 left alone.**
+
+| | count |
+| --- | --- |
+| held | 18 |
+| failed | 6 |
+| partially | 1 |
+| unevaluated | 12 |
+
+**Hold rate 72% of 25 evaluated.** The twelve are in neither half, for the reason
+`too_early` is outside a success rate: a percentage over whatever happened to get
+attention is not a measurement.
+
+The rule applied while evaluating, stated so it can be argued with: **an
+assumption is evaluated only when something actually tested it.** "Nothing has
+gone wrong" is usually evidence that a belief was never exercised, which is a
+different fact from it having held — that is what the twelve are. For a
+conjunction, the *load-bearing clause* decides: "`domain/` staying pure is what
+protects testability; the rest is tidiness" is judged on the first clause, which
+is checkable and checked; "k=60 transfers without tuning, and there is not enough
+data to tune it anyway" is judged on the first clause, which nobody tested, so it
+stays unevaluated even though the second half is confirmed.
+
+The six failures are worth reading together, because five of them are one story:
+
+- **The free tier's rate limits are workable for a corpus of this size** (0.50) —
+  21 of 162 memories at M3.5, and M5.1 exhausted the daily budget outright at
+  99,461 of 100,000 mid-milestone.
+- **Entity extraction covers enough of the corpus for the graph to be dense
+  rather than thin** (0.45) — 13%, then zero, then 7%, then zero.
+- **The corpus will contain enough typed relationships for depth-2 traversal to
+  reach something a retriever missed** (0.40) — 24 distinct edges.
+- **Running a second database is worth it for one query shape** (0.40) — graph
+  expansion still ships at weight zero.
+- **Someone will re-run this measurement once extraction covers the corpus**
+  (0.40) — three milestones later nobody has, and coverage went down.
+- **Cosmetic edits are common enough in a real corpus to be worth
+  special-casing** (0.60) — M4.2 measured the adoption case occurring zero times.
+
+The single `partially` is the Gemini adapter: "keeping two implementations is
+cheap enough that the second one does not rot" (0.60). It has not rotted — it
+still typechecks and is still wired in — and nothing exercises it either. When
+Groq's daily budget ran out mid-M5.1 the fallback reached for was a *different
+Groq model*. Maintained and unproven is neither of the other two verdicts.
+
+### One group, and it is not a pattern
+
+`assumptions group` compared 666 pairs across 37 statements. **Nothing cleared
+0.95. One pair cleared the review floor at 0.912** and was accepted by hand:
+
+```
+Chunking stays deterministic, so an ordinal identifies the same span after a rebuild.
+   from: What do a chunk's char_start and char_end index into?
+Chunking stays deterministic, so an ordinal identifies the same span after a replay.
+   from: How does a human judgement identify the search result it is about?
+```
+
+That is a genuine recurrence — the same belief underwrote two unrelated
+decisions — and both members held, giving a group of 2 with a **100% hold rate**.
+
+**It is not a pattern and nothing should treat it as one.** A group of two that
+both held says only that determinism held twice. Every other assumption in this
+corpus is held exactly once, which is a fact about a project a few weeks old
+rather than a failure of the grouper: the five failures listed above *feel* like
+one recurring belief about how much of the corpus the language model would reach,
+and they are phrased differently enough that 0.88 does not join them and honest
+enough that this milestone does not join them by hand. M5.3 gets one group of
+two, and that constrains what it can claim.
+
 ## Migrations
 
 ```bash
@@ -2555,6 +2708,8 @@ hash.
 | `POST /outcomes/suggestions/{id}/accept` | Write it as `inferred`, never declared.  |
 | `POST /outcomes/suggestions/{id}/reject` | Mark a candidate as not an outcome.      |
 | `GET /outcomes/rate`       | worked/failed/mixed, with `too_early` outside the rate.     |
+| `GET /assumptions`         | Assumptions with decision, outcome, group and evidence.     |
+| `GET /assumptions/stats`   | Totals, hold rate, and every group with more than one member. |
 
 There is deliberately no `POST /decisions/suggest` and no `POST /outcomes/suggest`. Running
 either extractor costs a model call per candidate, and an endpoint that spends money is one
