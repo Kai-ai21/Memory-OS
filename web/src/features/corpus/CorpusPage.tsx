@@ -121,19 +121,29 @@ export function CorpusPage() {
               {doctor.data.healthy ? "healthy" : "problems found"}
             </p>
             <ul>
-              {doctor.data.findings.map((finding) => (
+              {doctor.data.findings.map((finding) => {
+                // Three states, not two. A non-zero advisory is a capability
+                // nobody has exercised rather than damage, and rendering it as
+                // a green "ok" is how a corpus with no entity extraction at all
+                // stayed invisible through two full replays.
+                const note = finding.advisory && finding.count > 0;
+                return (
                 <li key={finding.check} className="border-b border-rule/60 py-1.5">
                   <div className="flex items-baseline gap-3">
-                    <span className={`meta ${finding.healthy ? "text-affirm" : "text-deny"}`}>
-                      {finding.healthy ? "ok" : "FAIL"}
+                    <span
+                      className={`meta ${
+                        note ? "text-amber" : finding.healthy ? "text-affirm" : "text-deny"
+                      }`}
+                    >
+                      {note ? "note" : finding.healthy ? "ok" : "FAIL"}
                     </span>
                     <span className="meta text-ink">{finding.check}</span>
                     <span className="meta text-faint">{count(finding.count)}</span>
                   </div>
-                  {!finding.healthy ? (
+                  {!finding.healthy || note ? (
                     <p className="meta mt-0.5 max-w-prose text-muted">{finding.detail}</p>
                   ) : null}
-                  {finding.examples.length > 0 && !finding.healthy ? (
+                  {finding.examples.length > 0 && (!finding.healthy || note) ? (
                     <ul className="mt-0.5">
                       {finding.examples.map((example) => (
                         <li key={example} className="meta text-faint">
@@ -143,7 +153,8 @@ export function CorpusPage() {
                     </ul>
                   ) : null}
                 </li>
-              ))}
+                );
+              })}
             </ul>
           </>
         ) : null}

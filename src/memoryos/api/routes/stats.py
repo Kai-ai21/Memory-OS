@@ -47,6 +47,10 @@ class FindingOut(BaseModel):
     detail: str
     examples: list[str]
     healthy: bool
+    # A non-zero advisory is neither a pass nor a failure — it names a
+    # capability nobody has exercised. Carried to the client so the corpus page
+    # can render it as a note rather than as a green tick beside a real gap.
+    advisory: bool = False
 
 
 class DoctorOut(BaseModel):
@@ -97,6 +101,7 @@ async def get_doctor(container: ContainerDep) -> DoctorOut:
                 detail=finding.detail,
                 examples=finding.examples,
                 healthy=finding.healthy,
+                advisory=finding.advisory,
             )
             for finding in report.findings
         ],

@@ -33,6 +33,8 @@ from memoryos.application import (
     graph_projection,
     graph_sync,
     graph_verify,
+    outcome_suggest,
+    outcomes,
     temporal,
 )
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
@@ -88,9 +90,11 @@ from memoryos.domain.jobs import JobStatus, JobType, PermanentError, TransientEr
 from memoryos.domain.values import (
     DEFAULT_SEARCH_MODE,
     DecisionStatus,
+    EvidenceKind,
     EvidenceRelation,
     MergeStatus,
     MergeStrategy,
+    OutcomeVerdict,
     Period,
     SearchMode,
     SourceKind,
@@ -762,9 +766,18 @@ async def run_doctor_command(settings: Settings) -> int:
         print(f"window:  {container.embedder.max_sequence_tokens} tokens")
         print(f"chunker: {container.chunker.version}\n")
         for finding in report.findings:
-            mark = "ok  " if finding.healthy else "FAIL"
+            # Three marks, not two. An advisory with a non-zero count is neither
+            # a pass nor a failure: it names a capability nobody has exercised,
+            # and printing `ok` beside a corpus with no entity extraction at all
+            # is how that state stayed invisible through two full replays.
+            if finding.advisory and finding.count:
+                mark = "note"
+            elif finding.healthy:
+                mark = "ok  "
+            else:
+                mark = "FAIL"
             print(f"[{mark}] {finding.check}: {finding.count}")
-            if not finding.healthy:
+            if mark != "ok  ":
                 print(f"        {finding.detail}")
                 for example in finding.examples:
                     print(f"        - {example}")
@@ -1990,6 +2003,11 @@ async def run_decisions_show(settings: Settings, *, decision_id: str) -> int:
         detail = await decisions.show(
             container.database.session_factory, UUID(decision_id)
         )
+        # Composed here rather than inside `decisions.show`, so the two modules
+        # stay independent: outcomes read decisions, and nothing reads back.
+        recorded = await outcomes.for_decision(
+            container.database.session_factory, UUID(decision_id)
+        )
     except decisions.UnknownDecision as exc:
         print(str(exc))
         return 1
@@ -2038,6 +2056,8 @@ async def run_decisions_show(settings: Settings, *, decision_id: str) -> int:
             else item.external_key
         )
         print(f"    {item.relation.value:11} {item.source_name}:{where}")
+
+    _print_outcomes(recorded)
     return 0
 
 
@@ -2112,6 +2132,265 @@ async def run_decisions_link(
     finally:
         await container.dispose()
     print(f"linked {linked} of {len(evidence)}")
+    return 0
+
+
+async def run_outcome(
+    settings: Settings,
+    *,
+    decision_id: str,
+    verdict: str,
+    description: str,
+    observed: str | None,
+    evidence: list[str],
+) -> int:
+    """Record what happened, as somebody who watched it happen.
+
+    `declared`, confidence 1.0, and neither is a flag. Saying you observed
+    something *is* certainty about the observation, and a `--confidence 0.7` on
+    this command would be somebody hedging testimony into the one column M5.3
+    uses to tell testimony from a model's guess. A reading you are unsure about
+    belongs in the suggestion queue, which is what `outcomes suggest` fills.
+    """
+    when = parse_moment(observed, name="--observed") if observed else datetime.now(UTC)
+    container = Container.build(settings)
+    try:
+        outcome_id = await outcomes.record(
+            container.database.session_factory,
+            UUID(decision_id),
+            outcomes.OutcomeDraft(
+                description=description,
+                verdict=OutcomeVerdict(verdict),
+                evidence=tuple(
+                    _parse_outcome_evidence(value) for value in evidence
+                ),
+            ),
+            observed_at=when,
+            observed_at_source=TimeProvenance.DECLARED,
+            evidence_kind=EvidenceKind.DECLARED,
+        )
+    except decisions.UnknownDecision as exc:
+        print(str(exc))
+        return 1
+    except (outcomes.InvalidOutcome, outcomes.UnresolvedEvidence) as exc:
+        print(f"refused: {exc}")
+        return 1
+    finally:
+        await container.dispose()
+    print(f"recorded {outcome_id}")
+    return 0
+
+
+def _parse_outcome_evidence(value: str) -> outcomes.OutcomeEvidenceInput:
+    """`source:path[#ordinal]` — the same natural key `decisions link` takes.
+
+    No relation here, unlike decision evidence: an outcome's evidence has only
+    one relation to it, which is that it shows the outcome happened. The
+    informed/records distinction is about what came before a decision, and
+    everything here is after one by construction.
+    """
+    locator, _, ordinal = value.partition("#")
+    source_name, _, external_key = locator.partition(":")
+    if not source_name or not external_key:
+        raise SystemExit(f"evidence must look like source:path[#chunk], got {value!r}")
+    return outcomes.OutcomeEvidenceInput(
+        source_name=source_name.strip(),
+        external_key=external_key.strip(),
+        chunk_ordinal=int(ordinal) if ordinal.strip() else None,
+    )
+
+
+def _print_outcomes(rows: list[outcomes.OutcomeRow]) -> None:
+    """The outcome block of `decisions show`."""
+    print("\n  outcomes")
+    if not rows:
+        print("    none recorded — not the same as 'too early', which is a verdict")
+        return
+    for row in rows:
+        marker = "" if row.observed_at_source is TimeProvenance.DECLARED else "~"
+        confidence = "" if row.confidence is None else f" conf {row.confidence:.2f}"
+        # The evidence kind is printed on every line rather than only when it is
+        # inferred. A reader scanning a list has to be able to see which of
+        # these somebody watched happen.
+        print(
+            f"    [{row.verdict.value:9}] {row.evidence_kind.value:8} "
+            f"{marker}{_stamp(row.observed_at)}{confidence}"
+        )
+        print(f"        {row.description}")
+        for item in row.evidence:
+            where = (
+                f"{item.external_key}#{item.chunk_ordinal}"
+                if item.chunk_ordinal is not None
+                else item.external_key
+            )
+            print(f"        · {item.source_name}:{where}")
+
+
+async def run_outcomes_suggest(
+    settings: Settings,
+    *,
+    decision_id: str | None,
+    window_days: float | None,
+    limit: int,
+) -> int:
+    container = Container.build(settings)
+    try:
+        suggest = outcome_suggest.SuggestOutcomes(
+            container.database.session_factory, container.language_model()
+        )
+        report = await suggest(
+            decision_id=UUID(decision_id) if decision_id else None,
+            window_days=window_days,
+            limit=limit,
+        )
+    except decisions.UnknownDecision as exc:
+        print(str(exc))
+        return 1
+    except MissingApiKey as exc:
+        print(str(exc))
+        return 1
+    finally:
+        await container.dispose()
+
+    print(f"decisions examined:        {report.decisions}")
+    if window_days is None:
+        print(
+            f"window:                   derived per decision from its confidence, "
+            f"{outcome_suggest.MIN_WINDOW_DAYS:.0f}-"
+            f"{outcome_suggest.MAX_WINDOW_DAYS:.0f} days "
+            f"({outcome_suggest.DEFAULT_WINDOW_DAYS:.0f} where none was recorded)"
+        )
+        # Said out loud every run. A derived number that nobody sees is a
+        # constant with extra steps, and this one is a guess rather than a
+        # measurement.
+        print("                          — a heuristic, not a measurement")
+    else:
+        print(f"window:                   {window_days:.0f} days (overridden)")
+    print(f"candidates in window:      {report.candidates}")
+    print(f"model calls:               {report.calls}")
+    print(f"judged an outcome:         {report.judged_yes}")
+    print(f"judged not:                {report.judged_no}")
+    print(f"judged unsure:             {report.judged_unsure}")
+    print(f"below confidence floor:    {report.below_confidence}")
+    print(f"unparseable responses:     {report.unparseable}")
+    print(f"queued for review:         {report.proposed}")
+    print(f"already queued:            {report.duplicates}")
+    # The two numbers that explain an empty run, and they explain it very
+    # differently: no candidates is a corpus with nothing after these decisions,
+    # no entity coverage is a filter that could not be applied at all.
+    print(f"decisions with no candidate:      {report.decisions_without_candidates}")
+    print(f"decisions with no entity coverage: {report.decisions_without_entity_coverage}")
+    if report.decisions_without_entity_coverage:
+        print(
+            "\nAn 'unavailable' entity filter means nothing has been extracted for "
+            "that decision's evidence, so candidates were found by time alone. "
+            "Run `memoryos extract-entities`; `memoryos doctor` reports the "
+            "coverage."
+        )
+    if report.proposed:
+        print("\nNothing committed. Review with `memoryos outcomes review`.")
+    return 0
+
+
+async def run_outcomes_review(
+    settings: Settings, *, status: str | None, limit: int, show_passage: bool
+) -> int:
+    container = Container.build(settings)
+    try:
+        rows = await outcome_suggest.list_suggestions(
+            container.database.session_factory,
+            status=SuggestionStatus(status) if status else None,
+            limit=limit,
+        )
+    finally:
+        await container.dispose()
+
+    if not rows:
+        print("nothing in the outcome review queue")
+        return 0
+
+    print(f"{len(rows)} suggestion(s)\n")
+    for row in rows:
+        print(f"{row.id}  {row.status.value}")
+        print(f"     decision   {row.decision_question}")
+        print(f"     candidate  {row.source_name}:{row.external_key}")
+        # The temporal gap, stated. The entire claim is that one thing followed
+        # another closely enough to be connected, so the number that claim rests
+        # on belongs on screen rather than inside a score.
+        print(
+            f"     gap        {outcome_suggest.describe_gap(row.gap_days)} after the "
+            f"decision (window {row.window_days:.0f}d)"
+        )
+        shared = ", ".join(row.shared_entities) if row.shared_entities else "—"
+        print(f"     entities   {row.entity_filter}: {shared}")
+        print(f"     verdict    {row.draft.verdict.value}")
+        print(f"     says       {row.draft.description}")
+        if row.draft.rationale:
+            print(f"     because    {row.draft.rationale}")
+        if show_passage:
+            excerpt = " ".join(row.source_text.split())[:400]
+            print(f"     ┃  {excerpt}")
+        print()
+    print("Accept with `outcomes accept <id>`, reject with `outcomes reject <id>`.")
+    return 0
+
+
+async def run_outcomes_accept(settings: Settings, *, suggestion_id: str) -> int:
+    container = Container.build(settings)
+    try:
+        outcome_id = await outcome_suggest.accept(
+            container.database.session_factory, UUID(suggestion_id)
+        )
+    except (decisions.UnknownDecision, outcome_suggest.AlreadyReviewed) as exc:
+        print(str(exc))
+        return 1
+    except outcomes.InvalidOutcome as exc:
+        print(f"refused: {exc}")
+        return 1
+    finally:
+        await container.dispose()
+    print(f"recorded {outcome_id}")
+    # Said on every accept. An accepted suggestion is still a model's reading,
+    # and the one thing `evidence_kind` exists for is that nothing later
+    # mistakes it for testimony.
+    print("Recorded as `inferred` — accepting is not the same as having watched it.")
+    return 0
+
+
+async def run_outcomes_reject(settings: Settings, *, suggestion_id: str) -> int:
+    container = Container.build(settings)
+    try:
+        await outcome_suggest.reject(
+            container.database.session_factory, UUID(suggestion_id)
+        )
+    except (decisions.UnknownDecision, outcome_suggest.AlreadyReviewed) as exc:
+        print(str(exc))
+        return 1
+    finally:
+        await container.dispose()
+    print("rejected; the pair will not be proposed again")
+    return 0
+
+
+async def run_outcomes_rate(settings: Settings) -> int:
+    container = Container.build(settings)
+    try:
+        rate = await outcomes.success_rate(container.database.session_factory)
+    finally:
+        await container.dispose()
+
+    print(f"worked     {rate.worked}")
+    print(f"failed     {rate.failed}")
+    print(f"mixed      {rate.mixed}")
+    print(f"too early  {rate.too_early}   (excluded from the rate)")
+    print(f"undecided  {rate.undecided}   (no outcome recorded at all)")
+    if rate.rate is None:
+        # Not 0%. A corpus where every decision is too early has no success rate
+        # rather than a bad one, and printing 0.0% would be the interface
+        # inventing a verdict.
+        print("\nno resolved outcomes, so there is no success rate to report")
+    else:
+        print(f"\nrate       {rate.rate:.0%} of {rate.resolved} resolved")
     return 0
 
 
@@ -2592,6 +2871,90 @@ def build_parser() -> argparse.ArgumentParser:
     )
     decisions_reject.add_argument("suggestion_id")
 
+    outcome_parser = commands.add_parser(
+        "outcome", help="record what happened after a decision, as somebody who saw it"
+    )
+    outcome_parser.add_argument("decision_id")
+    outcome_parser.add_argument(
+        "--verdict",
+        required=True,
+        choices=[value.value for value in OutcomeVerdict],
+        help="'too_early' is a real answer: most decisions have no outcome yet",
+    )
+    outcome_parser.add_argument("--description", required=True, help="what happened")
+    outcome_parser.add_argument(
+        "--observed", help="ISO date or timestamp; defaults to now, provenance 'declared'"
+    )
+    outcome_parser.add_argument(
+        "--evidence",
+        dest="evidence",
+        action="append",
+        default=[],
+        metavar="SOURCE:PATH[#CHUNK]",
+        help="a memory showing it happened; repeatable",
+    )
+    # Deliberately no `--confidence` and no `--kind`. This command is the
+    # declared path: it records confidence 1.0 because saying you observed
+    # something is what certainty about an observation means, and a hedged
+    # verdict belongs in the suggestion queue instead.
+
+    outcomes_parser = commands.add_parser(
+        "outcomes", help="propose, review and summarise outcomes"
+    )
+    outcomes_commands = outcomes_parser.add_subparsers(
+        dest="outcomes_command", required=True
+    )
+
+    outcomes_suggest = outcomes_commands.add_parser(
+        "suggest",
+        help="find candidate outcomes with the temporal layer; commits nothing",
+    )
+    outcomes_suggest.add_argument(
+        "--decision", dest="decision", help="one decision id instead of every open one"
+    )
+    outcomes_suggest.add_argument(
+        "--window-days",
+        dest="window_days",
+        type=float,
+        help=(
+            "override the per-decision window. By default it is derived from the "
+            "decision's own confidence — a heuristic, not a measurement"
+        ),
+    )
+    outcomes_suggest.add_argument(
+        "--limit", type=int, default=10, help="candidates per decision"
+    )
+
+    outcomes_review = outcomes_commands.add_parser(
+        "review", help="the queue, with the temporal gap and shared entities stated"
+    )
+    outcomes_review.add_argument(
+        "--status",
+        choices=[value.value for value in SuggestionStatus],
+        default=SuggestionStatus.PENDING.value,
+    )
+    outcomes_review.add_argument("--limit", type=int, default=50)
+    outcomes_review.add_argument(
+        "--no-passage",
+        dest="show_passage",
+        action="store_false",
+        help="hide the candidate's text; it is shown by default because it is the evidence",
+    )
+
+    outcomes_accept = outcomes_commands.add_parser(
+        "accept", help="write the outcome; recorded as 'inferred', never as observed"
+    )
+    outcomes_accept.add_argument("suggestion_id")
+
+    outcomes_reject = outcomes_commands.add_parser(
+        "reject", help="mark a candidate as not an outcome; the row stays"
+    )
+    outcomes_reject.add_argument("suggestion_id")
+
+    outcomes_commands.add_parser(
+        "rate", help="worked/failed/mixed, with too_early and undecided outside the rate"
+    )
+
     commands.add_parser("stats", help="report corpus and embedding coverage")
     commands.add_parser(
         "doctor", help="check the corpus for silently-degrading conditions"
@@ -3031,6 +3394,48 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(
                 run_decisions_reject(settings, suggestion_id=args.suggestion_id)
             )
+
+    if args.command == "outcome":
+        return asyncio.run(
+            run_outcome(
+                settings,
+                decision_id=args.decision_id,
+                verdict=args.verdict,
+                description=args.description,
+                observed=args.observed,
+                evidence=args.evidence,
+            )
+        )
+
+    if args.command == "outcomes":
+        if args.outcomes_command == "suggest":
+            return asyncio.run(
+                run_outcomes_suggest(
+                    settings,
+                    decision_id=args.decision,
+                    window_days=args.window_days,
+                    limit=args.limit,
+                )
+            )
+        if args.outcomes_command == "review":
+            return asyncio.run(
+                run_outcomes_review(
+                    settings,
+                    status=args.status,
+                    limit=args.limit,
+                    show_passage=args.show_passage,
+                )
+            )
+        if args.outcomes_command == "accept":
+            return asyncio.run(
+                run_outcomes_accept(settings, suggestion_id=args.suggestion_id)
+            )
+        if args.outcomes_command == "reject":
+            return asyncio.run(
+                run_outcomes_reject(settings, suggestion_id=args.suggestion_id)
+            )
+        if args.outcomes_command == "rate":
+            return asyncio.run(run_outcomes_rate(settings))
 
     if args.command == "stats":
         return asyncio.run(run_stats(settings))

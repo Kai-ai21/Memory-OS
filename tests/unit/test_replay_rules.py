@@ -23,6 +23,7 @@ from memoryos.application.replay import (
     CACHE_TABLE,
     DERIVED_PROJECTIONS,
     DERIVED_TABLES,
+    EVIDENCE_TABLES,
     REPLAYABLE_EVENT_TYPES,
     SHADOW_TABLES,
     SOURCE_OF_TRUTH_TABLES,
@@ -139,6 +140,52 @@ def test_decisions_are_user_authored_like_judgements() -> None:
         assert name in USER_AUTHORED_TABLES, name
         assert name not in DERIVED_TABLES, name
         assert name not in SOURCE_OF_TRUTH_TABLES, name
+
+
+def test_outcomes_are_user_authored_too() -> None:
+    """M5.1's three, and the argument a third time.
+
+    An outcome is somebody's account of what happened, or a reading somebody
+    accepted in review. Neither is in the log, so neither is derived; neither
+    feeds ingestion, so neither is source of truth.
+    """
+    for name in ("decision_outcomes", "outcome_evidence", "outcome_suggestions"):
+        assert name in USER_AUTHORED_TABLES, name
+        assert name not in DERIVED_TABLES, name
+        assert name not in SOURCE_OF_TRUTH_TABLES, name
+
+
+def test_every_table_reaching_into_the_derived_set_is_preserved_across_a_replay() -> None:
+    """The check that catches the third evidence table nobody remembered.
+
+    `decision_evidence` and `outcome_evidence` are the same problem twice: both
+    hold cascading foreign keys into `memories`, so `TRUNCATE ... CASCADE` takes
+    them whatever set they are classified in, and both are re-linked afterwards
+    from a natural key. A third one added without being listed in
+    `EVIDENCE_TABLES` would not error — its rows would vanish in a cascade
+    nobody watched, and the decisions they belonged to would be left looking as
+    though nobody had ever cited anything.
+
+    Derived from the real metadata rather than from a list, so the test cannot
+    go stale alongside the thing it is checking.
+    """
+    derived = set(SHADOW_TABLES)
+    reaching = {
+        table.name
+        for table in Base.metadata.sorted_tables
+        if table.name in USER_AUTHORED_TABLES
+        and any(key.column.table.name in derived for key in table.foreign_keys)
+    }
+
+    assert reaching == set(EVIDENCE_TABLES), (
+        f"{sorted(reaching ^ set(EVIDENCE_TABLES))} reaches into the derived "
+        f"tables but is not listed in EVIDENCE_TABLES. A replay would truncate "
+        f"it by cascade and never put it back."
+    )
+    # And every listed table carries the durable identity the re-link needs.
+    for name in EVIDENCE_TABLES:
+        columns = set(Base.metadata.tables[name].columns.keys())
+        assert {"source_name", "external_key", "chunk_ordinal"} <= columns, name
 
 
 def test_evidence_is_user_authored_and_still_reachable_by_a_cascade() -> None:

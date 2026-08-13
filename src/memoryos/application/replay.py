@@ -31,8 +31,8 @@ import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime
 from enum import StrEnum, auto
+from typing import Any
 from uuid import UUID
 
 import structlog
@@ -125,8 +125,42 @@ USER_AUTHORED_TABLES: frozenset[str] = frozenset(
         "decision_assumptions",
         "decision_evidence",
         "decision_suggestions",
+        # M5.1's three, and the same argument a third time. An outcome is
+        # somebody's account of what happened, or a reading somebody accepted;
+        # neither is in the log. `outcome_evidence` is `decision_evidence`'s twin
+        # in every respect including the discomfort — it holds cascading foreign
+        # keys into `memories`, so it is protected by the snapshot below rather
+        # than by its classification.
+        "decision_outcomes",
+        "outcome_evidence",
+        "outcome_suggestions",
     }
 )
+
+# The user-authored tables that reach into the derived ones, and the columns a
+# rebuild re-links them by.
+#
+# Declared as data rather than handled case by case, because the next table like
+# this is inevitable and the failure mode of forgetting one is silent: the rows
+# vanish in a cascade nobody watched and the decisions they belonged to are left
+# looking as though nobody ever cited anything. A test asserts every table with
+# an inbound foreign key into `memories` appears here.
+EVIDENCE_TABLES: tuple[str, ...] = ("decision_evidence", "outcome_evidence")
+
+# Per table: the column naming what the evidence belongs to, and the columns
+# carried across a rebuild without being interpreted here.
+#
+# `linked_at` is in both because when somebody attached a memory is a fact about
+# them rather than about the rebuild — restamping it would move every link to
+# whenever the corpus was last replayed. `occurred_at` is in the outcome one
+# because it is a *snapshot* of the evidence memory's clock taken at link time,
+# and the gap between it and the decision's date is the claim being made: a
+# rebuild that re-derived it would let a changed mtime silently alter how strong
+# a link somebody already reviewed and accepted.
+_EVIDENCE_SHAPE: dict[str, tuple[str, tuple[str, ...]]] = {
+    "decision_evidence": ("decision_id", ("relation", "linked_at")),
+    "outcome_evidence": ("outcome_id", ("occurred_at", "linked_at")),
+}
 
 # Reconstructible from the tables above plus the blob store. Ordered
 # child-before-parent, so truncating or dropping them in sequence never fights a
@@ -321,20 +355,28 @@ class ReplayScope:
 
 @dataclass(frozen=True, slots=True)
 class EvidenceLink:
-    """One `decision_evidence` row, as its durable identity rather than its ids.
+    """One evidence row, as its durable identity rather than its ids.
 
     What survives a rebuild, and nothing else. `memory_id` and `chunk_id` are
     deliberately absent: they are exactly the columns a replay invalidates, and
     carrying them in the snapshot would tempt a later reader into writing them
     back.
+
+    `table` and `owner` generalise this over `decision_evidence` and M5.1's
+    `outcome_evidence`, which are the same problem twice — `owner` is the
+    decision id or the outcome id, whichever this row hangs off. `columns`
+    carries whatever else that table requires and this one does not interpret:
+    `relation` for one, `occurred_at` for the other. Interpreting them here
+    would mean this module growing a branch per table, which is how the third
+    one gets forgotten.
     """
 
-    decision_id: UUID
+    table: str
+    owner: UUID
     source_name: str
     external_key: str
     chunk_ordinal: int | None
-    relation: str
-    linked_at: datetime
+    columns: dict[str, Any]
 
 
 @dataclass(slots=True)
@@ -513,17 +555,19 @@ class ReplayCorpus:
     # ----------------------------------------------------------------------
 
     async def _preserve_evidence(self) -> list[EvidenceLink]:
-        """Read `decision_evidence` out by natural key, then empty it.
+        """Read every evidence table out by natural key, then empty them.
 
-        **The one place a classification is not enough.** `decisions` and its
-        options and assumptions are `USER_AUTHORED` and survive a replay because
-        nothing truncates them and nothing references a table that is truncated.
-        `decision_evidence` cannot be protected that way: it holds foreign keys
-        into `memories` and `memory_chunks` with ON DELETE CASCADE, deliberately,
-        because a citation that resolves to nothing is worse than no citation.
-        `TRUNCATE memories CASCADE` therefore takes it whatever set it is in —
-        the same finding M1.7 made when the golden set was specified with a
-        foreign key, arriving at a table that was designed knowing it.
+        **The one place a classification is not enough.** `decisions`, its
+        options and its assumptions are `USER_AUTHORED` and survive a replay
+        because nothing truncates them and nothing references a table that is
+        truncated. `decision_evidence` cannot be protected that way: it holds
+        foreign keys into `memories` and `memory_chunks` with ON DELETE CASCADE,
+        deliberately, because a citation that resolves to nothing is worse than
+        no citation. `TRUNCATE memories CASCADE` therefore takes it whatever set
+        it is in — the same finding M1.7 made when the golden set was specified
+        with a foreign key, arriving at a table designed knowing it. M5.1's
+        `outcome_evidence` is the identical problem, which is why this walks a
+        declared list rather than naming one table.
 
         So the row does not survive; the *link* does. `(source_name,
         external_key, chunk_ordinal)` is stable across a rebuild for the reason
@@ -537,33 +581,30 @@ class ReplayCorpus:
         constraints off and puts them back; it can only put them back onto rows
         that no longer reference anything, which is what this delete guarantees.
         """
+        preserved: list[EvidenceLink] = []
         async with self._sessions.begin() as session:
-            rows = list(
-                await session.execute(
-                    select(
-                        models.DecisionEvidence.decision_id,
-                        models.DecisionEvidence.source_name,
-                        models.DecisionEvidence.external_key,
-                        models.DecisionEvidence.chunk_ordinal,
-                        models.DecisionEvidence.relation,
-                        models.DecisionEvidence.linked_at,
+            for name in EVIDENCE_TABLES:
+                table = models.Base.metadata.tables[name]
+                owner, extra = _EVIDENCE_SHAPE[name]
+                rows = list(await session.execute(select(table)))
+                for row in rows:
+                    mapping = row._mapping
+                    preserved.append(
+                        EvidenceLink(
+                            table=name,
+                            owner=mapping[owner],
+                            source_name=mapping["source_name"],
+                            external_key=mapping["external_key"],
+                            chunk_ordinal=mapping["chunk_ordinal"],
+                            # Everything the table needs that this module does
+                            # not interpret. Carried opaquely so a new column on
+                            # either table survives without a branch here.
+                            columns={column: mapping[column] for column in extra},
+                        )
                     )
-                )
-            )
-            if rows:
-                await session.execute(delete(models.DecisionEvidence))
+                if rows:
+                    await session.execute(delete(table))
 
-        preserved = [
-            EvidenceLink(
-                decision_id=row[0],
-                source_name=row[1],
-                external_key=row[2],
-                chunk_ordinal=row[3],
-                relation=row[4],
-                linked_at=row[5],
-            )
-            for row in rows
-        ]
         if preserved:
             logger.info("replay.evidence_preserved", links=len(preserved))
         return preserved
@@ -627,17 +668,18 @@ class ReplayCorpus:
                         # to the whole memory would silently move the citation, so
                         # the link is dropped instead.
                         continue
-                session.add(
-                    models.DecisionEvidence(
+                table = models.Base.metadata.tables[link.table]
+                owner, _ = _EVIDENCE_SHAPE[link.table]
+                await session.execute(
+                    table.insert().values(
                         id=new_id(),
-                        decision_id=link.decision_id,
+                        **{owner: link.owner},
                         memory_id=memory_id,
                         chunk_id=chunk_id,
                         source_name=link.source_name,
                         external_key=link.external_key,
                         chunk_ordinal=link.chunk_ordinal,
-                        relation=link.relation,
-                        linked_at=link.linked_at,
+                        **link.columns,
                     )
                 )
                 restored += 1

@@ -12,6 +12,7 @@ import { CorpusPage } from "./features/corpus/CorpusPage";
 import { DecisionForm } from "./features/decisions/DecisionForm";
 import { DecisionPage } from "./features/decisions/DecisionPage";
 import { DecisionsPage } from "./features/decisions/DecisionsPage";
+import { OutcomeQueue } from "./features/decisions/OutcomeQueue";
 import { ReviewQueue } from "./features/decisions/ReviewQueue";
 import { JudgementsPage } from "./features/judgements/JudgementsPage";
 import { MemoryPage } from "./features/memory/MemoryPage";
@@ -49,6 +50,7 @@ export function App() {
           <Route path="/decisions" element={<DecisionsPage />} />
           <Route path="/decisions/new" element={<DecisionForm />} />
           <Route path="/decisions/review" element={<ReviewQueue />} />
+          <Route path="/decisions/outcomes" element={<OutcomeQueue />} />
           <Route path="/decisions/:id" element={<DecisionPage />} />
           <Route path="/judgements" element={<JudgementsPage />} />
           <Route path="/corpus" element={<CorpusPage />} />

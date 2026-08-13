@@ -34,12 +34,18 @@ export function DecisionsPage() {
     queryKey: ["suggestions", "pending"],
     queryFn: () => api.suggestions("pending"),
   });
+  const outcomePending = useQuery({
+    queryKey: ["outcome-suggestions", "pending"],
+    queryFn: () => api.outcomeSuggestions("pending"),
+  });
+  const rate = useQuery({ queryKey: ["success-rate"], queryFn: api.successRate });
 
   if (decisions.isLoading) return <Loading rows={5} />;
   if (decisions.isError) return <Failure error={decisions.error} />;
 
   const rows = decisions.data ?? [];
   const queued = pending.data?.length ?? 0;
+  const outcomeQueue = outcomePending.data?.length ?? 0;
   // What the corpus can actually be reasoned about. Reported rather than
   // implied: a decision with no assumptions is invisible to M5.2.
   const withAssumptions = rows.filter((row) => row.assumptions > 0).length;
@@ -55,6 +61,9 @@ export function DecisionsPage() {
             </Link>
             <Link className="text-amber underline" to="/decisions/review">
               review queue{queued ? ` (${queued})` : ""}
+            </Link>
+            <Link className="text-amber underline" to="/decisions/outcomes">
+              outcomes{outcomeQueue ? ` (${outcomeQueue})` : ""}
             </Link>
           </span>
         }
@@ -82,6 +91,25 @@ export function DecisionsPage() {
           {count(withEvidence)} with evidence
         </span>
       </div>
+
+      {rate.data ? (
+        // How the corpus turned out, with `too_early` and `not looked at`
+        // outside the rate. Three numbers rather than one percentage, because
+        // "too soon to say" and "nobody checked" are different facts and
+        // neither is a failure.
+        <div className="meta flex flex-wrap gap-4 text-faint">
+          <span className="text-affirm">{rate.data.worked} worked</span>
+          <span className="text-deny">{rate.data.failed} failed</span>
+          <span className="text-amber">{rate.data.mixed} mixed</span>
+          <span>{rate.data.too_early} too early</span>
+          <span>{rate.data.undecided} not looked at</span>
+          <span className="text-ink">
+            {rate.data.rate === null
+              ? "no resolved outcomes, so no success rate"
+              : `${Math.round(rate.data.rate * 100)}% of ${rate.data.resolved} resolved`}
+          </span>
+        </div>
+      ) : null}
 
       {rows.length === 0 ? (
         <Empty title="nothing decided yet">

@@ -18,9 +18,12 @@ zero). See [Graph](#graph) and [Graph-augmented retrieval](#graph-augmented-retr
 M4.2 (evolution and change detection) and M4.3 (time-aware retrieval, measured).
 See [Time](#time) and the [Phase 4 retrospective](#phase-4-retrospective).
 **Phase 5 begun**: M5.0 (the decision schema and capture) — what was decided,
-what else was considered, why, and what had to be true. See
+what else was considered, why, and what had to be true — and M5.1 (outcome
+linking), which connects a decision to what happened afterwards and is the
+milestone where Phase 4's temporal layer pays for itself. See
 [Decisions](#decisions), which opens with the measurement of how little
-decision-shaped content this corpus actually holds.
+decision-shaped content this corpus actually holds, and
+[Outcomes](#outcomes).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -105,9 +108,13 @@ rebuilds them from the first group plus the blob store. The split is declared as
 not classified.
 
 Later phases added a third group rather than widening either of these. `query_judgements`
-(M2.0a) and the five decision tables (M5.0) are **user-authored**: neither rebuildable nor
-ingestion input, never truncated and never written by a replay. See
-[Replay](#replay) and [Decisions](#decisions).
+(M2.0a), the five decision tables (M5.0) and the three outcome tables (M5.1) are
+**user-authored**: neither rebuildable nor ingestion input, never truncated and never
+written by a replay. Two of them — `decision_evidence` and `outcome_evidence` — hold
+cascading foreign keys into `memories` anyway, so a replay snapshots their links by natural
+key and re-links them afterwards; a test derives that list from the metadata, so a third
+such table fails the build rather than losing its rows in a cascade nobody watched. See
+[Replay](#replay), [Decisions](#decisions) and [Outcomes](#outcomes).
 
 | Table              | Holds                                                              |
 | ------------------ | ------------------------------------------------------------------ |
@@ -124,6 +131,9 @@ ingestion input, never truncated and never written by a replay. See
 | `decision_assumptions` | What had to be true. `held` is written by M5.2, null until then. |
 | `decision_evidence` | Memories that informed, record, or contradict a decision.          |
 | `decision_suggestions` | The review queue. A draft is not a decision until accepted.     |
+| `decision_outcomes` | M5.1. What happened afterwards, and whether anybody watched it. |
+| `outcome_evidence` | Memories showing an outcome happened, with the date snapshotted. |
+| `outcome_suggestions` | Candidates, with the temporal gap and shared entities kept.   |
 
 Two design points carry the most weight:
 
@@ -2261,6 +2271,216 @@ files those decisions are about. That is left as it is rather than papered over
 with a nearby file: a decision with no evidence is a real state, the schema
 allows it, and the detail view says so.
 
+## Outcomes
+
+M5.1 connects a decision to what happened afterwards. **This is the milestone
+where Phase 4 pays for itself**: an outcome is a temporal claim — this occurred
+*after* that, close enough to be connected, about the same things — and
+`memories_in_range` over `occurred_at`, with nulls excluded rather than
+defaulted, is the query that makes it askable at all.
+
+```bash
+memoryos outcome <decision-id> --verdict worked --description "..."
+memoryos outcomes suggest [--decision ID] [--window-days 90]
+memoryos outcomes review                  # gap, window and shared entities stated
+memoryos outcomes accept <id>             # writes `inferred`, never `declared`
+memoryos outcomes reject <id>
+memoryos outcomes rate                    # too_early outside the fraction
+memoryos decisions show <id>              # now shows outcomes
+```
+
+### `too_early` is a verdict, and it is outside the rate
+
+Most decisions in a young project have no outcome yet. Recording that explicitly
+is better than forcing a judgement, and it is a different fact from an absent
+outcome: `too_early` means somebody looked and it is too soon to say, an absent
+outcome means nobody has looked. The success rate reports three numbers for that
+reason — resolved, too early, and never examined — and a corpus with no resolved
+outcomes has **no rate at all** rather than a rate of zero, because zero reads
+as "everything failed".
+
+### Declared and inferred are different claims
+
+`evidence_kind` is the column M5.3 has to weight by. A declared outcome is
+testimony: somebody watched the deployment, read the incident, saw the number
+move, and `memoryos outcome` stamps confidence 1.0 because that is what
+observing something means — there is deliberately no `--confidence` flag on it.
+An inferred outcome is a correlation in time plus a language model's opinion of
+it, and a CHECK constraint forbids one from claiming 1.0.
+
+**Accepting a suggestion produces `inferred`, whoever accepts it.** Accepting
+means the reading is worth keeping, not that anybody saw it happen, and the CLI
+says so on every accept. Without that rule the cheaper kind of evidence — the
+kind that scales — would be indistinguishable from the expensive kind, and M5.3
+would build its patterns mostly on model output while looking like it was
+building them on observation.
+
+### The window, and why it is a guess
+
+There is no correct window. A deployment decision shows its outcome in days; an
+architectural one in months. So it is derived per decision from the decision's
+own confidence, on the intuition that **a low-confidence decision is one you
+expected to learn about sooner**:
+
+```
+window_days = 30 + 150 × confidence        # 30 at confidence 0, 180 at 1.0
+window_days = 90                           # when no confidence was recorded
+```
+
+30 days because below a month a corpus dated by filesystem mtimes cannot
+distinguish "after" from "at the same time as"; 180 because past six months
+"after" stops implying "because of". A decision with no recorded confidence gets
+the flat default rather than a midpoint, because the absence of a number is not
+0.5 and pretending otherwise would put an invented confidence into a derived
+window.
+
+**It is a stated guess, not a finding, and `outcomes suggest` prints that on
+every run.** What would falsify it is M5.2: once enough assumptions have been
+evaluated, "low-confidence decisions resolved sooner" becomes a claim the corpus
+can answer. `--window-days` overrides it outright, which is the point of writing
+a heuristic down rather than burying it.
+
+**And on this corpus it is arithmetically inert.** The whole span is 2 days 18
+hours of mtimes, so every window from 30 days to 180 admits exactly the same
+memories — the same finding M4.3 made about its month filter, arriving in the
+same place for the same reason.
+
+### Four places a candidate is dropped
+
+An outcome suggestion is a worse thing to get wrong than M5.0's. A wrong
+decision suggestion proposes a record of a choice nobody made; a wrong outcome
+suggestion asserts that one thing *caused* another, and M5.4 would state it as a
+fact about how somebody works. Post hoc ergo propter hoc is the oldest error
+there is, and a model shown two related-looking documents from one repository
+will make it fluently.
+
+So candidates are dropped, never downgraded — a weak candidate among strong ones
+teaches a reviewer to skim, which is what the queue exists to prevent:
+
+1. **Strictly after `decided_at`.** M4.0's range is half-open and therefore
+   closed at the start, so a memory occurring at the same instant is inside it;
+   simultaneous is not afterwards. The database agrees: `gap_days > 0`.
+2. **Inside the window**, derived above.
+3. **Sharing a resolved entity** with the decision's evidence, followed through
+   M3.2's merges so a pre-merge and a post-merge extraction still meet.
+4. **Judged by a model allowed to answer `unsure`**, and required to. An unsure
+   is a drop, and so is a `yes` below 0.6 — higher than M3.1's 0.5, because a
+   wrongly extracted entity is noise in a graph and a wrongly linked outcome is
+   a false causal claim.
+
+A decision's own evidence is excluded too. It falls inside the window whenever
+its mtime happens to, and admitting it would make every decision look as though
+its own reasoning had proved it right.
+
+### `applied` versus `unavailable`, and why the difference is a column
+
+A corpus where nothing has been extracted cannot *fail* the entity test — it
+cannot take it. Treating that as "no overlap" returns nothing and looks like a
+corpus in which nothing is connected; treating it as overlap silently drops the
+constraint and admits every memory in the window. Both are wrong in ways nobody
+would notice, so `entity_filter` records which happened on every row and the
+queue shows it beside every candidate.
+
+This is not hypothetical. M5.0 ran two full replays, a replay truncates the
+entity tables and does not rebuild them, and the corpus spent a whole phase with
+**zero** entity mentions — discovered only when M5.1 went looking. `doctor` now
+reports it as an advisory, which is what the M5.0 follow-up commit on this branch
+added:
+
+```
+[note] memories_without_entity_extraction: 162
+        current memories no extractor has run over; the graph and any
+        entity-scoped query see nothing of them. A full replay truncates the
+        entity tables and does not rebuild them — re-run `extract-entities`
+        - 0 mention rows in the corpus
+```
+
+It happened again during this milestone, which is the point: M5.1's own
+verification replay emptied the tables a third time, and this time the check
+said so on the next `doctor` run instead of nobody noticing for a phase.
+
+### What this corpus actually says
+
+**Sixteen decisions, twelve with a real outcome and four `too_early`.** The rule
+applied while recording them: a decision has an outcome only when its own
+`expected_outcome` has been tested. "The code still exists and nothing has
+crashed" is not a result.
+
+| verdict | count |
+| --- | --- |
+| worked | 10 |
+| mixed | 2 |
+| failed | 0 |
+| too_early | 4 |
+| no outcome recorded | 0 |
+
+83% of 12 resolved — a number that should be read with its denominator. Zero
+failures is not a track record; it is a project a few weeks old whose author
+recorded its own decisions, and the four `too_early` rows are the honest part.
+
+**The two `mixed` outcomes are the ones worth reading**, because both are a
+decision that achieved exactly what it was for and broke an assumption recorded
+beside it:
+
+- **Groq.** The expected outcome held perfectly — provider choice has never
+  leaked past `build_language_model`. The assumption recorded at confidence 0.5,
+  "the free tier's rate limits are workable for a corpus of this size", did not:
+  M3.5 reached 21 of 162 memories against a daily token cap, and M5.1 spent
+  fifteen minutes rate-limited to extract twelve.
+- **Neo4j.** Postgres-wins-on-disagreement held; nothing writes to the graph but
+  the sync. The assumption at 0.45 — "extraction covers enough of the corpus for
+  the graph to be dense rather than thin" — broke, and worse than M3.5 knew,
+  because the entity tables were then empty for a whole phase.
+
+Both point at the same underlying thing, which is what M5.3 exists to notice and
+what this milestone deliberately does not claim to have found.
+
+### What `outcomes suggest` proposed, and why none of it survived review
+
+16 decisions examined, 22 candidates in window, 22 model calls, **4 queued and 0
+worth accepting**. A 100% false-positive rate, and the reasons are structural
+rather than the model behaving badly — it answered "no" 18 times out of 22,
+which is the behaviour the prompt asks for.
+
+Two distinct failure modes, and the second is the one to be afraid of:
+
+- **Same-session sibling files.** Two candidates were `embed.py` and
+  `evaluation.py` proposed as outcomes of the shadow-schema decision, **0
+  minutes** after it. That decision was accepted from an M5.0 suggestion, so its
+  `decided_at` is a file's mtime — and every other file written in the same bulk
+  save is seconds later. "Occurred after" here means "was saved later in the
+  same working session", which is not a temporal relationship at all.
+- **A document that restates the prediction.** Migration `0007_query_judgements`
+  was proposed as the outcome of the golden-set natural-key decision, and the
+  model's description quoted the decision's own `expected_outcome` back as
+  though it were a result. It is the decision *being carried out*, not a report
+  of what happened afterwards — M5.0 would have called that `records` evidence.
+  This is the dangerous shape, because the words match the expected outcome
+  exactly and a reviewer skimming would accept it.
+
+**13 of the 16 decisions had no entity coverage at all**, so their candidates
+were found by time alone — which is exactly the state `entity_filter` exists to
+make visible, and exactly why every one of those candidates was weak. The three
+decisions whose evidence *had* been extracted produced no false positives,
+because the overlap test threw the sibling files out before a model ever saw
+them. That is one data point and it is the right shape.
+
+The honest conclusion for M5.3: **inferred outcomes contribute nothing on this
+corpus.** All twelve real outcomes are `declared`, written by a person checking
+what the milestone reports say. A corpus whose entire history is 2 days 18 hours
+of filesystem mtimes cannot support the inference — the same limit the Phase 4
+retrospective named, reached from a different direction.
+
+### The free tier, hit live
+
+The M5.1 run exhausted Groq's daily token budget mid-milestone — 99,461 of
+100,000 on `llama-3.3-70b-versatile` — and the numbers above were produced by
+re-running the pass against `llama-3.1-8b-instant`, which has its own budget.
+That is the Groq decision's `mixed` outcome happening in real time during the
+milestone that records it, and it is why the prompt shows the model 3,000
+characters of a candidate rather than 6,000: a measurement nobody can afford to
+run is not a measurement.
+
 ## Migrations
 
 ```bash
@@ -2330,11 +2550,16 @@ hash.
 | `GET /decisions/suggestions` | The review queue, each draft beside its source passage.   |
 | `POST /decisions/suggestions/{id}/accept` | Write a decision from a draft.         |
 | `POST /decisions/suggestions/{id}/reject` | Mark a draft as not a decision.        |
+| `POST /decisions/{id}/outcomes` | Record an observed outcome. Declared, confidence 1.0. |
+| `GET /outcomes/suggestions` | Candidates, with the gap and shared entities stated.     |
+| `POST /outcomes/suggestions/{id}/accept` | Write it as `inferred`, never declared.  |
+| `POST /outcomes/suggestions/{id}/reject` | Mark a candidate as not an outcome.      |
+| `GET /outcomes/rate`       | worked/failed/mixed, with `too_early` outside the rate.     |
 
-There is deliberately no `POST /decisions/suggest`. Running the extractor costs a model call
-per passage, and an endpoint that spends money is one an over-eager client can spend a daily
-quota on before anybody notices — the same judgement `/memories/{id}/evolution` makes about
-generating summaries on a GET. It is a CLI command.
+There is deliberately no `POST /decisions/suggest` and no `POST /outcomes/suggest`. Running
+either extractor costs a model call per candidate, and an endpoint that spends money is one
+an over-eager client can spend a daily quota on before anybody notices — the same judgement
+`/memories/{id}/evolution` makes about generating summaries on a GET. Both are CLI commands.
 
 `POST /sources/{id}/sync` enqueues and never runs the sync inline. A large directory takes
 minutes to walk; doing it in the request would blow the HTTP timeout, and whatever it managed

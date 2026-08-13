@@ -845,6 +845,13 @@
             "title": "Options",
             "type": "array"
           },
+          "outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/OutcomeOut"
+            },
+            "title": "Outcomes",
+            "type": "array"
+          },
           "question": {
             "title": "Question",
             "type": "string"
@@ -883,7 +890,8 @@
           "updated_at",
           "options",
           "assumptions",
-          "evidence"
+          "evidence",
+          "outcomes"
         ],
         "title": "DecisionDetailOut",
         "type": "object"
@@ -1319,6 +1327,15 @@
         "title": "EvidenceIn",
         "type": "object"
       },
+      "EvidenceKind": {
+        "description": "Whether an outcome was observed by a person or inferred by the system.\n\nNot the same distinction as `TimeProvenance.DECLARED`/`INFERRED`, which is\nabout how a *date* was arrived at. This is about the claim itself: whether\nsomebody watched the thing happen, or whether a language model read a\nmemory that occurred afterwards and judged it to be a consequence.\n\nThey are not equally trustworthy and nothing downstream may treat them as\nthough they were. A declared outcome is testimony; an inferred one is a\ncorrelation in time plus a model's opinion, and M5.3 has to weight them\ndifferently or its patterns will be built mostly on the cheaper kind,\nbecause the cheaper kind is the one that scales.",
+        "enum": [
+          "declared",
+          "inferred"
+        ],
+        "title": "EvidenceKind",
+        "type": "string"
+      },
       "EvidenceOut": {
         "properties": {
           "chunk_id": {
@@ -1523,6 +1540,11 @@
       },
       "FindingOut": {
         "properties": {
+          "advisory": {
+            "default": false,
+            "title": "Advisory",
+            "type": "boolean"
+          },
           "check": {
             "title": "Check",
             "type": "string"
@@ -2287,6 +2309,307 @@
         "title": "OptionOut",
         "type": "object"
       },
+      "OutcomeEvidenceOut": {
+        "properties": {
+          "chunk_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Id"
+          },
+          "chunk_ordinal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Ordinal"
+          },
+          "external_key": {
+            "title": "External Key",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "memory_id": {
+            "format": "uuid",
+            "title": "Memory Id",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "source_name": {
+            "title": "Source Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "memory_id",
+          "chunk_id",
+          "source_name",
+          "external_key",
+          "chunk_ordinal",
+          "occurred_at"
+        ],
+        "title": "OutcomeEvidenceOut",
+        "type": "object"
+      },
+      "OutcomeIn": {
+        "properties": {
+          "description": {
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceIn"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/OutcomeVerdict"
+          }
+        },
+        "required": [
+          "description",
+          "verdict"
+        ],
+        "title": "OutcomeIn",
+        "type": "object"
+      },
+      "OutcomeOut": {
+        "properties": {
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/OutcomeEvidenceOut"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "evidence_kind": {
+            "$ref": "#/components/schemas/EvidenceKind"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "observed_at_source": {
+            "$ref": "#/components/schemas/TimeProvenance"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/OutcomeVerdict"
+          }
+        },
+        "required": [
+          "id",
+          "description",
+          "verdict",
+          "observed_at",
+          "observed_at_source",
+          "evidence_kind",
+          "confidence",
+          "created_at",
+          "evidence"
+        ],
+        "title": "OutcomeOut",
+        "type": "object"
+      },
+      "OutcomeSuggestionOut": {
+        "properties": {
+          "candidate_occurred_at": {
+            "format": "date-time",
+            "title": "Candidate Occurred At",
+            "type": "string"
+          },
+          "decision_decided_at": {
+            "format": "date-time",
+            "title": "Decision Decided At",
+            "type": "string"
+          },
+          "decision_id": {
+            "format": "uuid",
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "decision_question": {
+            "title": "Decision Question",
+            "type": "string"
+          },
+          "draft": {
+            "additionalProperties": true,
+            "title": "Draft",
+            "type": "object"
+          },
+          "entity_filter": {
+            "title": "Entity Filter",
+            "type": "string"
+          },
+          "external_key": {
+            "title": "External Key",
+            "type": "string"
+          },
+          "gap_days": {
+            "title": "Gap Days",
+            "type": "number"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "outcome_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome Id"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "shared_entities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Shared Entities",
+            "type": "array"
+          },
+          "source_name": {
+            "title": "Source Name",
+            "type": "string"
+          },
+          "source_text": {
+            "title": "Source Text",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SuggestionStatus"
+          },
+          "suggested_at": {
+            "format": "date-time",
+            "title": "Suggested At",
+            "type": "string"
+          },
+          "window_days": {
+            "title": "Window Days",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "decision_id",
+          "decision_question",
+          "decision_decided_at",
+          "draft",
+          "source_text",
+          "source_name",
+          "external_key",
+          "candidate_occurred_at",
+          "gap_days",
+          "window_days",
+          "shared_entities",
+          "entity_filter",
+          "status",
+          "model_id",
+          "suggested_at",
+          "reviewed_at",
+          "outcome_id"
+        ],
+        "title": "OutcomeSuggestionOut",
+        "type": "object"
+      },
+      "OutcomeVerdict": {
+        "description": "What actually happened after a decision.\n\n**`TOO_EARLY` is a verdict, not a gap.** Most decisions in a young project\nhave no outcome yet, and the difference between \"we looked and it is too\nsoon to say\" and \"nobody has looked\" is the difference between an honest\ncorpus and one with holes in it. Recording it explicitly is also what stops\na success rate from being computed over whatever happens to have been\njudged: `too_early` is excluded from the denominator, so a project with two\nsuccesses and thirty unresolved decisions reports 100% of two rather than a\nnumber that sounds like a track record.\n\n`MIXED` earns its place for the same reason `Verdict.MISSING` does in M2.0a:\nit is the answer that cannot be inferred from the other two. A decision that\nachieved what it was for and cost something unforeseen is not half a success\nand not a failure, and forcing it into either loses the only part M5.3 could\nlearn from.",
+        "enum": [
+          "worked",
+          "failed",
+          "mixed",
+          "too_early"
+        ],
+        "title": "OutcomeVerdict",
+        "type": "string"
+      },
       "Period": {
         "description": "The calendar grain an activity histogram is bucketed at.\n\nThe values are exactly Postgres' `date_trunc` field names, which is not a\ncoincidence and is also not an invitation to interpolate them into SQL:\n`date_trunc` takes its field as a *parameter*, so the enum is bound rather\nthan formatted. The equality matters because M4.0 truncates in two places \u2014\nPostgres groups the counts, Python generates the empty buckets between them\n\u2014 and a week that started on Monday in one and on Sunday in the other would\nproduce a histogram whose bars did not line up with its own axis.\n\nThree grains, and no `YEAR` or `HOUR`. Both are trivial to add and neither\nhas a caller; a grain nobody asked for is a branch nobody tests.",
         "enum": [
@@ -2730,6 +3053,56 @@
           "model_window"
         ],
         "title": "StatsOut",
+        "type": "object"
+      },
+      "SuccessRateOut": {
+        "properties": {
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "mixed": {
+            "title": "Mixed",
+            "type": "integer"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "resolved": {
+            "title": "Resolved",
+            "type": "integer"
+          },
+          "too_early": {
+            "title": "Too Early",
+            "type": "integer"
+          },
+          "undecided": {
+            "title": "Undecided",
+            "type": "integer"
+          },
+          "worked": {
+            "title": "Worked",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "worked",
+          "failed",
+          "mixed",
+          "too_early",
+          "undecided",
+          "resolved",
+          "rate"
+        ],
+        "title": "SuccessRateOut",
         "type": "object"
       },
       "SuggestionOut": {
@@ -3954,6 +4327,60 @@
         ]
       }
     },
+    "/decisions/{decision_id}/outcomes": {
+      "post": {
+        "description": "Record an observed outcome. Declared, confidence 1.0.",
+        "operationId": "create_outcome_decisions__decision_id__outcomes_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "decision_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutcomeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Outcome",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
     "/doctor": {
       "get": {
         "description": "The standing checks, rendered instead of read from a terminal.\n\nDeliberately the same `run_doctor` the CLI calls. It tokenizes candidate\nchunks with the real tokenizer, so this is not a free request \u2014 it is a\ndiagnostic somebody asked for, not something to poll.",
@@ -4474,6 +4901,175 @@
         "summary": "Get Evolution",
         "tags": [
           "evolution"
+        ]
+      }
+    },
+    "/outcomes/rate": {
+      "get": {
+        "description": "How decisions turned out, with `too_early` outside the rate.",
+        "operationId": "get_success_rate_outcomes_rate_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessRateOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Success Rate",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/outcomes/suggestions": {
+      "get": {
+        "description": "The outcome review queue, closest temporal gap first.",
+        "operationId": "list_outcome_suggestions_outcomes_suggestions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SuggestionStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "pending",
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OutcomeSuggestionOut"
+                  },
+                  "title": "Response List Outcome Suggestions Outcomes Suggestions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Outcome Suggestions",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/outcomes/suggestions/{suggestion_id}/accept": {
+      "post": {
+        "description": "Write the outcome as `inferred`, keeping the candidate as its evidence.\n\nNever `declared`, whoever accepted it. Accepting means the reading is worth\nkeeping, not that anybody watched it happen \u2014 and an accepted suggestion\npromoted to testimony would be indistinguishable from an observation to\nM5.3, which is the one thing `evidence_kind` exists to prevent.",
+        "operationId": "accept_outcome_suggestion_outcomes_suggestions__suggestion_id__accept_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "suggestion_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Suggestion Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept Outcome Suggestion",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/outcomes/suggestions/{suggestion_id}/reject": {
+      "post": {
+        "operationId": "reject_outcome_suggestion_outcomes_suggestions__suggestion_id__reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "suggestion_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Suggestion Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reject Outcome Suggestion",
+        "tags": [
+          "decisions"
         ]
       }
     },
