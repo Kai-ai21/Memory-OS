@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from memoryos.adapters.db import models
 from memoryos.application.ports import JobQueue
 from memoryos.domain.ids import new_id
-from memoryos.domain.jobs import Job, JobSpec, JobStatus
+from memoryos.domain.jobs import Job, JobSpec, JobStatus, JobType
 
 # The partial unique index that makes enqueue idempotent. Naming its columns and
 # predicate here targets that index specifically, so a primary-key collision
@@ -128,7 +128,13 @@ class PostgresJobQueue(JobQueue):
         async with self._sessions.begin() as session:
             return await enqueue_in(session, spec)
 
-    async def claim(self, worker_id: str, lease: timedelta) -> Job | None:
+    async def claim(
+        self,
+        worker_id: str,
+        lease: timedelta,
+        *,
+        only: frozenset[JobType] | None = None,
+    ) -> Job | None:
         """Take the highest-priority ready job, or None if there is none.
 
         `FOR UPDATE SKIP LOCKED` on the inner select is the clause that makes
@@ -154,6 +160,14 @@ class PostgresJobQueue(JobQueue):
             .with_for_update(skip_locked=True)
             .limit(1)
         )
+        if only is not None:
+            # **In the candidate select, not after the claim.** A filter applied
+            # after claiming would take the job, find it unwanted, and have to
+            # release it — which increments `attempts` on a job nothing was
+            # wrong with, and a few passes of that dead-letters the queue.
+            candidate = candidate.where(
+                models.Job.job_type.in_([item.value for item in only])
+            )
 
         stmt = (
             update(models.Job)

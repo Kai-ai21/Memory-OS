@@ -152,18 +152,46 @@ from memoryos.domain.values import (
 from memoryos.logging import configure_logging
 
 
-async def run_worker(settings: Settings, *, lease_seconds: float, drain: bool) -> None:
+async def run_worker(
+    settings: Settings, *, lease_seconds: float, drain: bool, only: str | None
+) -> None:
     container = Container.build(settings)
     try:
         worker = Worker(
             queue=container.queue,
             registry=container.registry(),
             session_factory=container.database.session_factory,
-            config=WorkerConfig(lease=timedelta(seconds=lease_seconds)),
+            config=WorkerConfig(
+                lease=timedelta(seconds=lease_seconds),
+                only=_job_types_or_exit(only),
+            ),
         )
         await worker.run(drain=drain)
     finally:
         await container.dispose()
+
+
+def _job_types_or_exit(raw: str | None) -> frozenset[JobType]:
+    """Parse `--only`, refusing a name that is not a job type.
+
+    Refusing rather than ignoring, because the failure mode of a silent typo
+    here is a drain that claims nothing, exits after three idle polls, and looks
+    exactly like a queue that was already empty.
+    """
+    if not raw:
+        return frozenset()
+    wanted: set[JobType] = set()
+    for name in (part.strip() for part in raw.split(",")):
+        if not name:
+            continue
+        try:
+            wanted.add(JobType(name))
+        except ValueError:
+            allowed = ", ".join(member.value for member in JobType)
+            raise SystemExit(
+                f"{name!r} is not a job type. Use one of: {allowed}"
+            ) from None
+    return frozenset(wanted)
 
 
 async def add_source(settings: Settings, *, kind: str, name: str, root: Path) -> int:
@@ -4895,6 +4923,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="exit once the queue has been empty for a few polls, instead of running forever",
     )
+    worker.add_argument(
+        "--only",
+        default=None,
+        help=(
+            "comma-separated job types to claim; the rest stay pending. "
+            "For a drain that must finish — see `make phase1-check`"
+        ),
+    )
 
     source = commands.add_parser("source", help="manage sources")
     source_commands = source.add_subparsers(dest="source_command", required=True)
@@ -6032,7 +6068,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "worker":
         asyncio.run(
-            run_worker(settings, lease_seconds=args.lease_seconds, drain=args.drain)
+            run_worker(
+                settings,
+                lease_seconds=args.lease_seconds,
+                drain=args.drain,
+                only=args.only,
+            )
         )
         return 0
 

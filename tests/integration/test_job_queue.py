@@ -170,6 +170,62 @@ async def test_claim_returns_none_on_an_empty_queue(queue: PostgresJobQueue) -> 
     assert await queue.claim("worker-a", LEASE) is None
 
 
+async def test_only_restricts_the_claim_and_leaves_the_rest_pending(
+    queue: PostgresJobQueue, sessions: async_sessionmaker[AsyncSession]
+) -> None:
+    """**A filtered drain must not consume the jobs it declines.**
+
+    The queue is shared across phases and the checks are not: `make
+    phase1-check` drains it to prove ingestion works, and embedding enqueues an
+    entity extraction per memory, which is a live model call. Filtering happens
+    in the candidate select rather than after the claim, so a declined job keeps
+    its `pending` status *and* its attempt budget — a filter applied afterwards
+    would take each job, release it, and burn an attempt on work nothing was
+    wrong with, dead-lettering the queue in a few passes.
+    """
+    await queue.enqueue(JobSpec(JobType.EXTRACT_ENTITIES, payload={"tag": "llm"}))
+    await queue.enqueue(JobSpec(JobType.EMBED_MEMORY, payload={"tag": "local"}))
+
+    wanted = frozenset({JobType.EMBED_MEMORY})
+    claimed = []
+    while (job := await queue.claim("worker-a", LEASE, only=wanted)) is not None:
+        claimed.append(job.payload["tag"])
+
+    assert claimed == ["local"]
+
+    # The excluded job is untouched: still pending, still on zero attempts, so a
+    # later unrestricted drain runs it with its full budget.
+    async with sessions() as session:
+        row = (
+            await session.execute(
+                select(models.Job).where(
+                    models.Job.job_type == JobType.EXTRACT_ENTITIES.value
+                )
+            )
+        ).scalar_one()
+        assert row.status == JobStatus.PENDING.value
+        assert row.attempts == 0
+
+    # And an unrestricted claim still finds it.
+    later = await queue.claim("worker-b", LEASE)
+    assert later is not None
+    assert later.payload["tag"] == "llm"
+
+
+async def test_only_with_no_matching_type_claims_nothing(
+    queue: PostgresJobQueue,
+) -> None:
+    """The other half, so the filter is a filter rather than a no-op that
+    happens to pass the test above."""
+    await queue.enqueue(JobSpec(JobType.EXTRACT_ENTITIES, payload={"tag": "llm"}))
+
+    assert await queue.claim("w", LEASE, only=frozenset({JobType.NOOP})) is None
+    # An empty filter is not "claim nothing" — the worker passes None for that,
+    # and conflating the two would make a typo in `--only` look like an empty
+    # queue.
+    assert await queue.claim("w", LEASE) is not None
+
+
 # --------------------------------------------------------------------------
 # Attempts, leases, fencing
 # --------------------------------------------------------------------------

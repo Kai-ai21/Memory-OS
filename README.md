@@ -78,7 +78,7 @@ Real numbers, and the ones that were disappointing are here too.
 | **1 — Foundation** | Chunk truncation against the model's real window | **89% of chunks silently truncated**, every test green. Fixed in M1.6.1. |
 | **1 — Foundation** | Replay fidelity | Byte-identical, twice: shadow-schema and in-place. |
 | **2 — Retrieval** | Vector, then hybrid, then reranked, on one golden set | recall@10 0.783 → 0.863; MRR 0.731 → 0.762. Rerank and fusion both earned their place. |
-| **2 — Retrieval** | Run-to-run variance | **~0.012**, from floating-point ordering alone. The floor every later claim clears. |
+| **2 — Retrieval** | The resolution floor | **0.0122** — the smallest difference the harness can tell from noise. Every later claim is measured against it. |
 | **2 — Retrieval** | Recency and importance as ranking signals | Grid-searched, **measured as harmful, shipped at weight 0.0**. |
 | **3 — Graph** | Graph expansion's contribution to ranking | **Zero**, and shipped at weight zero rather than hidden. |
 | **3 — Graph** | Projection divergence | Detected per type by hash — a corrupted node name that no count would see. |

@@ -1,6 +1,6 @@
 # Full-project retrospective
 
-Eight phases, twenty-nine milestones, one corpus: this repository ingesting
+Eight phases, forty-four milestones, one corpus: this repository ingesting
 itself. 253 memories, 3,157 chunks, 16 recorded decisions, 37 assumptions.
 
 Every phase wrote its own retrospective as it closed and those are in the
@@ -109,10 +109,11 @@ model that reported its own `max_sequence_tokens`.
 because of this one defect. A test asserts that code does what you thought; a
 measurement asks what actually happened.
 
-### M2.3a — the run-to-run variance floor
+### M2.3a — the resolution floor
 
 Not a bug, but the measurement that made every later bug visible. Repeated
-identical evaluation runs move by **~0.012**, from floating-point ordering alone.
+identical evaluation runs move by **0.0122**, which is therefore the smallest
+difference this harness can distinguish from noise.
 
 **What it taught:** every claim of improvement smaller than the noise floor is
 unfalsifiable. Phase 7 then built a benchmark it could not afford to run three
@@ -250,7 +251,7 @@ not follow.
 | Phase | Verdict |
 | --- | --- |
 | **1 — Foundation** | **Worth it, twice over.** Bitemporality and replay could not have been retrofitted. M1.6.1 alone justified the measurement discipline. |
-| **2 — Retrieval** | **Worth it.** The golden set and the variance floor are the instruments every later phase is judged on. The two negative results are as valuable as the positive ones. |
+| **2 — Retrieval** | **Worth it.** The golden set and the resolution floor are the instruments every later phase is judged on. The two negative results are as valuable as the positive ones. |
 | **3 — Graph** | **Half worth it.** `graph verify` earned its place; graph-augmented retrieval contributed zero and always would have on a corpus with 5% extraction coverage. **Would cut M3.5 and keep M3.4.** |
 | **4 — Time** | **Worth it.** Query work over a schema Phase 1 got right, plus the provenance measurement that three later phases cite. |
 | **5 — Decisions** | **Worth it as apparatus, not as findings.** Zero patterns, zero reflections, and each printed why. The schema is the part that transfers. |
@@ -287,7 +288,7 @@ The one that went the other way shipped at a 54% dismissal rate. Once you have
 seen the output, every threshold you choose is a threshold chosen to produce it.
 
 **4. A number you cannot afford to reproduce is not a measurement.**
-Establish the variance floor first, and if you cannot afford three runs of a
+Establish the resolution floor first, and if you cannot afford three runs of a
 benchmark, you cannot afford the benchmark. Phase 2 learned this and Phase 7
 ignored it in the same repository.
 
