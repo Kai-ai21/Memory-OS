@@ -101,10 +101,22 @@ phase1-check:
 # somebody checked, the assumption verdicts somebody judged, and the relevance
 # judgements that took an afternoon of clicking.
 #
-# All four have an export or a seed, and this target is the order they go back
-# in. It is written down here rather than in a person's memory because the
-# project's own verification recipe opens by destroying them, and a restore
-# sequence nobody has run is a restore sequence that does not work.
+# This target is the order they go back in, written down here rather than in a
+# person's memory because the project's own verification recipe opens by
+# destroying them, and a restore sequence nobody has run is one that does not
+# work.
+#
+# **It does not restore all of them, and running it is how that was found.**
+# `query_judgements` has a real export and comes back whole. `decisions` has a
+# seed rather than an export, and a seed only knows what somebody wrote into it:
+# it restores the 12 decisions recorded in `scripts/seed_decisions.py` and not
+# the 4 entered interactively through `memoryos decide`, nor the one assumption
+# group made by hand through `assumptions group`. Those are gone.
+#
+# The right fix is an export per user-authored table — see the `USER_AUTHORED`
+# set in `replay.py`, which already names exactly which ones — and it is not in
+# this milestone. Until it is, `docker compose down -v` on a database anybody has
+# typed into destroys work no seed can reproduce.
 #
 # Entity extraction is last, needs an API key, and is bounded by `--limit`.
 # Without a key the corpus is fully working for everything Phases 1, 2, 4 and 5
