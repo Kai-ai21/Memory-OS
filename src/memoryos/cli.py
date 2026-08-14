@@ -52,6 +52,7 @@ from memoryos.application import (
     sources,
     surfacing,
     temporal,
+    user_model,
 )
 
 # Imported as a module rather than by name: `compare` and `score` both already
@@ -123,10 +124,12 @@ from memoryos.domain.surfacing import (
     EXPLANATIONS,
     SINGLE_ROUTE_BEST,
 )
+from memoryos.domain.user_model import MIN_SUPPORT as USER_MODEL_MIN_SUPPORT
 from memoryos.domain.values import (
     DEFAULT_SEARCH_MODE,
     AssumptionVerdict,
     DecisionStatus,
+    Dimension,
     EvidenceKind,
     EvidenceRelation,
     MergeStatus,
@@ -2556,6 +2559,187 @@ async def run_patterns_discover(
     return 0
 
 
+# --------------------------------------------------------------------------
+# The user model (M8.0)
+# --------------------------------------------------------------------------
+
+
+async def run_model_derive(settings: Settings) -> int:
+    """Derive every dimension that has evidence, and say what the rest lack.
+
+    **The output on a corpus this size is a page of stated gaps**, and that is
+    the milestone's finding rather than a failure of the command. What is printed
+    for an empty dimension is the reason it is empty and how close the nearest
+    candidate came, because "insufficient evidence" with no number is an excuse
+    and "nothing reached 3 distinct observations; the best reached 2" is a
+    measurement.
+    """
+    container = Container.build(settings)
+    try:
+        report = await user_model.derive(container.database.session_factory)
+    finally:
+        await container.dispose()
+
+    print(f"candidates considered:  {report.considered}")
+    print(f"minimum support:        {USER_MODEL_MIN_SUPPORT} distinct observations")
+    print(f"written:                {report.written}")
+    print(f"superseded:             {report.superseded}")
+    print(f"unchanged:              {report.unchanged}")
+    print(f"below the bar:          {report.below_bar}")
+    print(f"skipped (dismissed):    {report.skipped_dismissed}")
+
+    if report.rejected:
+        print("\nwhat was considered and not written:")
+        for statement, support in report.rejected:
+            print(f"  {support} observation(s)  {textwrap.shorten(statement, width=76)}")
+
+    print("\nby dimension:")
+    for assessment in report.assessments:
+        print(f"  {assessment.dimension.value:20} {assessment.render()}")
+    return 0
+
+
+async def run_model_show(settings: Settings, *, dimension: str | None) -> int:
+    """The live model, with every dimension present whether or not it has facets.
+
+    **An empty dimension is printed, not omitted.** An absent section reads as an
+    oversight in the page; a section that says what it would take to fill it is
+    the most useful thing an empty one can do — and on this corpus most of them
+    are empty, so hiding them would produce a page that looked complete and said
+    almost nothing.
+    """
+    wanted = _dimension_or_exit(dimension)
+    container = Container.build(settings)
+    try:
+        model = await user_model.view(
+            container.database.session_factory, dimension=wanted
+        )
+    finally:
+        await container.dispose()
+
+    for name, assessment in model.assessments.items():
+        facets = model.facets.get(name, [])
+        print(f"\n{name}")
+        if not facets:
+            print(f"  {assessment.render()}")
+            continue
+        for facet in facets:
+            _print_facet(facet)
+
+    if model.dismissed:
+        # Visible rather than filtered away: a rejected claim that vanished would
+        # look like one nobody ever made, and the rejection is the more
+        # interesting fact.
+        print("\ndismissed")
+        for facet in model.dismissed:
+            print(f"  ~~{textwrap.shorten(facet.statement, width=72)}~~")
+            print(f"      {facet.dismissed_reason}")
+    return 0
+
+
+def _print_facet(facet: user_model.FacetRow) -> None:
+    confidence = "—" if facet.confidence is None else f"{facet.confidence:.2f}"
+    origin = "stated" if facet.origin == "asserted" else facet.detector or "derived"
+    print(f"  {facet.id}")
+    for line in textwrap.wrap(facet.statement, width=80):
+        print(f"    {line}")
+    print(
+        f"    confidence {confidence}   support {facet.support_count}"
+        f"   against {facet.contradiction_count}   [{origin}]"
+    )
+    if facet.evidence:
+        kinds = ", ".join(
+            f"{kind}:{str(ref)[:8]}({relation})" for kind, ref, relation in facet.evidence[:6]
+        )
+        print(f"    evidence: {kinds}")
+
+
+async def run_model_assert(
+    settings: Settings, *, dimension: str, statement: str, supersedes: str | None
+) -> int:
+    """State a facet. The only way a goal enters the model."""
+    wanted = _dimension_or_exit(dimension)
+    assert wanted is not None
+    container = Container.build(settings)
+    try:
+        facet_id = await user_model.assert_facet(
+            container.database.session_factory,
+            dimension=wanted,
+            statement=statement,
+            supersedes=UUID(supersedes) if supersedes else None,
+        )
+    except user_model.UnknownFacet as exc:
+        print(f"no facet with id {exc}")
+        return 1
+    except ValueError as exc:
+        print(str(exc))
+        return 2
+    finally:
+        await container.dispose()
+    print(f"{facet_id}")
+    return 0
+
+
+async def run_model_dismiss(settings: Settings, *, facet_id: str, reason: str) -> int:
+    container = Container.build(settings)
+    try:
+        await user_model.dismiss(
+            container.database.session_factory, UUID(facet_id), reason=reason
+        )
+    except user_model.UnknownFacet:
+        print(f"no facet with id {facet_id}")
+        return 1
+    except ValueError as exc:
+        print(str(exc))
+        return 2
+    finally:
+        await container.dispose()
+    print("dismissed; derivation will not propose this subject again")
+    return 0
+
+
+async def run_model_history(settings: Settings, *, facet_id: str) -> int:
+    """The whole chain a facet belongs to, oldest first.
+
+    **This is what `superseded_by` is for.** A model of a person that could only
+    show its current state would be unable to answer the question that makes it
+    worth having — what changed, and when.
+    """
+    container = Container.build(settings)
+    try:
+        chain = await user_model.history(
+            container.database.session_factory, UUID(facet_id)
+        )
+    except user_model.UnknownFacet:
+        print(f"no facet with id {facet_id}")
+        return 1
+    finally:
+        await container.dispose()
+
+    for index, facet in enumerate(chain, start=1):
+        marker = (
+            "current"
+            if facet.superseded_by is None
+            else f"superseded by {facet.superseded_by}"
+        )
+        print(f"[{index}] {facet.id}  {_stamp(facet.created_at)}  ({marker})")
+        for line in textwrap.wrap(facet.statement, width=78):
+            print(f"     {line}")
+    if len(chain) == 1:
+        print("\nOne version: this facet has never been revised.")
+    return 0
+
+
+def _dimension_or_exit(name: str | None) -> Dimension | None:
+    if name is None:
+        return None
+    try:
+        return Dimension(name)
+    except ValueError:
+        allowed = ", ".join(member.value for member in Dimension)
+        raise SystemExit(f"{name!r} is not a dimension. Use one of: {allowed}") from None
+
+
 async def run_patterns_list(
     settings: Settings, *, kind: str | None, include_dismissed: bool
 ) -> int:
@@ -4921,6 +5105,37 @@ def build_parser() -> argparse.ArgumentParser:
         "does not become the thing being measured",
     )
 
+    model_parser = commands.add_parser(
+        "model", help="the user model: what the system believes about you, and why"
+    )
+    model_commands = model_parser.add_subparsers(dest="model_command", required=True)
+    model_commands.add_parser(
+        "derive", help="recompute every derivable dimension from existing data"
+    )
+    model_show = model_commands.add_parser(
+        "show", help="the live model, with empty dimensions stated rather than hidden"
+    )
+    model_show.add_argument("--dimension", default=None)
+    model_assert = model_commands.add_parser(
+        "assert", help="state a facet directly; the only way a goal enters"
+    )
+    model_assert.add_argument("--dimension", required=True)
+    model_assert.add_argument("--statement", required=True)
+    model_assert.add_argument(
+        "--supersedes",
+        default=None,
+        help="the facet this replaces, kept and pointed at the new one",
+    )
+    model_dismiss = model_commands.add_parser(
+        "dismiss", help="reject a facet permanently; derivation will not re-propose it"
+    )
+    model_dismiss.add_argument("facet_id")
+    model_dismiss.add_argument("--reason", required=True)
+    model_history = model_commands.add_parser(
+        "history", help="every version of one facet, oldest first"
+    )
+    model_history.add_argument("facet_id")
+
     reflect_parser = commands.add_parser(
         "reflect",
         help="describe a pattern in prose, with citations; refuses below the bar",
@@ -5552,6 +5767,27 @@ def main(argv: list[str] | None = None) -> int:
                     pace=max(0.0, args.pace),
                 )
             )
+
+    if args.command == "model":
+        if args.model_command == "derive":
+            return asyncio.run(run_model_derive(settings))
+        if args.model_command == "show":
+            return asyncio.run(run_model_show(settings, dimension=args.dimension))
+        if args.model_command == "assert":
+            return asyncio.run(
+                run_model_assert(
+                    settings,
+                    dimension=args.dimension,
+                    statement=args.statement,
+                    supersedes=args.supersedes,
+                )
+            )
+        if args.model_command == "dismiss":
+            return asyncio.run(
+                run_model_dismiss(settings, facet_id=args.facet_id, reason=args.reason)
+            )
+        if args.model_command == "history":
+            return asyncio.run(run_model_history(settings, facet_id=args.facet_id))
 
     if args.command == "surfacing":
         if args.surfacing_command == "stats":

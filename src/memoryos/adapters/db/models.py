@@ -44,10 +44,14 @@ from memoryos.domain.values import (
     AssumptionVerdict,
     ConfidenceHorizon,
     DecisionStatus,
+    Dimension,
     EntityType,
     EventType,
     EvidenceKind,
     EvidenceRelation,
+    FacetEvidenceKind,
+    FacetOrigin,
+    FacetRelation,
     MemoryKind,
     MergeStatus,
     MergeStrategy,
@@ -2674,4 +2678,153 @@ class SurfacingLog(Base):
         ),
         Index("ix_surfacing_decided", "decided_at"),
         Index("ix_surfacing_focus", "focus"),
+    )
+
+
+class UserModelFacet(Base):
+    """One claim about the person, with what it rests on and what replaced it.
+
+    **More dangerous than `patterns`, for the same reason and one more.** A
+    pattern is a claim about a run of decisions; a facet is a claim about
+    somebody's goals, strengths and weaknesses, which is the register in which a
+    horoscope is written. "You prefer simple solutions" is true of every engineer
+    who has ever lived and nothing in the sentence says whether three decisions
+    or zero produced it. So `support_count` is not decoration and neither is
+    `facet_evidence`: a dimension with nothing above the minimum records the
+    absence and `model show` prints "insufficient evidence" in its place.
+
+    **`superseded_by` is why a facet is never updated in place.** A model of a
+    person has to be able to change, and how it changed is itself part of the
+    model — "you stopped deferring schema decisions in March" is a claim you can
+    only make if March's version of the facet still exists. An `UPDATE` would
+    leave nothing to compare against, so a revision inserts a new row and points
+    the old one at it.
+
+    `origin` separates what somebody stated from what the system computed, and
+    the separation is enforced rather than conventional: `derive` writes only
+    `derived` rows, so a nightly re-derivation cannot overwrite a goal. Goals are
+    `asserted` only — the table has no deriver for them, which is the point.
+
+    `dismissed_at` is M5.3's column with M5.3's argument. A person who has read a
+    claim about themselves and rejected it is not in any log, nothing regenerates
+    it, and a derivation that re-proposed it every run would be a system arguing
+    with its user.
+    """
+
+    __tablename__ = "user_model_facets"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    dimension: Mapped[str] = mapped_column(Text, nullable=False)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    # Null for an asserted facet, and null rather than 1.0 on purpose: a goal
+    # somebody stated is not a claim with perfect confidence, it is a claim
+    # confidence does not apply to, and 1.0 would sort user statements above
+    # every derived facet in any ranking that uses it.
+    confidence: Mapped[float | None] = mapped_column(REAL)
+    support_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    contradiction_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    # The span the supporting evidence covers. Three decisions from one afternoon
+    # is a different claim from three across a year, and these are what let a
+    # reader tell without opening the evidence.
+    first_observed: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    last_observed: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    origin: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'derived'")
+    )
+    detector: Mapped[str | None] = mapped_column(Text)
+    subject_key: Mapped[str | None] = mapped_column(Text)
+    superseded_by: Mapped[UUID | None] = mapped_column(
+        _UUID, ForeignKey("user_model_facets.id", ondelete="SET NULL")
+    )
+    dismissed_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    dismissed_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        _enum_check("dimension", Dimension, "ck_user_model_facets_dimension"),
+        _enum_check("origin", FacetOrigin, "ck_user_model_facets_origin"),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_user_model_facets_confidence_range",
+        ),
+        CheckConstraint(
+            "support_count >= 0 AND contradiction_count >= 0",
+            name="ck_user_model_facets_counts_non_negative",
+        ),
+        # A dismissal with no reason is a row nobody can interpret later, and the
+        # reason is the only part that survives being forgotten.
+        CheckConstraint(
+            "(dismissed_at IS NULL) = (dismissed_reason IS NULL)",
+            name="ck_user_model_facets_dismissal_paired",
+        ),
+        # A row that lied about its origin would let a derivation replace
+        # something a person wrote, which is the one thing `origin` exists to
+        # prevent — so the pairing is a constraint rather than a convention.
+        CheckConstraint(
+            "(origin = 'asserted' AND detector IS NULL)"
+            " OR (origin = 'derived' AND detector IS NOT NULL)",
+            name="ck_user_model_facets_origin_detector",
+        ),
+        Index(
+            "ix_user_model_facets_live",
+            "dimension",
+            postgresql_where=text("superseded_by IS NULL AND dismissed_at IS NULL"),
+        ),
+        # One live derived facet per (detector, subject). What makes re-running
+        # `derive` idempotent: the second run finds the first row rather than
+        # inserting a twin, and supersedes it only if the statement moved.
+        Index(
+            "uq_user_model_facets_live_subject",
+            "detector",
+            "subject_key",
+            unique=True,
+            postgresql_where=text(
+                "origin = 'derived' AND superseded_by IS NULL AND dismissed_at IS NULL"
+            ),
+        ),
+    )
+
+
+class FacetEvidence(Base):
+    """One item arguing for or against a facet.
+
+    `ref_id` carries **no foreign key**, and that is the same call
+    `entity_mentions` made: it points into one of four tables depending on
+    `kind`, which no single constraint can express, and the alternative is four
+    nullable columns with a constraint keeping exactly one populated. What it
+    costs is a reference that can dangle, and `model show` reports an
+    unresolvable one rather than quietly rendering a facet with fewer sources
+    than its count claims.
+
+    `relation` stores contradicting evidence beside supporting evidence because
+    the confidence number is meaningless without it. A facet with nine for and
+    eight against is not a 90% claim, and a schema with nowhere to put the eight
+    would report it as one.
+    """
+
+    __tablename__ = "facet_evidence"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    facet_id: Mapped[UUID] = mapped_column(
+        _UUID, ForeignKey("user_model_facets.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    ref_id: Mapped[UUID] = mapped_column(_UUID, nullable=False)
+    relation: Mapped[str] = mapped_column(Text, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        _enum_check("kind", FacetEvidenceKind, "ck_facet_evidence_kind"),
+        _enum_check("relation", FacetRelation, "ck_facet_evidence_relation"),
+        UniqueConstraint(
+            "facet_id", "kind", "ref_id", "relation", name="uq_facet_evidence_item"
+        ),
+        Index("ix_facet_evidence_facet", "facet_id"),
     )

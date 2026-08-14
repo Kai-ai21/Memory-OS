@@ -517,3 +517,67 @@ class EmbeddingRole(StrEnum):
 
     PASSAGE = auto()
     QUERY = auto()
+
+
+class Dimension(StrEnum):
+    """The seven facets a user model is made of.
+
+    Closed, for the reason `PatternKind` is closed: an open vocabulary is what
+    you get when every new deriver invents its own label, and two dimensions
+    meaning almost the same thing produce a page where half the claims are
+    filed under the name nobody filtered on.
+
+    **`LEARNING_STYLE` is in the enum and has no deriver, on purpose.** It needs
+    outcomes of learning attempts — a course taken against a project built, and
+    what stuck a year later — and nothing in this system records either. A
+    heuristic over commit sizes or file types would produce a sentence that
+    sounds like insight and is astrology, which is the failure eight phases of
+    this project have been arranged against. The name exists so that `model
+    show` can print the gap rather than omit the row, because an absent
+    dimension reads as an oversight and a stated one is information.
+    """
+
+    GOALS = "goals"
+    HABITS = "habits"
+    STRENGTHS = "strengths"
+    WEAKNESSES = "weaknesses"
+    LEARNING_STYLE = "learning_style"
+    DECISION_PATTERNS = "decision_patterns"
+    WORKFLOWS = "workflows"
+
+
+class FacetOrigin(StrEnum):
+    """Whether a person said it or the system computed it.
+
+    The distinction M1.1 draws between what was observed and what was inferred,
+    applied to claims about the person rather than to timestamps — and it is
+    load-bearing twice. `derive` may only write and supersede `DERIVED` rows, so
+    a nightly re-derivation can never overwrite something somebody typed; and
+    `replay.py` must not regenerate `ASSERTED` ones, because nothing in the log
+    reproduces them.
+    """
+
+    DERIVED = "derived"
+    ASSERTED = "asserted"
+
+
+class FacetEvidenceKind(StrEnum):
+    """What a piece of facet evidence points at."""
+
+    DECISION = "decision"
+    PATTERN = "pattern"
+    MEMORY = "memory"
+    OUTCOME = "outcome"
+
+
+class FacetRelation(StrEnum):
+    """Whether an item argues for a facet or against it.
+
+    Both are stored, and `contradicts` is the half that makes the confidence
+    number mean anything: a facet with nine supporting decisions and eight
+    contradicting them is not a 90% claim, and a schema with nowhere to put the
+    eight would report it as one.
+    """
+
+    SUPPORTS = "supports"
+    CONTRADICTS = "contradicts"
