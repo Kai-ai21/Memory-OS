@@ -6,8 +6,10 @@ command gets written in it; the commands here do not need one.
 
 import argparse
 import asyncio
+import contextlib
 import json
 import math
+import signal
 import textwrap
 import time
 from datetime import UTC, datetime, timedelta
@@ -1391,6 +1393,44 @@ def _stamp(moment: datetime | None) -> str:
     return "—" if moment is None else f"{moment:%Y-%m-%d %H:%M:%S}"
 
 
+def stop_on_interrupt() -> asyncio.Event:
+    """An event that Ctrl-C sets, for the commands that run until stopped.
+
+    **`except KeyboardInterrupt` inside a coroutine does not work, and both
+    long-running commands here shipped with one.** `asyncio.run` installs no
+    handler: the signal interrupts the *loop*, `KeyboardInterrupt` is raised
+    inside `runner.run` rather than inside the awaiting coroutine, and the
+    coroutine is cancelled instead. So the `except` clause never matched, the
+    exception escaped to the top level, and every `memoryos watch` ended with a
+    two-frame traceback and exit 130 — on a tool whose entire stated design
+    constraint is that a dev tool which throws at you gets uninstalled.
+
+    Worse than the traceback: the code *after* the `try` never ran either, so
+    the run summary the watcher exists to print — observed, filtered,
+    debounced, emitted — was unreachable on the only exit path a watcher has.
+    M6.2 reported those numbers from a log line, which is why nobody noticed.
+
+    `Worker._install_signal_handlers` has done this correctly since M1.2. This
+    is the same three lines, one module over.
+
+    The handler removes itself, so a second Ctrl-C is the default one again and
+    kills a process whose clean shutdown is itself stuck.
+    """
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def interrupt() -> None:
+        stop.set()
+        with contextlib.suppress(NotImplementedError, RuntimeError):
+            loop.remove_signal_handler(signal.SIGINT)
+
+    # Not available on every platform; a command that cannot be interrupted
+    # cleanly is still better than one that refuses to start.
+    with contextlib.suppress(NotImplementedError):
+        loop.add_signal_handler(signal.SIGINT, interrupt)
+    return stop
+
+
 def parse_moment(value: str, *, name: str) -> datetime:
     """A date or a timestamp on the command line, as an instant in UTC.
 
@@ -2662,7 +2702,10 @@ async def run_watch(
     print(f"api        {api_url}")
     print("\nCtrl-C to stop. The API being down is not an error here.\n")
 
-    stop = asyncio.Event()
+    # Set by SIGINT, which is what makes `WatchTree.run`'s `stop` parameter
+    # load-bearing rather than decorative — until now nothing ever set it, and
+    # the loop was ended by a cancellation instead. See `stop_on_interrupt`.
+    stop = stop_on_interrupt()
     try:
         async with httpx.AsyncClient() as client:
             watcher = WatchTree(
@@ -2674,8 +2717,6 @@ async def run_watch(
                 client=client,
             )
             report = await watcher.run(stop=stop)
-    except KeyboardInterrupt:
-        return 0
     finally:
         await database.dispose()
 
@@ -2897,15 +2938,21 @@ async def run_events_tail(
         # long-running follow does not re-render what it has already printed and
         # does not grow more expensive the longer it runs.
         since = rows[-1].received_at if rows else datetime.now(UTC)
-        while True:
-            await asyncio.sleep(1.0)
+        # The same fix as `run_watch`: the `except KeyboardInterrupt` that used
+        # to sit at the bottom of this function could never match, because the
+        # signal reaches `asyncio.run` rather than this coroutine. See
+        # `stop_on_interrupt`. Waiting on the event rather than sleeping also
+        # means Ctrl-C is noticed immediately rather than after the poll.
+        stop = stop_on_interrupt()
+        while not stop.is_set():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=1.0)
             fresh = await events.tail(sessions, kind=EventKind(kind) if kind else None,
                                       limit=200, since=since)
             for event in fresh:
                 _print_event(event)
             if fresh and fresh[-1].received_at is not None:
                 since = fresh[-1].received_at
-    except KeyboardInterrupt:
         return 0
     finally:
         await container.dispose()
