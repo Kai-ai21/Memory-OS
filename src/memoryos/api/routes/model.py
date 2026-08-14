@@ -54,6 +54,12 @@ class FacetOut(BaseModel):
     origin: str
     detector: str | None = None
     superseded_by: UUID | None = None
+    # M8.2. **Both, because `superseded_by` alone cannot express a withdrawal.**
+    # A facet whose evidence went away is superseded with no replacement, so the
+    # pointer is null and the timestamp is not — and a client reading only the
+    # pointer would render a retired claim as the live one.
+    superseded_at: str | None = None
+    superseded_reason: str | None = None
     dismissed_at: str | None = None
     dismissed_reason: str | None = None
     evidence: list[EvidenceOut] = Field(default_factory=list)
@@ -139,6 +145,10 @@ def _facet_out(facet: user_model.FacetRow) -> FacetOut:
         origin=facet.origin,
         detector=facet.detector,
         superseded_by=facet.superseded_by,
+        superseded_at=(
+            None if facet.superseded_at is None else facet.superseded_at.isoformat()
+        ),
+        superseded_reason=facet.superseded_reason,
         dismissed_at=None if facet.dismissed_at is None else facet.dismissed_at.isoformat(),
         dismissed_reason=facet.dismissed_reason,
         evidence=[

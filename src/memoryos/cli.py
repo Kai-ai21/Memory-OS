@@ -52,6 +52,7 @@ from memoryos.application import (
     reflections,
     sources,
     surfacing,
+    system_report,
     temporal,
     user_model,
 )
@@ -109,6 +110,7 @@ from memoryos.application.watcher import WatchTree
 from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
 from memoryos.container import Container, ToolsUnsupported
+from memoryos.domain import user_model as user_model_domain
 from memoryos.domain.backoff import wait_for
 from memoryos.domain.debounce import DEFAULT_WINDOW
 from memoryos.domain.entities import Source
@@ -126,6 +128,8 @@ from memoryos.domain.surfacing import (
     EXPLANATIONS,
     SINGLE_ROUTE_BEST,
 )
+from memoryos.domain.user_model import MIN_CLOSED_FOR_VERDICT as USER_MODEL_MIN_CLOSED
+from memoryos.domain.user_model import MIN_OBSERVATION_DAYS as USER_MODEL_MIN_OBSERVATION_DAYS
 from memoryos.domain.user_model import MIN_SUPPORT as USER_MODEL_MIN_SUPPORT
 from memoryos.domain.values import (
     DEFAULT_SEARCH_MODE,
@@ -148,18 +152,46 @@ from memoryos.domain.values import (
 from memoryos.logging import configure_logging
 
 
-async def run_worker(settings: Settings, *, lease_seconds: float, drain: bool) -> None:
+async def run_worker(
+    settings: Settings, *, lease_seconds: float, drain: bool, only: str | None
+) -> None:
     container = Container.build(settings)
     try:
         worker = Worker(
             queue=container.queue,
             registry=container.registry(),
             session_factory=container.database.session_factory,
-            config=WorkerConfig(lease=timedelta(seconds=lease_seconds)),
+            config=WorkerConfig(
+                lease=timedelta(seconds=lease_seconds),
+                only=_job_types_or_exit(only),
+            ),
         )
         await worker.run(drain=drain)
     finally:
         await container.dispose()
+
+
+def _job_types_or_exit(raw: str | None) -> frozenset[JobType]:
+    """Parse `--only`, refusing a name that is not a job type.
+
+    Refusing rather than ignoring, because the failure mode of a silent typo
+    here is a drain that claims nothing, exits after three idle polls, and looks
+    exactly like a queue that was already empty.
+    """
+    if not raw:
+        return frozenset()
+    wanted: set[JobType] = set()
+    for name in (part.strip() for part in raw.split(",")):
+        if not name:
+            continue
+        try:
+            wanted.add(JobType(name))
+        except ValueError:
+            allowed = ", ".join(member.value for member in JobType)
+            raise SystemExit(
+                f"{name!r} is not a job type. Use one of: {allowed}"
+            ) from None
+    return frozenset(wanted)
 
 
 async def add_source(settings: Settings, *, kind: str, name: str, root: Path) -> int:
@@ -2648,9 +2680,19 @@ async def run_model_derive(settings: Settings) -> int:
     print(f"minimum support:        {USER_MODEL_MIN_SUPPORT} distinct observations")
     print(f"written:                {report.written}")
     print(f"superseded:             {report.superseded}")
+    print(f"withdrawn:              {report.withdrawn}")
     print(f"unchanged:              {report.unchanged}")
     print(f"below the bar:          {report.below_bar}")
     print(f"skipped (dismissed):    {report.skipped_dismissed}")
+
+    if report.withdrawals:
+        # Named rather than counted. A run that retired five claims the system
+        # used to make about somebody is the most consequential thing `derive`
+        # can do, and a bare number would let it happen silently.
+        print("\nretired, because the evidence is no longer there:")
+        for statement, reason in report.withdrawals:
+            print(f"  {textwrap.shorten(statement, width=76)}")
+            print(f"    — {reason}")
 
     if report.rejected:
         print("\nwhat was considered and not written:")
@@ -2781,16 +2823,201 @@ async def run_model_history(settings: Settings, *, facet_id: str) -> int:
         await container.dispose()
 
     for index, facet in enumerate(chain, start=1):
-        marker = (
-            "current"
-            if facet.superseded_by is None
-            else f"superseded by {facet.superseded_by}"
-        )
+        if facet.superseded_by is not None:
+            marker = f"superseded by {facet.superseded_by}"
+        elif facet.superseded_at is not None:
+            # M8.2's third state. Not current, and not replaced either — the
+            # evidence went away, and reading `superseded_by` alone would print
+            # this row as the live one.
+            marker = f"withdrawn {_stamp(facet.superseded_at)}"
+        else:
+            marker = "current"
         print(f"[{index}] {facet.id}  {_stamp(facet.created_at)}  ({marker})")
         for line in textwrap.wrap(facet.statement, width=78):
             print(f"     {line}")
-    if len(chain) == 1:
+        if facet.superseded_reason:
+            print(f"     — {facet.superseded_reason}")
+    if len(chain) == 1 and chain[0].superseded_at is None:
         print("\nOne version: this facet has never been revised.")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# Model evolution (M8.2)
+# --------------------------------------------------------------------------
+
+
+async def run_model_diff(settings: Settings, *, since: str, until: str | None) -> int:
+    """What changed between two moments, in the four ways the model can change.
+
+    **An empty diff is a result and is printed as one.** "Nothing changed between
+    these two dates" and "the model has nothing in it" are different statements,
+    and a command that printed the same blank page for both would make the second
+    unreadable — so the summary line carries the dates and the counts either way.
+    """
+    try:
+        start = parse_moment(since, name="--since")
+        end = parse_moment(until, name="--until") if until else None
+    except ValueError as exc:
+        print(str(exc))
+        return 1
+    if end is not None and end <= start:
+        print("--until must be after --since")
+        return 1
+
+    container = Container.build(settings)
+    try:
+        report = await user_model.diff(
+            container.database.session_factory, since=start, until=end
+        )
+    finally:
+        await container.dispose()
+
+    print(f"from {_stamp(report.since)} to {_stamp(report.until)}\n")
+
+    if report.added:
+        print(f"added ({len(report.added)})")
+        for change in report.added:
+            _print_change(change)
+    if report.superseded:
+        print(f"superseded ({len(report.superseded)})")
+        for change in report.superseded:
+            _print_change(change)
+            if change.withdrawn:
+                # The distinction M8.2 added the column for: a claim that moved
+                # and a claim that lost its evidence are opposite findings.
+                print("      withdrawn: no replacement — the support went away")
+            else:
+                assert change.replacement is not None
+                for line in textwrap.wrap(change.replacement.statement, width=74):
+                    print(f"      → {line}")
+    if report.dismissed:
+        print(f"dismissed ({len(report.dismissed)})")
+        for change in report.dismissed:
+            _print_change(change)
+
+    moves = report.confidence_changes
+    if moves:
+        print("confidence changes")
+        for change, before, after in moves:
+            direction = "up" if after > before else "down"
+            print(
+                f"  {before:.2f} → {after:.2f}  ({direction})  "
+                f"{textwrap.shorten(change.facet.statement, width=60)}"
+            )
+
+    print(
+        f"\n{len(report.added)} added, {len(report.superseded)} superseded, "
+        f"{len(report.dismissed)} dismissed, {len(moves)} confidence change(s)"
+    )
+    if report.empty:
+        print("the model did not change in this window")
+    return 0
+
+
+def _print_change(change: user_model.FacetChange) -> None:
+    print(f"  {_stamp(change.at)}  [{change.facet.dimension}]  {change.facet.id}")
+    for line in textwrap.wrap(change.facet.statement, width=74):
+        print(f"      {line}")
+    if change.reason:
+        print(f"      — {change.reason}")
+
+
+async def run_model_timeline(settings: Settings, *, dimension: str | None) -> int:
+    """Every event in the model's life, oldest first.
+
+    **The history of how the model changed is part of the model.** A facet that
+    held for six months and then stopped is more informative than either state
+    alone — the current state says what the system believes now, and only this
+    says whether it has ever been wrong about it.
+    """
+    wanted = _dimension_or_exit(dimension)
+    container = Container.build(settings)
+    try:
+        events = await user_model.timeline(
+            container.database.session_factory, dimension=wanted
+        )
+    finally:
+        await container.dispose()
+
+    if not events:
+        scope = f" in {wanted.value}" if wanted else ""
+        print(f"no model events{scope}: nothing has ever been written to the model")
+        return 0
+
+    for event in events:
+        print(f"{_stamp(event.at)}  {event.kind:10} [{event.dimension}]")
+        for line in textwrap.wrap(event.statement, width=76):
+            print(f"    {line}")
+        if event.detail:
+            print(f"    — {event.detail}")
+
+    counts: dict[str, int] = {}
+    for event in events:
+        counts[event.kind] = counts.get(event.kind, 0) + 1
+    summary = ", ".join(f"{kind} {count}" for kind, count in sorted(counts.items()))
+    print(f"\n{len(events)} event(s): {summary}")
+    return 0
+
+
+async def run_model_stability(settings: Settings) -> int:
+    """How often facets change, and how long they last, per dimension.
+
+    **The verdict column is allowed to say "cannot say", and here it always
+    does.** A model where everything changes weekly is fitting noise and one
+    where nothing ever changes has stopped learning; telling them apart needs
+    closed facets to average over and a month of watching, and this corpus has
+    neither. Printing a mean lifetime of 0.0 beside a confident label would be
+    the shape of a measurement with none of the substance.
+    """
+    container = Container.build(settings)
+    try:
+        entries = await user_model.stability(container.database.session_factory)
+    finally:
+        await container.dispose()
+
+    header = (
+        f"{'dimension':20} {'facets':>7} {'live':>5} {'changes':>8} "
+        f"{'mean life':>10} {'mean age':>9}"
+    )
+    print(header)
+    print("-" * len(header))
+    for entry in entries:
+        life = (
+            "—"
+            if entry.mean_lifetime_days is None
+            else f"{entry.mean_lifetime_days:.1f}d"
+        )
+        age = (
+            "—"
+            if entry.mean_live_age_days is None
+            else f"{entry.mean_live_age_days:.1f}d"
+        )
+        print(
+            f"{entry.dimension.value:20} {entry.total:>7} {entry.live:>5} "
+            f"{entry.changes:>8} {life:>10} {age:>9}"
+        )
+
+    print("\nverdicts")
+    for entry in entries:
+        print(f"  {entry.dimension.value:20} {entry.verdict()}")
+
+    print(
+        f"\nA verdict needs {USER_MODEL_MIN_CLOSED} closed facet(s) and "
+        f"{USER_MODEL_MIN_OBSERVATION_DAYS:.0f} days of history. Mean life is over "
+        "closed facets only; mean age is the live ones, which have not finished "
+        "their lifetimes and are therefore a lower bound."
+    )
+    overall = user_model_domain.stopped_learning(entries)
+    if overall is not None:
+        print(f"\n{overall}")
+    total = sum(entry.total for entry in entries)
+    if not total:
+        print(
+            "\nThe model holds no facets at all, so there is no churn to measure "
+            "and neither failure mode applies. What this measures is not the "
+            "model's stability but the corpus's size — see `model derive`."
+        )
     return 0
 
 
@@ -2802,6 +3029,263 @@ def _dimension_or_exit(name: str | None) -> Dimension | None:
     except ValueError:
         allowed = ", ".join(member.value for member in Dimension)
         raise SystemExit(f"{name!r} is not a dimension. Use one of: {allowed}") from None
+
+
+# --------------------------------------------------------------------------
+# The full system report (M8.2)
+# --------------------------------------------------------------------------
+
+
+async def run_report(
+    settings: Settings,
+    *,
+    full: bool,
+    golden_path: Path,
+    var_root: Path,
+    k: int,
+) -> int:
+    """Everything the system currently measures about itself, in one command.
+
+    **The artifact you show somebody**, and the reason it is one command rather
+    than nine is that a claim assembled by hand from nine scrollbacks is a claim
+    nobody re-checks. This runs from a clean checkout and produces the current
+    true state.
+
+    `--full` adds the graded retrieval evaluation against every recorded
+    baseline, which takes a minute of local compute and no API calls. Without it
+    the report is the cheap sections — counts, graph, decisions, model, doctor —
+    which is what a script watching for drift wants.
+
+    Exit code follows `doctor`: non-zero when something is actually wrong with
+    the corpus, never because a capability has no data. A report that failed on
+    an empty patterns table would be reporting the corpus's size as a defect.
+    """
+    container = Container.build(settings)
+    healthy = True
+    try:
+        sessions = container.database.session_factory
+        assessments = await user_model.assess(sessions)
+        stability = await user_model.stability(sessions)
+        corpus, decisions, behaviour, ran_at = await system_report.gather(
+            sessions, assessments=assessments, stability=stability
+        )
+
+        print("=" * 78)
+        print(f"memoryos — full system report   {_stamp(ran_at)}")
+        print("=" * 78)
+
+        # ---------------------------------------------------------------
+        print("\n## Corpus\n")
+        print(f"  sources                {corpus.sources}")
+        print(f"  memories               {corpus.memories} ({corpus.current_memories} current)")
+        print(f"  chunks                 {corpus.chunks}")
+        print(
+            f"  embedded               {corpus.embedded_chunks} "
+            f"({corpus.coverage:.1%} of chunks)"
+        )
+        print(f"  model                  {container.embedder.model_id}")
+        print(f"  chunker                {container.chunker.version}")
+        print(f"  entities               {corpus.entities}")
+        print(f"  entity mentions        {corpus.mentions}")
+        print(f"  relationships          {corpus.relationships}")
+        print(
+            f"  extraction coverage    {corpus.extracted_memories}/"
+            f"{corpus.current_memories} memories ({corpus.extraction_coverage:.0%})"
+        )
+        # The number three later sections cite as the reason they decline.
+        print(
+            f"  source-declared dates  {corpus.declared_dates}/{corpus.current_memories} "
+            "(the rest are filesystem mtimes)"
+        )
+
+        # ---------------------------------------------------------------
+        print("\n## Retrieval\n")
+        if not full:
+            print("  skipped: pass --full to run the graded evaluation")
+        elif not golden_path.exists():
+            print(f"  no golden set at {golden_path}")
+            print(f"  run: memoryos export-golden-set --output {golden_path}")
+        else:
+            golden = await load_golden_set(golden_path, sessions)
+            if not golden.queries:
+                print("  the golden set has no scoreable queries")
+            else:
+                run = await evaluate(
+                    golden,
+                    container.search(),
+                    sessions,
+                    k=k,
+                    now=datetime.now(UTC),
+                    mode=DEFAULT_SEARCH_MODE,
+                    rerank=settings.rerank_enabled,
+                )
+                print(
+                    f"  live run: {len(run.results)} queries, k={k}, "
+                    f"mode={run.mode.value}, rerank={settings.rerank_enabled}"
+                )
+                print()
+                for summary in run.summaries():
+                    print(
+                        f"    {summary.metric:<14} mean {summary.mean:.3f}   "
+                        f"p50 {summary.p50:.3f}   min {summary.minimum:.3f}"
+                    )
+                touched, introduced = run.graph_contribution
+                print(
+                    f"\n    graph reached {touched} queries and introduced "
+                    f"{introduced} results no other route found"
+                )
+                print("\n  against every recorded baseline:\n")
+                for name, what, payload in system_report.read_baselines(var_root):
+                    if payload is None:
+                        print(f"    {name:<28} MISSING — never recorded")
+                        continue
+                    comparison = compare_runs(payload, run)
+                    print(f"    {name}  ({what})")
+                    print(f"      recorded {payload.get('ran_at', '?')[:19]}, "
+                          f"{payload.get('queries', '?')} queries, "
+                          f"mode {payload.get('mode', 'vector')}")
+                    for metric, before, after in comparison.deltas:
+                        delta = round(after - before, 6) or 0.0
+                        print(
+                            f"      {metric:<14}{before:>8.3f}{after:>8.3f}{delta:>+9.3f}"
+                        )
+                    if comparison.deltas:
+                        print(
+                            f"      {len(comparison.regressions)} query(ies) lost MRR"
+                        )
+                    else:
+                        # Different `k`, or a baseline from before a metric
+                        # existed. Reported rather than shown as an empty table.
+                        print("      no comparable metrics (different k or schema)")
+                    print()
+
+        # ---------------------------------------------------------------
+        print("\n## Graph\n")
+        divergence = await graph_verify.verify(sessions, container.graph)
+        print(textwrap.indent(divergence.render(), "  "))
+        print(
+            "\n  identical: the projection matches Postgres"
+            if divergence.identical
+            else "\n  DIVERGED — run `memoryos graph rebuild`"
+        )
+        if not divergence.identical:
+            healthy = False
+
+        # ---------------------------------------------------------------
+        print("\n## Decisions and outcomes\n")
+        print(f"  decisions              {decisions.decisions}")
+        print(f"  options recorded       {decisions.options}")
+        print(f"  outcomes               {decisions.outcomes}")
+        for verdict, count in sorted(decisions.by_verdict.items()):
+            print(f"    {verdict:<20} {count}")
+        print(f"  assumptions            {decisions.assumptions}")
+        print(f"    evaluated            {decisions.evaluated_assumptions}")
+        for verdict, count in sorted(decisions.by_assumption_verdict.items()):
+            print(f"      {verdict:<18} {count}")
+        print(f"    grouped              {decisions.grouped_assumptions}")
+        print(f"  assumption groups      {decisions.groups}")
+        if decisions.assumptions and not decisions.groups:
+            # The single fact that explains why three of M8.1's four detectors
+            # and two of M8.0's five derivers can never fire here.
+            print(
+                "\n  every assumption is ungrouped, so no belief is shared by two "
+                "decisions —\n  which is why the pattern and gap detectors below "
+                "have nothing to compare."
+            )
+
+        # ---------------------------------------------------------------
+        print("\n## Patterns, reflections and the user model\n")
+        print(f"  patterns               {behaviour.patterns} live, "
+              f"{behaviour.dismissed_patterns} dismissed")
+        print(f"  reflections            {behaviour.reflections}")
+        print(f"  facets (live)          {behaviour.facets} "
+              f"({behaviour.derived_facets} derived, {behaviour.asserted_facets} stated)")
+        print(f"  facets withdrawn       {behaviour.withdrawn_facets}")
+        print(f"  facets dismissed       {behaviour.dismissed_facets}")
+        print("\n  by dimension:")
+        for assessment in behaviour.assessments:
+            print(f"    {assessment.dimension.value:<20} {assessment.render()}")
+        print("\n  stability:")
+        for entry in behaviour.stability:
+            print(f"    {entry.dimension.value:<20} {entry.verdict()}")
+
+        # ---------------------------------------------------------------
+        print("\n## Agent\n")
+        recorded = system_report.agent_baseline(var_root)
+        if recorded is None:
+            print(f"  no recorded agent run at {var_root / system_report.AGENT_BASELINE}")
+        else:
+            means = recorded.get("means", {})
+            cost = recorded.get("cost", {})
+            print(
+                f"  RECORDED run, not live: {recorded.get('questions')} questions, "
+                f"{recorded.get('agent_failures')} agent failures"
+            )
+            print(
+                "  Scoring these live costs one model call per question and several "
+                "minutes;\n  the numbers below are the run in "
+                f"{system_report.AGENT_BASELINE}, and are labelled\n  recorded because "
+                "a report that printed a stale file as current state is the drift\n"
+                "  this command exists to stop."
+            )
+            print()
+            # **A metric nobody could measure must not print as a zero.**
+            # `tool_appropriateness` is undefined for a trajectory the provider
+            # did not narrate, and it is 0.000 here on every question because
+            # `judgeable` is 0 on every question — not because the agent chose
+            # badly. `overall` already excludes it; this line stops the table
+            # from saying what `overall` refuses to.
+            judgeable = sum(
+                int(row.get("judgeable", 0)) for row in recorded.get("scores", [])
+            )
+            for metric, value in sorted(means.items()):
+                note = ""
+                if metric == "tool_appropriateness" and not judgeable:
+                    note = (
+                        "  ← not measurable: no hop was narrated in any "
+                        "trajectory; excluded from overall"
+                    )
+                print(f"    {metric:<22} {float(value):.3f}{note}")
+            for metric, value in sorted(cost.items()):
+                print(f"    {metric:<22} {float(value):,.1f}")
+            failures = recorded.get("failures", {})
+            if failures:
+                print("\n    failure modes:")
+                for mode, count in sorted(failures.items()):
+                    print(f"      {mode:<20} {count}")
+
+        # ---------------------------------------------------------------
+        print("\n## Health\n")
+        doctor_report = await run_doctor(
+            sessions,
+            container.embedder,
+            graph=container.graph,
+            graph_schema_version=SCHEMA_VERSION,
+        )
+        for finding in doctor_report.findings:
+            if finding.advisory and finding.count:
+                mark = "note"
+            elif finding.healthy:
+                mark = "ok  "
+            else:
+                mark = "FAIL"
+            print(f"  [{mark}] {finding.check}: {finding.count}")
+            if mark != "ok  ":
+                print(f"          {finding.detail}")
+        if doctor_report.graph is not None:
+            print()
+            # `doctor`'s own renderer rather than a second one. Two functions
+            # printing the same object is the "two places that must agree with
+            # nothing checking" this repo has paid for twice.
+            print_graph_status(doctor_report.graph, settings.neo4j_uri)
+        print("\n  " + ("healthy" if doctor_report.healthy else "problems found"))
+        if not doctor_report.healthy:
+            healthy = False
+    finally:
+        await container.dispose()
+
+    print("\n" + "=" * 78)
+    return 0 if healthy else 1
 
 
 async def run_patterns_list(
@@ -3806,7 +4290,27 @@ def _print_comparison(report: Report, baseline: dict[str, Any]) -> None:
     if not rows:
         print("\nthe baseline file carries no means to compare against")
         return
+    if not report.scorable:
+        # **Not measured is not measured as zero**, which is the rule this whole
+        # project is arranged around and the one place the agent report still
+        # broke it. A run where the provider answered nothing has means of 0.000
+        # by construction, and subtracting a real baseline from them prints a
+        # -0.630 regression that is a quota report wearing a benchmark's
+        # clothes. The warning above says the means are incomparable; printing
+        # the comparison anyway said otherwise louder.
+        print(
+            f"\nno comparison: 0 of {len(report.scores)} questions reached the "
+            "provider, so there is nothing to compare the baseline against.\n"
+            "  A delta here would be the difference between a benchmark and a "
+            "rate limit."
+        )
+        return
     print("\nagainst baseline:")
+    if report.scorable < len(report.scores):
+        print(
+            f"  NOTE: {report.scorable} of {len(report.scores)} questions reached "
+            "the provider; these deltas are over a partial run."
+        )
     for name, was, now in rows:
         print(f"  {name:20} {was:+.3f} -> {now:+.3f}   {now - was:+.3f}")
 
@@ -4438,6 +4942,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--drain",
         action="store_true",
         help="exit once the queue has been empty for a few polls, instead of running forever",
+    )
+    worker.add_argument(
+        "--only",
+        default=None,
+        help=(
+            "comma-separated job types to claim; the rest stay pending. "
+            "For a drain that must finish — see `make phase1-check`"
+        ),
     )
 
     source = commands.add_parser("source", help="manage sources")
@@ -5224,6 +5736,23 @@ def build_parser() -> argparse.ArgumentParser:
         "history", help="every version of one facet, oldest first"
     )
     model_history.add_argument("facet_id")
+    model_diff = model_commands.add_parser(
+        "diff", help="what changed between two moments: added, superseded, dismissed"
+    )
+    model_diff.add_argument(
+        "--since", required=True, help="a date or timestamp, e.g. 2026-08-01"
+    )
+    model_diff.add_argument(
+        "--until", default=None, help="defaults to now"
+    )
+    model_timeline = model_commands.add_parser(
+        "timeline", help="every event in the model's life, oldest first"
+    )
+    model_timeline.add_argument("--dimension", default=None)
+    model_commands.add_parser(
+        "stability",
+        help="how often facets change and how long they last, per dimension",
+    )
 
     reflect_parser = commands.add_parser(
         "reflect",
@@ -5286,6 +5815,25 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser(
         "doctor", help="check the corpus for silently-degrading conditions"
     )
+
+    report_parser = commands.add_parser(
+        "report", help="everything the system measures about itself, in one command"
+    )
+    report_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="also run the graded retrieval evaluation against every baseline",
+    )
+    report_parser.add_argument(
+        "--golden-set", type=Path, default=Path("var/golden-set.json")
+    )
+    report_parser.add_argument(
+        "--var-root",
+        type=Path,
+        default=Path("var"),
+        help="where the recorded baselines live",
+    )
+    report_parser.add_argument("-k", type=int, default=10)
 
     search = commands.add_parser("search", help="semantic search over memories")
     search.add_argument("query")
@@ -5540,7 +6088,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "worker":
         asyncio.run(
-            run_worker(settings, lease_seconds=args.lease_seconds, drain=args.drain)
+            run_worker(
+                settings,
+                lease_seconds=args.lease_seconds,
+                drain=args.drain,
+                only=args.only,
+            )
         )
         return 0
 
@@ -5880,6 +6433,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.model_command == "history":
             return asyncio.run(run_model_history(settings, facet_id=args.facet_id))
+        if args.model_command == "diff":
+            return asyncio.run(
+                run_model_diff(settings, since=args.since, until=args.until)
+            )
+        if args.model_command == "timeline":
+            return asyncio.run(run_model_timeline(settings, dimension=args.dimension))
+        if args.model_command == "stability":
+            return asyncio.run(run_model_stability(settings))
 
     if args.command == "surfacing":
         if args.surfacing_command == "stats":
@@ -5985,6 +6546,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "doctor":
         return asyncio.run(run_doctor_command(settings))
+
+    if args.command == "report":
+        return asyncio.run(
+            run_report(
+                settings,
+                full=args.full,
+                golden_path=args.golden_set,
+                var_root=args.var_root,
+                k=args.k,
+            )
+        )
 
     if args.command == "search":
         return asyncio.run(

@@ -2747,6 +2747,14 @@ class UserModelFacet(Base):
             initially="DEFERRED",
         ),
     )
+    # M8.2. **When it stopped, and why** — the half of supersession `superseded_by`
+    # could not express. A facet whose evidence went away has no replacement to
+    # point at, and under 0025 it stayed live forever asserting something nothing
+    # supported. So this column, not the pointer, is what "live" reads: null
+    # `superseded_by` with a non-null `superseded_at` is a withdrawal, and the two
+    # partial indexes below key on the timestamp for exactly that reason.
+    superseded_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    superseded_reason: Mapped[str | None] = mapped_column(Text)
     dismissed_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
     dismissed_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
@@ -2770,6 +2778,20 @@ class UserModelFacet(Base):
             "(dismissed_at IS NULL) = (dismissed_reason IS NULL)",
             name="ck_user_model_facets_dismissal_paired",
         ),
+        # A replacement implies supersession; supersession does not imply a
+        # replacement. The asymmetry is the point — a withdrawn facet is
+        # superseded with nothing pointing forward.
+        CheckConstraint(
+            "superseded_by IS NULL OR superseded_at IS NOT NULL",
+            name="ck_user_model_facets_supersession_dated",
+        ),
+        # Dismissal's constraint, applied to the other way a facet stops being
+        # live, for the reason that one gives: a supersession with no reason
+        # tells a reader that something happened and nothing about what.
+        CheckConstraint(
+            "(superseded_at IS NULL) = (superseded_reason IS NULL)",
+            name="ck_user_model_facets_supersession_paired",
+        ),
         # A row that lied about its origin would let a derivation replace
         # something a person wrote, which is the one thing `origin` exists to
         # prevent — so the pairing is a constraint rather than a convention.
@@ -2781,7 +2803,7 @@ class UserModelFacet(Base):
         Index(
             "ix_user_model_facets_live",
             "dimension",
-            postgresql_where=text("superseded_by IS NULL AND dismissed_at IS NULL"),
+            postgresql_where=text("superseded_at IS NULL AND dismissed_at IS NULL"),
         ),
         # One live derived facet per (detector, subject). What makes re-running
         # `derive` idempotent: the second run finds the first row rather than
@@ -2792,8 +2814,15 @@ class UserModelFacet(Base):
             "subject_key",
             unique=True,
             postgresql_where=text(
-                "origin = 'derived' AND superseded_by IS NULL AND dismissed_at IS NULL"
+                "origin = 'derived' AND superseded_at IS NULL AND dismissed_at IS NULL"
             ),
+        ),
+        # `model diff` and `model timeline` both scan by when something happened
+        # rather than by dimension, with a range predicate on this column.
+        Index(
+            "ix_user_model_facets_superseded_at",
+            "superseded_at",
+            postgresql_where=text("superseded_at IS NOT NULL"),
         ),
     )
 

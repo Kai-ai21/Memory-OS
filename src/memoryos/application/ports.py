@@ -18,7 +18,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.domain.entities import IngestionEvent, Memory, RawArtifact, Source
-from memoryos.domain.jobs import Job, JobSpec
+from memoryos.domain.jobs import Job, JobSpec, JobType
 from memoryos.domain.values import (
     ContentHash,
     EdgeType,
@@ -108,7 +108,23 @@ class JobQueue(Protocol):
         """Returns None if a job with the same (job_type, dedupe_key)
         is already pending or running."""
 
-    async def claim(self, worker_id: str, lease: timedelta) -> Job | None: ...
+    async def claim(
+        self,
+        worker_id: str,
+        lease: timedelta,
+        *,
+        only: frozenset[JobType] | None = None,
+    ) -> Job | None:
+        """The highest-priority ready job, optionally restricted by type.
+
+        `only` exists because the queue is shared across phases and the checks
+        are not. `make phase1-check` drains it to prove Phase 1's pipeline
+        works, and embedding enqueues a Phase 3 entity extraction per memory —
+        so on any machine with an API key configured, a check about ingestion
+        blocks on 282 live model calls and never finishes. Filtering at the
+        claim rather than in the handler keeps the excluded jobs *pending*
+        rather than burning an attempt on each.
+        """
 
     async def heartbeat(self, job_id: UUID, worker_id: str, lease: timedelta) -> bool:
         """False means the lease was lost — another worker may now own this job."""

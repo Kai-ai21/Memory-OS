@@ -34,6 +34,19 @@ version to still exist — and an `UPDATE` would leave nothing to compare.
 A re-derivation that finds the same subject with the *same* statement touches
 nothing, so running `derive` twice is not two rows and not two timestamps.
 
+### Withdraw, never delete (M8.2)
+
+A re-derivation that finds **no** candidate for a live facet's subject retires it
+with `superseded_at` and a written reason, and points `superseded_by` at nothing,
+because there is nothing to point at. This is the other half of "supersede, never
+update": under M8.0 the only way to stop being live was to be replaced, so a
+facet whose evidence had gone stayed live indefinitely.
+
+Deleting it was the alternative and it is the one thing M1.1 spent a phase
+arguing against. An honest record of a claim the system used to make beats a
+clean current state, and `model diff`, `model timeline` and `model stability`
+exist to read that record.
+
 ### Dismissed facets are never re-derived
 
 M5.3's rule, and the deriver checks it by subject rather than by id: a person who
@@ -57,6 +70,7 @@ from memoryos.domain.user_model import (
     MIN_SUPPORT,
     UNDERIVABLE,
     Assessment,
+    Stability,
     clears_bar,
     facet_confidence,
 )
@@ -120,8 +134,17 @@ class DeriveReport:
     considered: int = 0
     below_bar: int = 0
     skipped_dismissed: int = 0
+    # M8.2. Facets retired because the evidence under them went away, with no
+    # replacement statement. Counted apart from `superseded` because they are a
+    # different event: a revision says the claim moved, a withdrawal says the
+    # claim no longer has anything behind it, and pooling them would hide the
+    # second inside the first.
+    withdrawn: int = 0
     assessments: tuple[Assessment, ...] = ()
     rejected: tuple[tuple[str, int], ...] = ()
+    # What was withdrawn and why, so a run that quietly retired five facets is
+    # not a run that printed one number.
+    withdrawals: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +163,8 @@ class FacetRow:
     first_observed: datetime | None
     last_observed: datetime | None
     superseded_by: UUID | None
+    superseded_at: datetime | None
+    superseded_reason: str | None
     dismissed_at: datetime | None
     dismissed_reason: str | None
     created_at: datetime
@@ -147,7 +172,16 @@ class FacetRow:
 
     @property
     def live(self) -> bool:
-        return self.superseded_by is None and self.dismissed_at is None
+        # **Read from `superseded_at`, not from `superseded_by`.** A facet whose
+        # evidence went away is superseded by nothing, so the pointer is null and
+        # the timestamp is not — and reading the pointer here is exactly how such
+        # a facet would go on being displayed as current.
+        return self.superseded_at is None and self.dismissed_at is None
+
+    @property
+    def withdrawn(self) -> bool:
+        """Superseded with no replacement: the support disappeared."""
+        return self.superseded_at is not None and self.superseded_by is None
 
 
 @dataclass(frozen=True, slots=True)
@@ -493,10 +527,26 @@ _DERIVERS = (
 
 
 async def derive(session_factory: async_sessionmaker[AsyncSession]) -> DeriveReport:
-    """Run every deriver, write what clears the bar, and report the rest."""
-    written = superseded = unchanged = below_bar = skipped = 0
+    """Run every deriver, write what clears the bar, retire what lost its support.
+
+    **The retirement pass is M8.2's half and it is the one that makes this a
+    re-derivation rather than an append.** Every deriver runs over current data,
+    so a facet whose subject nobody proposes any more is a facet whose evidence
+    has gone — a group was regrouped, a pattern was dismissed, three decisions
+    became two. Under M8.0 such a row stayed live indefinitely, asserting
+    something with nothing behind it, because the only way to stop being live was
+    to be replaced by a new statement and there was no new statement.
+
+    It is retired, not deleted, and the reason is written down. M1.1's principle
+    applied to a claim about a person: an honest record of a belief that changed
+    beats a clean current state, and "you used to look like this and stopped in
+    March" is only answerable while March's row exists.
+    """
+    written = superseded = unchanged = below_bar = skipped = withdrawn = 0
     considered: list[Candidate] = []
     rejected: list[tuple[str, int]] = []
+    withdrawals: list[tuple[str, str]] = []
+    now = datetime.now(UTC)
 
     async with session_factory() as session, session.begin():
         for _, deriver in _DERIVERS:
@@ -529,7 +579,7 @@ async def derive(session_factory: async_sessionmaker[AsyncSession]) -> DeriveRep
                         models.UserModelFacet.detector == candidate.detector,
                         models.UserModelFacet.subject_key == candidate.subject_key,
                         models.UserModelFacet.origin == FacetOrigin.DERIVED.value,
-                        models.UserModelFacet.superseded_by.is_(None),
+                        models.UserModelFacet.superseded_at.is_(None),
                         models.UserModelFacet.dismissed_at.is_(None),
                     )
                 )
@@ -551,10 +601,50 @@ async def derive(session_factory: async_sessionmaker[AsyncSession]) -> DeriveRep
                 # how the model changed is part of the model and an UPDATE would
                 # leave nothing to compare.
                 existing.superseded_by = facet_id
+                existing.superseded_at = now
+                existing.superseded_reason = _restated_reason(existing, candidate)
                 await session.flush()
                 superseded += 1
             await _insert(session, candidate, facet_id=facet_id)
             written += 1
+
+        # --------------------------------------------------------------
+        # Retirement: facets whose support is no longer there
+        # --------------------------------------------------------------
+        #
+        # Keyed by subject rather than by id, because the question is whether the
+        # *claim* still has evidence. Candidates that fell below the bar are in
+        # this map too, and a facet whose candidate is now below the bar is
+        # retired with the number it fell to — which is a more useful sentence
+        # than the absence of one, since it says how far the support moved rather
+        # than only that it did.
+        by_subject: dict[tuple[str | None, str | None], Candidate] = {
+            (item.detector, item.subject_key): item for item in considered
+        }
+        stale = list(
+            (
+                await session.execute(
+                    select(models.UserModelFacet).where(
+                        models.UserModelFacet.origin == FacetOrigin.DERIVED.value,
+                        models.UserModelFacet.superseded_at.is_(None),
+                        models.UserModelFacet.dismissed_at.is_(None),
+                    )
+                )
+            ).scalars()
+        )
+        for facet in stale:
+            proposal = by_subject.get((facet.detector, facet.subject_key))
+            if proposal is not None and proposal.clears:
+                continue
+            reason = _withdrawal_reason(facet, proposal)
+            # **No `superseded_by`.** There is no replacement — that is the whole
+            # difference between this and a revision, and inventing a successor
+            # row to point at would put a statement in the table that no deriver
+            # produced.
+            facet.superseded_at = now
+            facet.superseded_reason = reason
+            withdrawn += 1
+            withdrawals.append((facet.statement, reason))
 
     assessments = await assess(session_factory)
     report = DeriveReport(
@@ -564,8 +654,10 @@ async def derive(session_factory: async_sessionmaker[AsyncSession]) -> DeriveRep
         considered=len(considered),
         below_bar=below_bar,
         skipped_dismissed=skipped,
+        withdrawn=withdrawn,
         assessments=assessments,
         rejected=tuple(rejected),
+        withdrawals=tuple(withdrawals),
     )
     logger.info(
         "user_model.derived",
@@ -575,8 +667,44 @@ async def derive(session_factory: async_sessionmaker[AsyncSession]) -> DeriveRep
         considered=len(considered),
         below_bar=below_bar,
         skipped_dismissed=skipped,
+        withdrawn=withdrawn,
     )
     return report
+
+
+def _restated_reason(
+    existing: models.UserModelFacet, candidate: Candidate
+) -> str:
+    """Why a revision happened, in numbers rather than in the word "changed".
+
+    The statements here are templates with counts in them, so a statement that
+    moved is a count that moved, and naming which one moved is free.
+    """
+    return (
+        f"re-derived: support {existing.support_count} → {candidate.supporting}, "
+        f"against {existing.contradiction_count} → {candidate.contradicting}"
+    )
+
+
+def _withdrawal_reason(
+    facet: models.UserModelFacet, candidate: Candidate | None
+) -> str:
+    """Why a facet lost its support, distinguishing the two ways it can happen.
+
+    A candidate that fell below the bar and a subject nobody proposes any more
+    are different findings. The first says the evidence thinned and by how much;
+    the second says the thing the facet was about is not in the data at all —
+    a group was disbanded, a pattern was dismissed, a decision was edited.
+    """
+    if candidate is not None:
+        return (
+            f"support fell from {facet.support_count} to {candidate.supporting}, "
+            f"below the bar of {MIN_SUPPORT} distinct observations"
+        )
+    return (
+        f"the {facet.detector} deriver no longer proposes this subject: "
+        "the evidence it rested on is not in the corpus any more"
+    )
 
 
 async def _insert(
@@ -639,7 +767,7 @@ async def assess(
                 await session.execute(
                     select(models.UserModelFacet.dimension, func.count())
                     .where(
-                        models.UserModelFacet.superseded_by.is_(None),
+                        models.UserModelFacet.superseded_at.is_(None),
                         models.UserModelFacet.dismissed_at.is_(None),
                     )
                     .group_by(models.UserModelFacet.dimension)
@@ -777,6 +905,8 @@ async def assert_facet(
             if previous is None:
                 raise UnknownFacet(str(supersedes))
             previous.superseded_by = facet.id
+            previous.superseded_at = datetime.now(UTC)
+            previous.superseded_reason = "restated by hand"
     logger.info(
         "user_model.asserted", dimension=dimension.value, supersedes=str(supersedes or "")
     )
@@ -822,7 +952,7 @@ async def view(
     """
     async with session_factory() as session:
         stmt = select(models.UserModelFacet).where(
-            models.UserModelFacet.superseded_by.is_(None)
+            models.UserModelFacet.superseded_at.is_(None)
         )
         if dimension is not None:
             stmt = stmt.where(models.UserModelFacet.dimension == dimension.value)
@@ -924,8 +1054,343 @@ def _row(
         first_observed=facet.first_observed,
         last_observed=facet.last_observed,
         superseded_by=facet.superseded_by,
+        superseded_at=facet.superseded_at,
+        superseded_reason=facet.superseded_reason,
         dismissed_at=facet.dismissed_at,
         dismissed_reason=facet.dismissed_reason,
         created_at=facet.created_at,
         evidence=evidence,
     )
+
+
+# --------------------------------------------------------------------------
+# M8.2: how the model changed
+# --------------------------------------------------------------------------
+#
+# **The history of how the model changed is part of the model.** A facet that
+# held for six months and then stopped is more informative than either state
+# alone: the current state says what the system believes, and only the history
+# says whether it has ever been wrong about it.
+#
+# Everything below reads the same three timestamps — `created_at`,
+# `superseded_at`, `dismissed_at` — and nothing below writes. A view over a log,
+# in the shape M4.0's timeline already established.
+
+
+@dataclass(frozen=True, slots=True)
+class FacetChange:
+    """One thing that happened to one facet, inside a window.
+
+    `replacement` is what separates a revision from a withdrawal, and it is null
+    for the second because there is nothing to point at. A reader looking at a
+    superseded facet needs to know which of the two it was: "the claim moved" and
+    "the claim lost its evidence" are opposite findings about the same row.
+    """
+
+    at: datetime
+    facet: FacetRow
+    reason: str = ""
+    replacement: FacetRow | None = None
+
+    @property
+    def withdrawn(self) -> bool:
+        return self.replacement is None
+
+    @property
+    def confidence_move(self) -> tuple[float, float] | None:
+        """Before and after, when both ends are derived facets with a number.
+
+        None rather than a zero delta when either end has no confidence, because
+        an asserted facet's null is not a low confidence — it is a claim
+        confidence does not apply to, and subtracting from it would invent a
+        movement.
+        """
+        if self.replacement is None:
+            return None
+        before, after = self.facet.confidence, self.replacement.confidence
+        if before is None or after is None:
+            return None
+        return (before, after)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelDiff:
+    """What changed between two moments, in the four ways it can change.
+
+    **A window with nothing in it is a result.** On a corpus where the model has
+    no facets at all, every list here is empty and the command says so with the
+    two dates — which is a different statement from "the model is unchanged", and
+    the rendering keeps them apart.
+    """
+
+    since: datetime
+    until: datetime
+    added: tuple[FacetChange, ...] = ()
+    superseded: tuple[FacetChange, ...] = ()
+    dismissed: tuple[FacetChange, ...] = ()
+
+    @property
+    def confidence_changes(self) -> tuple[tuple[FacetChange, float, float], ...]:
+        """Every revision where the number moved, with both ends.
+
+        Derived from the revisions rather than stored beside them: a confidence
+        change without the statement that produced it is a number nobody can
+        check, and every confidence change here *is* a supersession, because a
+        facet is never updated in place.
+        """
+        moves = []
+        for change in self.superseded:
+            pair = change.confidence_move
+            if pair is not None and pair[0] != pair[1]:
+                moves.append((change, pair[0], pair[1]))
+        return tuple(moves)
+
+    @property
+    def empty(self) -> bool:
+        return not (self.added or self.superseded or self.dismissed)
+
+
+async def diff(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    since: datetime,
+    until: datetime | None = None,
+) -> ModelDiff:
+    """Every change to the model inside a window, by the kind of change it was.
+
+    **The replacement half of a revision is not also reported as an addition.**
+    A statement that moved produces two rows — the old one retired and the new
+    one inserted — and reporting both would make one event look like two, with
+    the added list carrying a sentence that is really the second half of a
+    supersession already listed above it. So a row that some superseded facet in
+    this window points at is excluded from `added`.
+    """
+    window_end = until or datetime.now(UTC)
+    async with session_factory() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(models.UserModelFacet).where(
+                        # Anything that had an event in the window, plus the
+                        # replacements those events point at, which may have been
+                        # created at any time.
+                        (
+                            models.UserModelFacet.created_at.between(
+                                since, window_end
+                            )
+                        )
+                        | (
+                            models.UserModelFacet.superseded_at.between(
+                                since, window_end
+                            )
+                        )
+                        | (
+                            models.UserModelFacet.dismissed_at.between(
+                                since, window_end
+                            )
+                        )
+                    )
+                )
+            ).scalars()
+        )
+        # Replacements may fall outside the window if the clocks disagree, so
+        # they are fetched by id rather than assumed present.
+        wanted = {
+            row.superseded_by
+            for row in rows
+            if row.superseded_by is not None
+        } - {row.id for row in rows}
+        if wanted:
+            rows.extend(
+                (
+                    await session.execute(
+                        select(models.UserModelFacet).where(
+                            models.UserModelFacet.id.in_(list(wanted))
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        evidence = await _evidence_for(session, [row.id for row in rows])
+
+    built = {row.id: _row(row, evidence.get(row.id, ())) for row in rows}
+
+    superseded: list[FacetChange] = []
+    dismissed: list[FacetChange] = []
+    replacements: set[UUID] = set()
+    for facet in built.values():
+        if facet.superseded_at is not None and since <= facet.superseded_at <= window_end:
+            replacement = (
+                built.get(facet.superseded_by)
+                if facet.superseded_by is not None
+                else None
+            )
+            if replacement is not None:
+                replacements.add(replacement.id)
+            superseded.append(
+                FacetChange(
+                    at=facet.superseded_at,
+                    facet=facet,
+                    reason=facet.superseded_reason or "",
+                    replacement=replacement,
+                )
+            )
+        if facet.dismissed_at is not None and since <= facet.dismissed_at <= window_end:
+            dismissed.append(
+                FacetChange(
+                    at=facet.dismissed_at,
+                    facet=facet,
+                    reason=facet.dismissed_reason or "",
+                )
+            )
+
+    added = [
+        FacetChange(at=facet.created_at, facet=facet)
+        for facet in built.values()
+        if since <= facet.created_at <= window_end and facet.id not in replacements
+    ]
+
+    return ModelDiff(
+        since=since,
+        until=window_end,
+        added=tuple(sorted(added, key=lambda item: item.at)),
+        superseded=tuple(sorted(superseded, key=lambda item: item.at)),
+        dismissed=tuple(sorted(dismissed, key=lambda item: item.at)),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ModelEvent:
+    """One dated thing that happened to the model, for the timeline."""
+
+    at: datetime
+    # `written`, `revised`, `withdrawn` or `dismissed`.
+    kind: str
+    dimension: str
+    facet_id: UUID
+    statement: str
+    detail: str = ""
+
+
+async def timeline(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    dimension: Dimension | None = None,
+) -> tuple[ModelEvent, ...]:
+    """Every event in the model's life, oldest first.
+
+    **One row can produce three events**, and they are separate entries rather
+    than columns of one: a facet was written on one day, revised on another and
+    dismissed on a third, and a timeline that collapsed those into the row's
+    current state would be `model show` with dates on it.
+    """
+    async with session_factory() as session:
+        stmt = select(models.UserModelFacet)
+        if dimension is not None:
+            stmt = stmt.where(models.UserModelFacet.dimension == dimension.value)
+        rows = list((await session.execute(stmt)).scalars())
+
+    events: list[ModelEvent] = []
+    for row in rows:
+        origin = "stated" if row.origin == FacetOrigin.ASSERTED.value else row.detector
+        events.append(
+            ModelEvent(
+                at=row.created_at,
+                kind="written",
+                dimension=row.dimension,
+                facet_id=row.id,
+                statement=row.statement,
+                detail=f"[{origin}] support {row.support_count}"
+                f", against {row.contradiction_count}",
+            )
+        )
+        if row.superseded_at is not None:
+            events.append(
+                ModelEvent(
+                    at=row.superseded_at,
+                    # The distinction the whole M8.2 schema change exists for.
+                    kind="revised" if row.superseded_by is not None else "withdrawn",
+                    dimension=row.dimension,
+                    facet_id=row.id,
+                    statement=row.statement,
+                    detail=row.superseded_reason or "",
+                )
+            )
+        if row.dismissed_at is not None:
+            events.append(
+                ModelEvent(
+                    at=row.dismissed_at,
+                    kind="dismissed",
+                    dimension=row.dimension,
+                    facet_id=row.id,
+                    statement=row.statement,
+                    detail=row.dismissed_reason or "",
+                )
+            )
+    return tuple(sorted(events, key=lambda item: (item.at, item.kind)))
+
+
+async def stability(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    now: datetime | None = None,
+) -> tuple[Stability, ...]:
+    """How often each dimension's facets change, and how long they last.
+
+    **Every dimension is returned, including the ones with no facets.** M8.0's
+    argument for printing empty dimensions applies here twice over: a stability
+    table that listed only the dimensions with history would be a table of five
+    rows implying two were stable, and the two with nothing are the ones whose
+    absence is the finding.
+    """
+    moment = now or datetime.now(UTC)
+    async with session_factory() as session:
+        rows = list((await session.execute(select(models.UserModelFacet))).scalars())
+
+    by_dimension: dict[str, list[models.UserModelFacet]] = {}
+    for row in rows:
+        by_dimension.setdefault(row.dimension, []).append(row)
+
+    entries: list[Stability] = []
+    for dimension in Dimension:
+        group = by_dimension.get(dimension.value, [])
+        lifetimes: list[float] = []
+        ages: list[float] = []
+        changes = 0
+        live = 0
+        for row in group:
+            # A facet can be superseded and later dismissed, or the reverse.
+            # Both are changes; the earlier of the two ends its life.
+            ended_at = min(
+                (when for when in (row.superseded_at, row.dismissed_at) if when),
+                default=None,
+            )
+            changes += sum(
+                1 for when in (row.superseded_at, row.dismissed_at) if when is not None
+            )
+            if ended_at is None:
+                live += 1
+                ages.append((moment - row.created_at).total_seconds() / 86400)
+            else:
+                lifetimes.append((ended_at - row.created_at).total_seconds() / 86400)
+        observed = (
+            (moment - min(row.created_at for row in group)).total_seconds() / 86400
+            if group
+            else 0.0
+        )
+        entries.append(
+            Stability(
+                dimension=dimension,
+                total=len(group),
+                live=live,
+                closed=len(lifetimes),
+                changes=changes,
+                mean_lifetime_days=(
+                    sum(lifetimes) / len(lifetimes) if lifetimes else None
+                ),
+                mean_live_age_days=sum(ages) / len(ages) if ages else None,
+                observed_days=observed,
+            )
+        )
+    return tuple(entries)

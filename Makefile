@@ -1,5 +1,5 @@
 .PHONY: up down install test test-unit test-slow lint fmt typecheck check run worker \
-        phase1-check types web web-install test-web dev
+        phase1-check types web web-install test-web dev restore full-check
 
 up:        ; docker compose up -d
 down:      ; docker compose down
@@ -64,7 +64,14 @@ phase1-check:
 	uv run alembic check
 	uv run memoryos source add --kind filesystem --name self --root .
 	uv run memoryos sync --source self --full
-	uv run memoryos worker --drain
+# `--only` on the next line is what makes this target terminate.
+#
+# Embedding enqueues a Phase 3 entity extraction per memory. On a machine with an
+# API key configured, an unrestricted drain here runs one live model call per
+# file — hundreds of them, against a free tier that serves a few a minute — so a
+# check about *ingestion* blocks for hours on work Phase 1 does not own. The
+# excluded jobs stay pending, so a later unrestricted drain still runs them.
+	uv run memoryos worker --drain --only normalize_memory,embed_memory
 	@printf "\n=== stats: after ingestion ===\n"
 	uv run memoryos stats
 	@printf "\n=== doctor ===\n"
@@ -82,3 +89,61 @@ phase1-check:
 	uv run memoryos search "what happens when a file is deleted" -k 3
 	@printf "\n=== doctor: after replay ===\n"
 	-uv run memoryos doctor
+
+# --------------------------------------------------------------------------
+# Everything, from a destroyed volume (M8.2)
+# --------------------------------------------------------------------------
+#
+# `report --full` is only worth showing somebody if it can be reproduced, and
+# reproducing it means restoring the state that `docker compose down -v`
+# destroys. Four tables cannot be rebuilt from the corpus, because nothing in
+# the corpus contains them: the decisions somebody recorded, the outcomes
+# somebody checked, the assumption verdicts somebody judged, and the relevance
+# judgements that took an afternoon of clicking.
+#
+# This target is the order they go back in, written down here rather than in a
+# person's memory because the project's own verification recipe opens by
+# destroying them, and a restore sequence nobody has run is one that does not
+# work.
+#
+# **It does not restore all of them, and running it is how that was found.**
+# `query_judgements` has a real export and comes back whole. `decisions` has a
+# seed rather than an export, and a seed only knows what somebody wrote into it:
+# it restores the 12 decisions recorded in `scripts/seed_decisions.py` and not
+# the 4 entered interactively through `memoryos decide`, nor the one assumption
+# group made by hand through `assumptions group`. Those are gone.
+#
+# The right fix is an export per user-authored table — see the `USER_AUTHORED`
+# set in `replay.py`, which already names exactly which ones — and it is not in
+# this milestone. Until it is, `docker compose down -v` on a database anybody has
+# typed into destroys work no seed can reproduce.
+#
+# Entity extraction is last, needs an API key, and is bounded by `--limit`.
+# Without a key the corpus is fully working for everything Phases 1, 2, 4 and 5
+# do — `doctor` reports the absence as a note rather than a failure, which is the
+# distinction it exists to draw. *With* one, extraction is a live model call per
+# memory and the free tier this project uses serves a few a minute, so an
+# unbounded run here is a target that does not finish in an afternoon. The limit
+# makes the coverage number small and honest rather than absent; raise it, or run
+# `memoryos extract-entities` on its own, when the quota is there.
+restore: phase1-check
+	@printf "\n=== the four tables no rebuild reproduces ===\n"
+	uv run python scripts/restore_judgements.py var/golden-set.json
+	uv run python scripts/seed_decisions.py
+	uv run python scripts/seed_outcomes.py
+	uv run python scripts/evaluate_assumptions.py
+	@printf "\n=== extraction and the projection it feeds ===\n"
+	-uv run memoryos extract-entities --limit 25
+	-uv run memoryos resolve-entities
+	-uv run memoryos graph rebuild
+	@printf "\n=== the behavioural layers, over whatever that produced ===\n"
+	-uv run memoryos patterns discover
+	-uv run memoryos model derive
+
+# The final proof: eight phases of accumulated machinery, from nothing.
+full-check: restore
+	uv run memoryos evaluate --k 10 --compare var/baseline.json
+	uv run memoryos graph verify
+	uv run memoryos verify-replay
+	-uv run memoryos doctor
+	uv run memoryos report --full

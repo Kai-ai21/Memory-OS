@@ -331,6 +331,42 @@ def test_scorable_says_how_many_questions_actually_ran() -> None:
     assert len(report.scores) == 2
 
 
+def test_a_run_nothing_reached_has_no_comparison_to_make(capsys) -> None:  # type: ignore[no-untyped-def]
+    """**Not measured is not measured as zero**, applied to the one place the
+    agent report still broke it.
+
+    A run where every question died on a 429 has means of 0.000 by
+    construction. Subtracting a real baseline from them prints a -0.630
+    regression, which is a quota report wearing a benchmark's clothes — and it
+    prints it directly under the warning that says the means are incomparable,
+    which is the louder of the two.
+    """
+    from memoryos.cli import _print_comparison
+
+    refused = Report(
+        scores=tuple(
+            score(
+                Trajectory(
+                    question="q", steps=[], answer=None, stopped_because=StopReason.ERROR
+                ),
+                GOLDEN,
+            )
+            for _ in range(3)
+        )
+    )
+    baseline = {"means": {"overall": 0.63, "dependency": 0.5}}
+
+    assert refused.scorable == 0
+    _print_comparison(refused, baseline)
+
+    printed = capsys.readouterr().out
+    assert "no comparison" in printed
+    assert "0 of 3 questions reached the provider" in printed
+    # The number that must not appear: a delta computed from means nothing
+    # produced.
+    assert "-0.630" not in printed
+
+
 def test_tool_appropriateness_is_undefined_rather_than_zero_without_narration() -> None:
     """Most steps carry no narration. Scoring silence as failure would make this
     a measurement of how chatty a provider is."""

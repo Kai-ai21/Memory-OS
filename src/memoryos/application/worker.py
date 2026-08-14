@@ -27,7 +27,7 @@ from memoryos.application.jobs.registry import Handler, HandlerRegistry, JobCont
 from memoryos.application.ports import JobQueue
 from memoryos.domain.backoff import compute_backoff
 from memoryos.domain.ids import new_id
-from memoryos.domain.jobs import Job, PermanentError, TransientError
+from memoryos.domain.jobs import Job, JobType, PermanentError, TransientError
 
 logger = structlog.get_logger(__name__)
 
@@ -59,6 +59,17 @@ class WorkerConfig:
     # Consecutive empty polls before a --drain worker exits.
     idle_polls_before_drain_stop: int = 3
     concurrency: int = 1
+    # Job types this worker will claim. Empty means every type, which is the
+    # ordinary case and the default.
+    #
+    # It exists for the drains, not for the long-running worker. The queue is
+    # shared across phases and the checks are not: `make phase1-check` drains it
+    # to prove Phase 1's pipeline works, and embedding enqueues a Phase 3 entity
+    # extraction per memory — so on a machine with an API key configured, a check
+    # about ingestion blocks on hundreds of live model calls and never finishes.
+    # Restricting the *claim* leaves the excluded jobs pending rather than
+    # burning an attempt on each, so a later unrestricted drain still runs them.
+    only: frozenset[JobType] = frozenset()
 
     def __post_init__(self) -> None:
         if self.concurrency != 1:
@@ -134,7 +145,11 @@ class Worker:
                     await self._reclaim()
                 iterations += 1
 
-                job = await self._queue.claim(self._worker_id, self._config.lease)
+                job = await self._queue.claim(
+                    self._worker_id,
+                    self._config.lease,
+                    only=self._config.only or None,
+                )
 
                 if job is None:
                     idle_polls += 1

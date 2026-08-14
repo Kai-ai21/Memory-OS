@@ -37,7 +37,13 @@ class FakeQueue:
     async def enqueue(self, spec: JobSpec) -> UUID | None:
         return new_id()
 
-    async def claim(self, worker_id: str, lease: timedelta) -> Job | None:
+    async def claim(
+        self,
+        worker_id: str,
+        lease: timedelta,
+        *,
+        only: frozenset[JobType] | None = None,
+    ) -> Job | None:
         return None
 
     async def heartbeat(self, job_id: UUID, worker_id: str, lease: timedelta) -> bool:

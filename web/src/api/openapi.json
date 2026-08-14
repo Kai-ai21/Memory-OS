@@ -2346,6 +2346,17 @@
             "title": "Statement",
             "type": "string"
           },
+          "superseded_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superseded At"
+          },
           "superseded_by": {
             "anyOf": [
               {
@@ -2357,6 +2368,17 @@
               }
             ],
             "title": "Superseded By"
+          },
+          "superseded_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superseded Reason"
           },
           "support_count": {
             "title": "Support Count",
