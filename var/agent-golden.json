@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "note": "M7.3. Eight agent questions with the tools that must appear, the tools that would be wrong, and the fewest hops that could do it. No exact sequence is pinned: several paths through six tools are legitimately correct. Lives under var/ because var/** is in the golden set's eval_exclude, which is the only place a question may be written down without becoming a literal match for itself in the corpus it is scored against.",
+  "questions": [
+    {
+      "id": "fusion-then-evidence",
+      "question": "Find the recorded decision about combining two retrievers into one ranking, then read one of the memories it cites in full and tell me what that file does.",
+      "key_facts": ["reciprocal rank fusion"],
+      "required_tools": ["get_decisions", "get_memory"],
+      "forbidden_tools": ["find_gaps"],
+      "min_hops": 2,
+      "answerable": true,
+      "notes": "The cleanest dependency test in the set: hop 2 needs a memory id that only hop 1's evidence line can supply. The chain M7.1 could not walk at all and M7.2's follow-up fixed."
+    },
+    {
+      "id": "offsets-then-source",
+      "question": "There is a decision about what a chunk's character offsets index into. Find it, then open one of the files it used as evidence and say what that file asserts.",
+      "key_facts": ["memory text"],
+      "required_tools": ["get_decisions"],
+      "forbidden_tools": ["find_gaps", "query_timeline"],
+      "min_hops": 2,
+      "answerable": true,
+      "notes": "Same shape as the first but the decision is found by topic rather than by mechanism, so hop 1 can legitimately be a search."
+    },
+    {
+      "id": "queue-then-connected",
+      "question": "Locate the code that lets one background worker take a job without another taking the same one, then tell me what else in this corpus is structurally connected to it.",
+      "key_facts": ["skip locked"],
+      "required_tools": ["search_memories", "traverse_graph"],
+      "forbidden_tools": [],
+      "min_hops": 2,
+      "answerable": false,
+      "notes": "Answerable=false and the reason is data, not reasoning: entity extraction has covered ~13% of the corpus, so traverse_graph returns nothing for almost any seed. The first half is answerable and the second is not, which is exactly the case the taxonomy must not call an agent failure."
+    },
+    {
+      "id": "embedding-model-why",
+      "question": "Why is the embedding model the one it is, and what was rejected in its favour?",
+      "key_facts": ["bge small"],
+      "required_tools": ["get_decisions"],
+      "forbidden_tools": ["find_gaps", "traverse_graph"],
+      "min_hops": 1,
+      "answerable": true,
+      "notes": "One hop, and it is in the set to check that the loop does not pad. A question a single tool answers should cost a single hop."
+    },
+    {
+      "id": "broken-assumptions",
+      "question": "Which of the assumptions recorded under my decisions were later found to be wrong, and what were they about?",
+      "key_facts": ["entity extraction"],
+      "required_tools": ["get_decisions"],
+      "forbidden_tools": [],
+      "min_hops": 1,
+      "answerable": true,
+      "notes": "Reachable in one hop because get_decisions renders assumptions with their verdicts, but a thorough agent may take two. Efficiency is capped at 1.0, so taking two is a cost rather than a failure."
+    },
+    {
+      "id": "activity-then-detail",
+      "question": "Which month has the most recorded activity, and what was being worked on during it?",
+      "key_facts": [],
+      "required_tools": ["query_timeline"],
+      "forbidden_tools": [],
+      "min_hops": 2,
+      "answerable": true,
+      "notes": "No key facts: the answer depends on the corpus's own dates, and a fact list would have to be rewritten every time the corpus grows. Scored on tools, hops and termination."
+    },
+    {
+      "id": "quiet-stretches",
+      "question": "Was there ever a stretch where work on this stopped for a while, and if so when?",
+      "key_facts": [],
+      "required_tools": ["find_gaps"],
+      "forbidden_tools": ["get_decisions"],
+      "min_hops": 1,
+      "answerable": true,
+      "notes": "The honest answer on this corpus is that there is no such stretch, which is an answer rather than a failure. No key facts, because a correct reply contains no distinctive noun."
+    },
+    {
+      "id": "multi-year-trend",
+      "question": "Across the past several years, how has the balance between writing tests and writing documentation shifted in my work?",
+      "key_facts": [],
+      "required_tools": [],
+      "forbidden_tools": [],
+      "min_hops": 1,
+      "answerable": false,
+      "notes": "The corpus spans weeks, not years, and nothing records the distinction it asks about. The correct outcome is a refusal or a statement of absence; asserting a trend anyway is the WRONG_CONCLUSION this entry exists to catch."
+    }
+  ]
+}

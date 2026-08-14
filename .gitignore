@@ -44,6 +44,12 @@ var/*
 # be measured against. Committed for the reason the others are: a baseline that
 # lives on one machine is not a baseline.
 !var/baseline-graph-off.json
+# M7.3's answer key and its baseline. The questions are hand-written judgement
+# about what this corpus can and cannot support, and `var/**` is in
+# `eval_exclude` — which is what makes writing them down here legal at all, since
+# a golden question in a scored file is a literal match for itself.
+!var/agent-golden.json
+!var/baseline-agent.json
 
 # Web
 web/node_modules/
