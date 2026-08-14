@@ -627,11 +627,29 @@ class GetDecisionsTool:
             # Substring over the question, which is what a decision is *about*.
             # Deliberately not embedded: decisions are tens of rows, and adding a
             # second retrieval path for them would be a ranking to explain.
+            # **Ranked by how many terms match, not filtered by whether any
+            # does.** The `any()` this replaces let the most generic word in a
+            # query decide the result: asked for the decision about "combining
+            # two retrievers into one ranking", it matched the chunk-offsets
+            # decision on the word `into` — from "char_end index into" — and
+            # returned that first because it was the more recent of the two.
+            # Found by reading an M7.3 trajectory, where the whole two-hop chain
+            # then ran correctly against the wrong decision.
+            #
+            # Still substring matching and still not embedded, for M7.0's
+            # reason: decisions are tens of rows and a second retrieval path
+            # would be a second ranking to explain. Counting matches is the
+            # smallest change that makes the ranking mean something.
             terms = [term for term in wanted.split() if len(term) > 2]
+            scored = [
+                (sum(term in summary.question.lower() for term in terms), summary)
+                for summary in summaries
+            ]
             summaries = [
                 summary
-                for summary in summaries
-                if any(term in summary.question.lower() for term in terms)
+                for matches, summary in sorted(
+                    (row for row in scored if row[0]), key=lambda row: -row[0]
+                )
             ]
         if not summaries:
             return ToolResult(

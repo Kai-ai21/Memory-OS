@@ -288,18 +288,47 @@ def test_a_forbidden_tool_is_reported_before_anything_downstream() -> None:
     assert result.forbidden_used == ("find_gaps",)
 
 
-def test_a_provider_failure_is_not_scored_as_reasoning() -> None:
-    """A rate limit is not the agent stopping too early. Putting quota in the
-    taxonomy would make the counts unreadable on a free tier, which is every run
-    this project has made."""
+def test_a_provider_failure_is_its_own_category_not_the_corpus() -> None:
+    """**The conflation a real run made impossible to miss.**
+
+    A rate limit is not the agent stopping too early, and it is not the corpus
+    lacking data either. M7.3's first three-pass run put both in
+    `insufficient_data`, and sixteen of twenty-four questions came back under
+    that label — reading as though the corpus had collapsed mid-benchmark when a
+    daily token cap had run out. A reader would have gone off to record more
+    decisions when what was needed was tokens.
+    """
     dead = Trajectory(
         question="q", steps=[], answer=None, stopped_because=StopReason.ERROR
     )
 
     result = score(dead, GOLDEN)
 
-    assert result.failure is Failure.INSUFFICIENT_DATA
+    assert result.failure is Failure.PROVIDER_FAILED
     assert result.termination == 0.0
+
+    # Neither is an agent failure, and the two are counted apart.
+    report = Report(scores=(result,))
+    assert report.agent_failures == 0
+    assert report.scorable == 0
+    assert report.failures["provider_failed"] == 1
+    assert report.failures["insufficient_data"] == 0
+
+
+def test_scorable_says_how_many_questions_actually_ran() -> None:
+    """Every mean is over the whole set whether or not the whole set ran, so a
+    run where the provider refused half of them needs the count beside it — the
+    mean alone reads as a collapse and measures a token bucket."""
+    ran = score(trajectory(step("search_memories", memories=(1,))), GOLDEN)
+    refused = score(
+        Trajectory(question="q", steps=[], answer=None, stopped_because=StopReason.ERROR),
+        GOLDEN,
+    )
+
+    report = Report(scores=(ran, refused))
+
+    assert report.scorable == 1
+    assert len(report.scores) == 2
 
 
 def test_tool_appropriateness_is_undefined_rather_than_zero_without_narration() -> None:

@@ -41,6 +41,13 @@ budgeting problem wearing a retrieval problem's clothes, [Clients](#clients),
 [Surfacing](#surfacing) — whose headline number is a **54% dismissal rate**, the
 wrong side of the line it set for itself, and whose cause M7.0 then found and
 fixed — and the [Phase 6 retrospective](#phase-6-retrospective).
+**Phase 8 begun**: M8.0 (the user model) builds the structure for a model of the
+person — seven dimensions, evidence, supersession, dismissal — and measures how
+much of it this corpus can fill. **None of it**: zero facets across five
+derivable dimensions, because nothing reaches three distinct observations, the
+corpus spans six days of filesystem mtimes, and entity extraction has covered
+4.7% of it. The output is a page of stated gaps with the number each one needs,
+which is the useful thing an empty model can be. See [The user model](#the-user-model).
 **Phase 7 begun**: M7.0 (agent tool scaffolding) puts every phase behind a JSON
 schema a model can call, one tool at a time. It is the clearest test of whether
 the layering earned its cost, and the answer is two extractions and thirty lines
@@ -5072,6 +5079,179 @@ answer, it caught three fabricated hop citations, and it flags claims a reader
 should look at. It is an argument that a support rate is a floor and not a
 verdict, and that the next instrument has to be one that can read a sentence
 against a passage rather than measure the angle between them.
+
+## The user model
+
+M8.0 builds the structure for a model of the person and measures how much of it
+this corpus can fill. **The answer is none of it**, and that measurement is the
+milestone's output rather than a failure of it.
+
+```bash
+memoryos model derive
+memoryos model show [--dimension goals]
+memoryos model assert --dimension goals --statement "..."
+memoryos model dismiss <facet-id> --reason "..."
+memoryos model history <facet-id>
+```
+
+### What evidence actually exists
+
+Measured before any model code was written, because everything after it is
+decoration otherwise.
+
+| | count | enough? |
+| --- | --- | --- |
+| decisions | 16 | — |
+| with an evaluated outcome | 12 of 16 (10 worked, 2 mixed; 4 too early) | — |
+| assumptions | 37, of which 25 evaluated (18 held, 6 failed, 1 partial) | — |
+| **assumption groups with 3+ members** | **0** — one group, 2 members, 35 ungrouped | **no** |
+| **patterns above M5.3's threshold** | **0** — one candidate, 2 supporting, minimum 3 | **no** |
+| **distinct sources** | **1** (`self`, filesystem) | **no** |
+| **corpus span by `occurred_at`** | **6 days** (2026-08-07 to 08-14), 100% filesystem mtimes | **no** |
+| memories | 253 current — 249 code, 4 notes | — |
+| entity mentions | 284 across **12 of 253** memories (4.7%) | **no** |
+| entity relationships | **0** | **no** |
+
+Two of those rows deserve a sentence each, because they are worse than their
+numbers look.
+
+**The six days are file modification times.** Every dated memory carries
+`TimeProvenance.FILESYSTEM`, which records when a file was last written rather
+than when work happened — a checkout, a bulk reformat or a clone resets the whole
+tree at once. M1.1 built that distinction precisely so this could be seen, and
+here it means the temporal signal is not thin, it is *about something else*.
+
+**Zero patterns is a live measurement, not a stale table.** `patterns discover`
+was re-run: one candidate, an assumption that held both times it was checked
+across two decisions, below the minimum of three.
+
+### Whether each dimension can say anything at all
+
+| Dimension | Source | Verdict |
+| --- | --- | --- |
+| `decision_patterns` | M5.3 patterns above threshold | **nothing** — 0 patterns clear it |
+| `weaknesses` | assumption groups with low hold rates | **nothing** — 0 groups reach 3 members |
+| `strengths` | assumption groups with high hold rates | **nothing** — best group has 2 |
+| `habits` | M4.0 activity periodicity | **nothing measurable** — 6 days of mtimes cannot show a weekly cycle once, let alone three times |
+| `workflows` | entity co-occurrence | **nothing trustworthy** — see below |
+| `goals` | stated, never inferred | empty until asserted; one now is |
+| `learning_style` | — | **no deriver exists, by design** |
+
+`workflows` is the one where a naive implementation would have produced output,
+so it is worth being explicit about what was refused. Three entity pairs do
+co-occur in three or more memories, which clears a support bar of three. They
+are `alembic + sqlalchemy` (6 memories), `alembic + postgres` (3) and
+`sqlalchemy + postgres` (3).
+
+**Those are facts about a Python project, not about a person.** "You work with
+Alembic and SQLAlchemy together" is true of everyone who has ever run a migration
+in this stack, and it would have been the first horoscope in the file. The
+deriver therefore gates on *coverage* before it counts anything: below 50% of the
+corpus extracted, a co-occurrence describes the extracted slice rather than the
+work. At 4.7% it returns nothing and the gap says so with the number.
+
+### What `model derive` actually prints
+
+```
+candidates considered:  1
+minimum support:        3 distinct observations
+written:                0
+below the bar:          1
+
+what was considered and not written:
+  2 observation(s)  A belief you keep returning to has held every time it [...]
+
+by dimension:
+  goals              insufficient evidence: goals are stated, never inferred …
+  habits             insufficient evidence: every one of 253 dated memories carries
+                     a filesystem mtime … This needs a source that declares its own
+                     dates (commits, calendar, messages)
+  strengths          insufficient evidence: nothing reached 3 distinct observations
+                     (best candidate reached 2)
+  weaknesses         insufficient evidence: nothing reached 3 distinct observations
+  learning_style     insufficient evidence: no deriver exists: this needs the
+                     outcomes of learning attempts …
+  decision_patterns  insufficient evidence: nothing reached 3 distinct observations
+  workflows          insufficient evidence: entity extraction has reached 12 of 253
+                     memories (5%) … This needs extraction over at least 50%
+```
+
+**Zero facets across five derivable dimensions.** The gaps are specific where the
+blocker is structural, because "nothing reached three" is the wrong answer when
+nothing was counted — it would send a reader off to record more decisions when
+what is missing is extraction coverage or a second source.
+
+### Insight, or horoscope?
+
+**Neither, and that is the honest answer.** Nothing was derived, so there is
+nothing to be either. What can be judged is what the system *would* have said,
+and on that the design holds: the one candidate it considered was refused for
+having two observations instead of three, and the one deriver that could have
+emitted something emitted nothing because its evidence describes a library stack
+rather than a person.
+
+The single facet in the model is one I asserted:
+
+```
+goals
+  Ingest a second source that declares its own dates, so habits stop being a
+  claim about git checkout.
+  confidence —   support 0   against 0   [stated]
+```
+
+Would I have known it without the system? Yes — I wrote it. That is the point of
+`goals` having no deriver, and the reason `confidence` is null rather than 1.0:
+a goal is not a claim with a probability, and showing somebody their own words
+back with a confidence score is the cheapest way for a page like this to become
+a horoscope.
+
+### `learning_style` has no deriver, deliberately
+
+It is in the enum so `model show` prints the gap, and it has no derivation
+because the evidence for it does not exist in a system of this shape: it needs
+the outcomes of learning attempts — a course taken against a project built, and
+what was still true a year later — and nothing here records either. A heuristic
+over file types or commit sizes would produce a fluent sentence with no way to
+check it, which is the failure eight phases have been arranged against.
+
+### What would fill each gap
+
+* **`decision_patterns`** — one more decision agreeing with the existing
+  assumption candidate, or any three decisions sharing a recurring belief.
+* **`strengths` / `weaknesses`** — assumption *grouping*. 35 of 37 assumptions
+  are ungrouped; the grouping is a human judgement M5.2 built the machinery for
+  and nobody has spent an hour on. This is the cheapest gap to close.
+* **`habits`** — a source that declares its own dates. Git commits are the
+  obvious one and the connector interface already takes them.
+* **`workflows`** — entity extraction over more than half the corpus, against
+  4.7% today.
+* **`goals`** — `model assert`. It is not a gap so much as an empty inbox.
+* **`learning_style`** — years, and a kind of record this system does not keep.
+
+### Deviations and ambiguities
+
+* **`contradiction_count`, `origin`, `detector` and `subject_key` are on the
+  table and not in M8.0's sketch.** The first is what makes `confidence` mean
+  anything — a facet with nine supporting and eight contradicting is not a 90%
+  claim, and a schema with nowhere to put the eight would report it as one. The
+  other three are what make re-derivation idempotent and keep `derive` from
+  overwriting something a person typed.
+* **`confidence` is null for an asserted facet rather than 1.0**, so user
+  statements do not sort above every derived facet in any ranking that reads the
+  column.
+* **The self-referential foreign key is `DEFERRABLE INITIALLY DEFERRED`.**
+  Retiring a facet and inserting its replacement is circular under the partial
+  unique index that keeps one live row per subject; deferring the check to commit
+  is what lets both constraints hold.
+* **Confidence reuses M5.3's formula** rather than defining a second one. A
+  consequence worth stating: nine-supporting-against-eight scores 0.53, slightly
+  *above* three-supporting-against-none at 0.50, because the formula multiplies
+  agreement by sufficiency. Both are correctly low; neither is a finding.
+* **The API is read-only.** Deriving, asserting and dismissing write or reject
+  claims about a person, and none of them should be one click away on a page left
+  open in a tab.
+* **`--dimension` on `show` filters the assessments too**, so asking for one
+  dimension prints one section rather than one section and six gaps.
 
 ## Migrations
 

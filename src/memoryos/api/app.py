@@ -14,6 +14,7 @@ from memoryos.api.routes import (
     health,
     judgements,
     memories,
+    model,
     search,
     sources,
     stats,
@@ -78,6 +79,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # are different operations with different costs and a client should have to
     # choose which one it is paying for.
     app.include_router(agent.router)
+    # M8.0. Read-only: the writes are claims about a person and belong to a
+    # command somebody typed rather than to a page they have open.
+    app.include_router(model.router)
     return app
 
 

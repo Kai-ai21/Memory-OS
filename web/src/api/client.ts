@@ -165,6 +165,10 @@ export type ReflectionCitation = Reflection["citations"][number];
 export type Surfaced = Ok<paths["/surfacing"]["get"]>[number];
 export type SurfaceReason = Surfaced["reason"];
 
+export type UserModel = Ok<paths["/model"]["get"]>;
+export type Facet = UserModel["facets"][string][number];
+export type Assessment = UserModel["assessments"][number];
+
 export type AgentAnswer = Ok<paths["/agent/ask"]["post"]>;
 export type AgentClaim = AgentAnswer["verification"]["claims"][number];
 export type AgentStep = AgentAnswer["steps"][number];
@@ -368,6 +372,13 @@ export const api = {
   // No timeout is set here because the browser's default is longer than any
   // trajectory this system produces, and a shorter one would abandon work that
   // has already been paid for.
+  model: (dimension?: string) => {
+    const query = dimension ? `?dimension=${encodeURIComponent(dimension)}` : "";
+    return request<UserModel>(`/model${query}`);
+  },
+
+  facetHistory: (id: string) => request<Facet[]>(`/model/${id}/history`),
+
   agentAsk: (question: string, maxHops?: number) =>
     request<AgentAnswer>("/agent/ask", {
       method: "POST",

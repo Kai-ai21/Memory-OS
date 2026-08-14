@@ -116,11 +116,22 @@ _MIN_TERM = 3
 class Failure(StrEnum):
     """Why a question did not come out right.
 
-    **The last one is the reason this is an enum rather than a boolean.** With
-    eight to twelve decisions and a corpus of source code, several of these
-    questions cannot be answered by any agent, and counting those as agent
-    failures would send the next milestone off to fix the loop when the problem
-    is that nobody wrote the data down. Separating the two is the point.
+    **The last two are the reason this is an enum rather than a boolean**, and
+    the second of them was added after a run proved the first was doing double
+    duty.
+
+    `INSUFFICIENT_DATA` is the corpus: with sixteen decisions and a codebase,
+    several of these questions cannot be answered by any agent, and counting
+    those as agent failures would send the next milestone off to fix a loop that
+    is working.
+
+    `PROVIDER_FAILED` is the quota. M7.3's first three-pass run put both in one
+    bucket, and the result read as though the corpus had collapsed between run
+    one and run three — sixteen of twenty-four questions "insufficient data" when
+    what had actually happened is that a daily token cap ran out mid-benchmark.
+    That is the exact conflation this taxonomy exists to prevent, one level up:
+    a reader would go and add decisions when what was needed was tokens. Neither
+    is an agent failure and they are not the same non-failure.
     """
 
     NONE = "none"
@@ -130,6 +141,7 @@ class Failure(StrEnum):
     LOOPED = "looped"
     WRONG_CONCLUSION = "wrong_conclusion"
     INSUFFICIENT_DATA = "insufficient_data"
+    PROVIDER_FAILED = "provider_failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -465,10 +477,10 @@ def _classify(
     consequence of it.
     """
     if trajectory.stopped_because is StopReason.ERROR:
-        # Not the agent's reasoning: the provider stopped answering. Counted as
-        # insufficient rather than as a reasoning failure, because scoring a rate
-        # limit as "stopped too early" would put quota in the taxonomy.
-        return Failure.INSUFFICIENT_DATA
+        # The provider stopped answering. Not the agent's reasoning and not the
+        # corpus either — see `Failure`, where the two were one category until a
+        # run made the difference impossible to miss.
+        return Failure.PROVIDER_FAILED
 
     if forbidden_used or required_missing:
         return Failure.WRONG_TOOL
@@ -548,11 +560,25 @@ class Report:
 
     @property
     def agent_failures(self) -> int:
-        """Everything except the two categories that are not the agent's fault."""
+        """Everything except the three categories that are not the agent's fault."""
         return sum(
             1
             for row in self.scores
-            if row.failure not in (Failure.NONE, Failure.INSUFFICIENT_DATA)
+            if row.failure
+            not in (Failure.NONE, Failure.INSUFFICIENT_DATA, Failure.PROVIDER_FAILED)
+        )
+
+    @property
+    def scorable(self) -> int:
+        """Questions the provider actually answered.
+
+        **Every mean above is over eight questions whether or not eight ran**,
+        and on a free tier that is the difference between a benchmark and a
+        quota report. A run where six of eight died on a 429 has a mean that
+        looks like a catastrophic regression and means nothing at all.
+        """
+        return sum(
+            1 for row in self.scores if row.failure is not Failure.PROVIDER_FAILED
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -577,6 +603,7 @@ class Report:
             },
             "failures": self.failures,
             "agent_failures": self.agent_failures,
+            "scorable": self.scorable,
             "scores": [_row_dict(row) for row in self.scores],
         }
 
