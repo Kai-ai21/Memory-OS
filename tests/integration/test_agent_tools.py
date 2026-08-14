@@ -15,6 +15,7 @@ trip to assert that an unknown name raises would be a test nobody runs.
 """
 
 import dataclasses
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -47,7 +48,7 @@ from memoryos.application.decisions import DecisionDraft, EvidenceInput, OptionI
 from memoryos.application.decisions import record as record_decision
 from memoryos.application.search import FusionWeights, SearchMemories
 from memoryos.domain.jobs import PermanentError
-from memoryos.domain.values import EvidenceRelation, TimeProvenance
+from memoryos.domain.values import EvidenceRelation, Period, TimeProvenance
 from tests.integration.conftest import Harness
 
 pytestmark = pytest.mark.integration
@@ -311,6 +312,120 @@ async def test_an_empty_result_says_why_rather_than_returning_nothing(
 
     gaps = await registry.call("find_gaps", {"min_days": 3650})
     assert "no silences" in gaps.content.lower()
+
+
+async def test_a_result_hands_the_next_tool_the_id_it_needs(harness: Harness) -> None:
+    """**Two tools take an id "as returned by another tool", and until M7.1 no
+    tool returned one.**
+
+    The id was in the citations and never in the content, and the model reads
+    the content. So the chain search → get_memory could not be walked at all:
+    the model had a filename, and `get_memory` does not take filenames.
+
+    Asserted on the *rendered text* rather than on the citations, because the
+    text is the whole interface. A test against `result.citations` would have
+    passed for every one of the six months this was broken.
+    """
+    await harness.ingest()
+    registry = tools(harness)
+
+    search = await registry.call("search_memories", {"query": "fox"})
+    found = re.findall(r"id: ([0-9a-f-]{36})", search.content)
+    assert found, f"search printed no id a second hop could use:\n{search.content}"
+
+    # The id is not merely present, it resolves — which is the only version of
+    # this property worth having.
+    detail = await registry.call("get_memory", {"memory_id": found[0]})
+    assert "There is no memory" not in detail.content
+    assert "is not a memory id" not in detail.content
+
+    timeline = await registry.call(
+        "query_timeline", {"start": "2000-01-01", "end": "2100-01-01", "period": "month"}
+    )
+    assert re.search(r"id: [0-9a-f-]{36}", timeline.content), timeline.content
+
+
+async def test_a_decision_hands_over_its_evidences_ids_and_not_its_own(
+    harness: Harness,
+) -> None:
+    """**A decision id and a memory id are both UUIDs, and one of them works.**
+
+    Found by running it: asked to find a decision and then read what it cited,
+    the model passed the `DECISION <uuid>` it had just been shown to
+    `get_memory`, was told there was no such memory, and went off searching for
+    the text instead — three hops to arrive back where it started.
+
+    The block named a count and no ids, so the id the model needed was the one
+    thing the result did not contain. Now it lists them, the header says outright
+    which kind of id it is carrying, and `get_memory` names the confusion rather
+    than reporting a missing memory.
+    """
+    await harness.ingest()
+    registry = tools(harness)
+
+    async with harness.sessions() as session:
+        from sqlalchemy import select
+
+        from memoryos.adapters.db import models
+
+        key = (
+            await session.execute(select(models.Memory.external_key).limit(1))
+        ).scalar_one()
+
+    await record_decision(
+        harness.sessions,
+        DecisionDraft(
+            question="What do chunk offsets index into?",
+            chosen="The memory's text",
+            options=(OptionInput(description="The stored chunk text"),),
+            evidence=(
+                EvidenceInput(
+                    source_name=harness.source.name,
+                    external_key=key,
+                    relation=EvidenceRelation.INFORMED,
+                ),
+            ),
+        ),
+        decided_at=DECIDED_AT,
+        decided_at_source=TimeProvenance.DECLARED,
+    )
+
+    decisions = await registry.call("get_decisions", {"about": "chunk offsets"})
+    ids = re.findall(r"ids: ([0-9a-f-]{36})", decisions.content)
+    assert ids, decisions.content
+    assert "NOT a memory id" in decisions.content
+
+    read = await registry.call("get_memory", {"memory_id": ids[0]})
+    assert "There is no memory" not in read.content
+
+    # And the decision's own id, offered to the tool that does not take it, says
+    # what went wrong rather than that something is missing.
+    decision_id = re.search(r"DECISION ([0-9a-f-]{36})", decisions.content)
+    assert decision_id is not None
+    wrong = await registry.call("get_memory", {"memory_id": decision_id.group(1)})
+    assert "decision id" in wrong.content
+
+
+def test_every_option_a_description_offers_is_one_the_tool_takes(
+    harness: Harness,
+) -> None:
+    """**`query_timeline` advertised five bucket sizes against an enum with three.**
+
+    Asked for a year, a model got `'year' is not a period` and lost a hop to a
+    sentence this project wrote itself. Under M7.0 that cost a whole question;
+    under M7.1 it costs a hop out of six, which is worse in aggregate and harder
+    to see.
+
+    The description is now generated from `Period`, so this test is checking that
+    it still is rather than checking the string.
+    """
+    spec = next(
+        spec for spec in tools(harness).specs() if spec.name == "query_timeline"
+    )
+    offered = spec.parameters["properties"]["period"]["description"]
+    known = {member.value for member in Period}
+    quoted = set(re.findall(r"[a-z]+", offered.split(":", 1)[1]))
+    assert quoted - {"one", "of"} == known, offered
 
 
 # --------------------------------------------------------------------------

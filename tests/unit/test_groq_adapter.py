@@ -173,7 +173,11 @@ class FakeToolCompletions(FakeCompletions):
                     ),
                     finish_reason="tool_calls" if self._tool_calls else "stop",
                 )
-            ]
+            ],
+            # The SDK puts this on every completion. Shaped here because M7.1
+            # adds it up across six hops, and a per-hop cost this file did not
+            # model would be a number the report could not check.
+            usage=SimpleNamespace(prompt_tokens=311, completion_tokens=27),
         )
 
 
@@ -214,6 +218,12 @@ async def test_a_tool_call_comes_back_parsed() -> None:
     sent = completions.calls[0]["tools"][0]["function"]
     assert sent["parameters"] == SPEC.parameters
     assert completions.calls[0]["tool_choice"] == "auto"
+    # **The provider's count, not a local one.** M7.1 adds six of these up and
+    # reports the total as what a question cost; counting the strings sent from
+    # here would miss the tool schemas Groq serialises and its own chat
+    # template, which on a six-tool prompt is most of the bill.
+    assert (turn.prompt_tokens, turn.completion_tokens) == (311, 27)
+    assert turn.tokens == 338
 
 
 async def test_arguments_that_are_not_json_become_no_arguments() -> None:

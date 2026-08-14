@@ -30,7 +30,7 @@ from memoryos.adapters.parsers.registry import ParserRegistry
 from memoryos.adapters.parsers.registry import build_default_registry as build_parser_registry
 from memoryos.adapters.reranking.cross_encoder import CrossEncoderReranker
 from memoryos.application.agent.library import build_registry as build_tools
-from memoryos.application.agent.loop import SingleCallAgent
+from memoryos.application.agent.planner import MultiHopPlanner
 from memoryos.application.agent.tools import ToolRegistry
 from memoryos.application.answering import AnswerQuestion
 from memoryos.application.context_engine import (
@@ -342,18 +342,27 @@ class Container:
             registry.register(tool)
         return registry
 
-    def agent(self) -> SingleCallAgent:
-        """M7.0's loop, over a provider that can actually call tools.
+    def agent(self) -> MultiHopPlanner:
+        """M7.1's loop, over a provider that can actually call tools.
 
         The check is here rather than at the first failed call, because the
         failure it prevents is unreadable: a provider without tool support
         answers the question from its training data, fluently, and nothing in the
         response says a tool was never offered. Refusing at construction turns
         that into one sentence naming the setting to change.
+
+        The embedder doubles as the token counter, for the reason `answer` gives:
+        compaction sizes findings in the same unit the corpus was chunked in.
         """
         model = self.language_model()
         if supports_tools(model):
-            return SingleCallAgent(model, self.tools())
+            return MultiHopPlanner(
+                model,
+                self.tools(),
+                self.embedder,
+                max_hops=self.settings.agent_max_hops,
+                finding_budget=self.settings.agent_finding_budget,
+            )
         raise ToolsUnsupported(
             f"{model.model_id} cannot call tools, so the agent has nothing to "
             "drive. Set MEMOS_LLM_PROVIDER to a provider whose adapter "

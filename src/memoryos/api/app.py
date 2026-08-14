@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from memoryos.api.routes import (
+    agent,
     answer,
     context,
     decisions,
@@ -73,6 +74,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # two clicks that judge it; nothing here can cause a surfacing, which is the
     # property that keeps push and pull from blurring into each other.
     app.include_router(surfacing.router)
+    # M7.1. Under its own prefix, so nothing here can shadow `/answer` — the two
+    # are different operations with different costs and a client should have to
+    # choose which one it is paying for.
+    app.include_router(agent.router)
     return app
 
 

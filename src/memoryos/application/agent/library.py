@@ -30,6 +30,24 @@ one you already have. Each description says what it is for, when to prefer it,
 and what it cannot do — that last part being the one that stops a model reaching
 for a timeline when it wants a passage.
 
+### Every result that names a memory prints its id
+
+**Four descriptions promised an id that no tool actually printed.** `get_memory`
+and `traverse_graph` both take a `memory_id` "as returned by another tool", and
+until M7.1 no tool returned one: search, timeline, gaps and traversal all
+rendered `source::external_key`, which identifies a memory to a human and to
+nothing else.
+
+M7.0 could not see this. A loop with one call has no second call to spend an id
+on, and the milestone said so — two of its six routing questions carried an id
+in the question text because there was no way to obtain one first. Under M7.1
+the same omission is a hard bound on what the agent can do: two of six tools are
+unreachable from any chain, and the only paths through the corpus are the ones
+that start from a topic and stop there.
+
+An id is ~15 tokens and five results cost 75. That is the price of the graph
+being reachable at all.
+
 ### Caps
 
 Every tool caps what it returns and says so when it cuts. A `search_memories`
@@ -172,9 +190,10 @@ class SearchMemoriesTool:
                 "specific item: 'how does X work', 'what did we say about Y', "
                 "'where is Z handled'. It searches the text of every memory and "
                 "returns the passages that matched, each with the file it came "
-                "from. Prefer it over traverse_graph when you have a topic rather "
-                "than a specific memory, and over query_timeline when you want "
-                "what was said rather than when things happened."
+                "from and its memory id — which is what traverse_graph and "
+                "get_memory take. Prefer it over traverse_graph when you have a "
+                "topic rather than a specific memory, and over query_timeline "
+                "when you want what was said rather than when things happened."
             ),
         )
 
@@ -212,6 +231,7 @@ class SearchMemoriesTool:
             lines.append(
                 f"[{position}] {hit.source_name}::{hit.external_key} "
                 f"({hit.kind}, {_fmt(_when(hit.occurred_at))}, score {hit.score:.3f})\n"
+                f"    id: {hit.memory_id}\n"
                 f"    {passage}"
             )
             citations.extend(item.citations)
@@ -307,6 +327,7 @@ class TraverseGraphTool:
         lines = [
             f"[{position}] {citation.source_name}::{citation.external_key} "
             f"(via {_route(candidates.routes, chunk.chunk_id)})\n"
+            f"    id: {citation.memory_id}\n"
             f"    {_clip(citation.excerpt)}"
             for position, (chunk, citation) in enumerate(
                 zip(shown, citations, strict=False), start=1
@@ -337,7 +358,17 @@ class TimelineArgs(_Args):
     end: str = Field(description="End of the window, as YYYY-MM-DD. Exclusive.")
     period: str = Field(
         default="week",
-        description="Bucket size: one of day, week, month, quarter, year.",
+        # **Generated from the enum, because the hand-written version was wrong.**
+        # It advertised "day, week, month, quarter, year" against a `Period` that
+        # has three members, so a model taking the description at its word spent
+        # a hop being told `'year' is not a period`. A description is the only
+        # thing a model has, and one that lists options the code rejects is worse
+        # than one that lists none.
+        description=(
+            "Bucket size: one of "
+            + ", ".join(member.value for member in Period)
+            + "."
+        ),
     )
     source: str = Field(
         default="",
@@ -364,9 +395,9 @@ class QueryTimelineTool:
                 "Use it for questions about a period rather than a subject — "
                 "'what was I working on in August', 'how busy was last quarter', "
                 "'what changed between March and May'. It answers with counts "
-                "over time and a sample of the memories behind them; it does not "
-                "search text, so use search_memories when the question names a "
-                "topic instead of a time."
+                "over time and a sample of the memories behind them, each with "
+                "its memory id; it does not search text, so use search_memories "
+                "when the question names a topic instead of a time."
             ),
         )
 
@@ -420,7 +451,8 @@ class QueryTimelineTool:
             for bucket in shown_buckets
         )
         listed = "\n".join(
-            f"  {_fmt(memory.occurred_at)}  {memory.external_key}" for memory in sample
+            f"  {_fmt(memory.occurred_at)}  {memory.external_key}  id: {memory.id}"
+            for memory in sample
         )
         citations = await citations_for_memories(
             self.sessions, [memory.id for memory in sample]
@@ -524,7 +556,8 @@ class FindGapsTool:
         lines = [
             f"  {name}: {_fmt(gap.start)} -> {_fmt(gap.end)} "
             f"({gap.duration.days} days), between {gap.before.external_key} "
-            f"and {gap.after.external_key}"
+            f"(id: {gap.before.id}) and {gap.after.external_key} "
+            f"(id: {gap.after.id})"
             for name, gap in shown
         ]
         citations = await citations_for_memories(
@@ -580,7 +613,9 @@ class GetDecisionsTool:
                 "— 'why did we choose X', 'what were the alternatives to Y', "
                 "'what were we assuming'. A decision's reasoning and its rejected "
                 "options are recorded here and appear nowhere in the corpus text, "
-                "so search_memories cannot find them."
+                "so search_memories cannot find them. Each decision lists the "
+                "memory ids of its evidence, which get_memory and traverse_graph "
+                "do take; the decision's own id is not one of them."
             ),
         )
 
@@ -619,15 +654,23 @@ class GetDecisionsTool:
             )
             evidence = [row for row in detail.evidence if row.memory_id is not None]
             cited.extend(row.memory_id for row in evidence if row.memory_id)
+            # **The evidence's memory ids, so the next hop can read them.**
+            # Without these the chain "find the decision, then read what it cites"
+            # dead-ends: the block said "2 linked memories" and named neither, and
+            # a model wanting one of them has only the decision id to try. Which
+            # is what it tried — see the note on the header below.
+            linked = ", ".join(str(row.memory_id) for row in evidence)
             blocks.append(
-                f"DECISION {detail.id} ({_fmt(detail.decided_at)}, {detail.status.value})\n"
+                f"DECISION {detail.id} (this is a decision id, NOT a memory id; "
+                f"get_memory and traverse_graph will not accept it) "
+                f"({_fmt(detail.decided_at)}, {detail.status.value})\n"
                 f"  Question: {detail.question}\n"
                 f"  Chose: {detail.chosen}\n"
                 + (f"  Because: {_clip(detail.reasoning)}\n" if detail.reasoning else "")
                 + (f"  Rejected: {rejected}\n" if rejected else "")
                 + (f"  Assumed: {assumptions}\n" if assumptions else "")
                 + (
-                    f"  Evidence: {len(evidence)} linked memories\n"
+                    f"  Evidence: {len(evidence)} linked memories, ids: {linked}\n"
                     if evidence
                     else "  Evidence: none linked in the corpus\n"
                 )
@@ -695,7 +738,18 @@ class GetMemoryTool:
         try:
             detail = await memories_app.show(self.sessions, memory_id)
         except memories_app.UnknownMemory:
-            return ToolResult(content=f"There is no memory with id {memory_id}.")
+            # Names the mistake that actually happens rather than only the fact.
+            # A decision id and a memory id are both UUIDs, so a model that read
+            # a `DECISION <uuid>` line has no way to tell from the shape that it
+            # is the wrong kind of id — and "there is no memory with id X" reads
+            # as "that memory was deleted", which sends the next hop searching.
+            return ToolResult(
+                content=(
+                    f"There is no memory with id {memory_id}. If you took it from "
+                    "a DECISION line, that is a decision id: use the ids on the "
+                    "decision's Evidence line instead."
+                )
+            )
 
         body = detail.content or ""
         # Whole-item tools are the ones most likely to blow a context window, so

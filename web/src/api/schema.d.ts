@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/agent/ask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask */
+        post: operations["ask_agent_ask_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/answer": {
         parameters: {
             query?: never;
@@ -442,7 +459,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Memory */
+        /**
+         * Get Memory
+         * @description One memory, its chunks and its versions.
+         *
+         *     **The three queries this used to run now live in `application/memories.py`.**
+         *     M7.0 needed the same thing for a tool and found there was no use case to
+         *     call — the whole capability was in this function body, reachable only over
+         *     HTTP. Nothing about the response changed; the query moved down a layer and
+         *     this became what a route should be, which is a mapping from a domain type to
+         *     a wire type.
+         */
         get: operations["get_memory_memories__memory_id__get"];
         put?: never;
         post?: never;
@@ -877,6 +904,38 @@ export interface components {
             /** Spans */
             spans: number;
         };
+        /** AgentAskIn */
+        AgentAskIn: {
+            /** Max Hops */
+            max_hops?: number | null;
+            /** Question */
+            question: string;
+        };
+        /** AgentAskOut */
+        AgentAskOut: {
+            /** Answer */
+            answer: string | null;
+            /** Citations */
+            citations?: components["schemas"]["CitationOut"][];
+            cost: components["schemas"]["CostOut"];
+            /** Error */
+            error?: string | null;
+            /** Hops */
+            hops: number;
+            /** Question */
+            question: string;
+            /** Retry After */
+            retry_after?: number | null;
+            /** Steps */
+            steps?: components["schemas"]["StepOut"][];
+            /** Stopped Because */
+            stopped_because: string;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
         /**
          * AnswerIn
          * @description Everything a search takes, plus the generation budget.
@@ -1269,6 +1328,17 @@ export interface components {
             share: number;
             /** Weight */
             weight: number;
+        };
+        /** CostOut */
+        CostOut: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Model Calls */
+            model_calls: number;
+            /** Prompt Tokens */
+            prompt_tokens: number;
         };
         /** CreateSource */
         CreateSource: {
@@ -2443,6 +2513,44 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /** StepOut */
+        StepOut: {
+            /** Args */
+            args?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Citations
+             * @default 0
+             */
+            citations: number;
+            /**
+             * Duration Ms
+             * @default 0
+             */
+            duration_ms: number;
+            /**
+             * Novel
+             * @default true
+             */
+            novel: boolean;
+            /** Result */
+            result?: string | null;
+            /** Thought */
+            thought: string;
+            /**
+             * Tokens
+             * @default 0
+             */
+            tokens: number;
+            /** Tool */
+            tool: string | null;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
         /** SuccessRateOut */
         SuccessRateOut: {
             /** Failed */
@@ -2854,6 +2962,39 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    ask_agent_ask_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentAskIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAskOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     answer_answer_post: {
         parameters: {
             query?: never;

@@ -616,10 +616,26 @@ class ModelTurn:
 
     text: str = ""
     tool_calls: tuple[ToolCall, ...] = ()
+    # What the provider says this turn cost, not what a tokenizer here guesses.
+    #
+    # **M7.1 needs a number it can add up.** Six hops is six of these, on a free
+    # tier measured in tens of thousands of tokens a day, and "is this affordable"
+    # is not answerable from a local count: the prompt the provider billed
+    # includes the tool schemas it serialised, its own chat template and whatever
+    # else it wrapped around the messages. Counting the strings sent from here
+    # would undercount by the part that is hardest to see.
+    #
+    # Zero means the provider reported nothing, which is what a fake does.
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
     @property
     def wants_tools(self) -> bool:
         return bool(self.tool_calls)
+
+    @property
+    def tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
 
 
 class LanguageModel(Protocol):

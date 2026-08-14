@@ -44,7 +44,11 @@ fixed — and the [Phase 6 retrospective](#phase-6-retrospective).
 **Phase 7 begun**: M7.0 (agent tool scaffolding) puts every phase behind a JSON
 schema a model can call, one tool at a time. It is the clearest test of whether
 the layering earned its cost, and the answer is two extractions and thirty lines
-of citation plumbing. See [Agent tools](#agent-tools).
+of citation plumbing. M7.1 (multi-hop planning) turns one call into several
+dependent ones under three termination conditions — and its headline number is
+that **the hop limit never fired once**: the loop stops too early rather than too
+late, at a mean of 1.4 hops over five questions that need four or five. See
+[Agent tools](#agent-tools) and [Multi-hop planning](#multi-hop-planning).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -4453,6 +4457,316 @@ repeatedly was.
 This bounds what M7.1 can measure: a multi-hop agent is four to six model calls
 per question, which is three questions a day on one of these tiers and about ten
 on the other.
+
+## Multi-hop planning
+
+M7.1 answers questions that cannot be embedded into one query, because the query
+you need second depends on what came back first.
+
+```bash
+memoryos agent ask "which decisions did I later reverse" --trace
+memoryos agent ask "what did I abandon" --max-hops 3
+```
+
+```
+POST /agent/ask   { question, max_hops }
+```
+
+**The trajectory is the artifact, not the answer.** `Trajectory` carries every
+step — what the model said it was doing, which tool it called, with what
+arguments, what came back, whether it was new, and what it cost — and the answer
+is one field on it. M7.3 scores trajectories; more immediately, a multi-hop agent
+fails in ways that are invisible at the output. Four rewordings of one search, one
+weak hit elaborated for five hops, and an answer taken from the question all
+produce the same confident paragraph. Only the steps tell them apart, which is
+why `--trace` and the API response both carry them rather than hiding them behind
+a debug flag.
+
+### Termination: three conditions, because each fails alone
+
+| | Catches | Fails alone because |
+| --- | --- | --- |
+| **Hop limit** (6) | A model that never stops asking | Lets a stalled loop spend the whole budget first |
+| **No new information** | New queries, same results | A single repeat is often a model re-reading before it pivots — so it takes two consecutive |
+| **Model says it has enough** | Everything, at the right moment | It is also the one that can be wrong in both directions |
+
+`stopped_because` records which fired. `ANSWERED` and `CONFIDENCE` are split
+rather than merged: both are voluntary stops, and one retrieved first and one did
+not. An answer standing on zero retrievals must not be scored beside one standing
+on four. **The milestone's list does not say which of the two is which**; this is
+the split that carries information M7.3 needs, and it is a deviation named as
+one.
+
+When a bound fires the loop does not simply stop — it makes one more call with
+the **tools withdrawn** and asks for an answer from what was gathered. Offering
+tools to a model that has just run out of hops invites the one response the loop
+cannot use.
+
+### Compaction, not truncation
+
+A `search_memories` result is ~700 tokens. Six of them plus six tool schemas is a
+prompt where "do not fabricate" is one sentence in eight thousand tokens of
+retrieved text. After each hop the older results become **findings** — tool,
+arguments, what the model said it was after, the head of the result, and the
+citation locators — while the **most recent two stay verbatim**, because the hop
+being planned is nearly always shaped by the last result.
+
+**The locators are the load-bearing part.** By hop five the model is writing about
+material it can no longer see; a compacted form that dropped provenance would make
+every one of those sentences uncited by construction — fluent, corpus-derived, and
+impossible to check. If a finding does not fit the budget, the whole finding goes
+and the block says how many were dropped. Real tokenizer, whole items, M2.6's
+rules for M2.6's reasons.
+
+The trajectory keeps every citation from every hop regardless. That is a
+*different* guarantee: those are for a reader checking the answer, the locators in
+the prompt are for the model attributing a claim while it writes one.
+
+### Five real questions
+
+Groq's daily token cap was already 97% spent when this milestone's runs began, so
+four of the five ran on Gemini `gemini-2.5-flash`. Both are named per row, because
+which provider produced a trajectory is not a detail.
+
+| Question | Hops | Stopped | Tokens | Wall | Judgement |
+| --- | --- | --- | --- | --- | --- |
+| what mistakes have I repeated | 1 | `confidence` | 4,254 | 23.1s | **Bad.** Answered a different question |
+| which decisions did I later reverse, and what did they have in common | 3 | `confidence` | 10,638 | 33.5s | **Best of the five.** Honest, and one unsupported sentence |
+| what was I working on when the chunking approach changed | 2 | `confidence` | 7,675 | 27.1s | **Wrong question answered**, on a real two-hop chain |
+| which parts of the system have the most decisions attached | 0 | `answered` | 1,471 | 5.7s | **Refused without trying.** Correct about the gap |
+| what did I abandon and never come back to | 1 | `confidence` | 2,976 | 4.2s | **Correct**, including the stop |
+
+Two more, run for the verification the milestone specifies:
+
+| Question | Provider | Hops | Stopped | Tokens | Wall |
+| --- | --- | --- | --- | --- | --- |
+| why did we choose pgvector over FAISS | Groq | 1 | `confidence` | 4,960 | 1.9s |
+| what mistakes have I repeated | Groq | 2 | `error` | 5,632 | 24.1s |
+
+**"What mistakes have I repeated" is the milestone's own headline question and it
+produced the milestone's own predicted failure.** One search for `repeated
+mistakes` returned five code files about the *system's* deduplication — a
+`SIMILARITY` threshold that stops re-showing context, a `dismissed_at` column, a
+prompt fix for a fabricated claim about reordered diff lines — and the model wrote
+a fluent, fully cited paragraph about them. Every fact in it is in the corpus.
+Every citation resolves. It is an answer about what this software does to avoid
+repeating itself, presented as an answer about what its author repeatedly got
+wrong. The five retrievals the question actually decomposes into — find poor
+outcomes, extract failed assumptions, group by similarity, check independence,
+gather evidence — never happened, and nothing in the output says so.
+
+On Groq the same question went two hops and both were `search_memories` with
+reworded queries (`repeated mistakes`, then `mistakes I have repeated`). The
+results differed, so the no-new-information rule correctly did not fire — the
+loop was progressing, into nothing.
+
+**"Which decisions did I later reverse" is what the design is for.** Three hops:
+search, then `get_decisions(about='reversed decisions')` which matched nothing,
+then `get_decisions(limit=5)` which returned everything. The answer opens "I
+couldn't find any decisions explicitly marked as reversed", names three decisions
+whose *assumptions* broke, labels each with its verdict, and says it is
+substituting. That is the second query being written from the first result's
+emptiness, which is the whole capability.
+
+### Stop-reason distribution: the loop stops too early
+
+| Reason | Count |
+| --- | --- |
+| `confidence` | 4 |
+| `answered` | 1 |
+| `hop_limit` | **0** |
+| `no_new_information` | 0 |
+| `error` | 0 (2 on Groq, both quota) |
+
+**Not one of the five reached the hop limit.** Mean 1.4 hops against a budget of
+six, on questions that decompose into four or five dependent retrievals. The
+milestone anticipates the opposite failure — "if `HOP_LIMIT` dominates, the loop
+isn't converging" — and what happened is the mirror image: the model declares
+sufficiency after one retrieval on questions one retrieval cannot answer.
+
+That makes `CONFIDENCE` the weakest of the three conditions on this corpus, and it
+is the one condition the other two cannot correct, because they are both *upper*
+bounds. There is no lower bound in this design, and the runs say there should be:
+a `search_memories` that returned nothing on-topic is not grounds to stop, and the
+model treats it as though it were.
+
+Two consequences worth stating plainly. **Compaction never engaged in any of the
+five** — findings only exist from the third acted hop onward, and no question got
+there. It is exercised by unit tests and by one deliberately chained probe below;
+in production, at this corpus size, it is currently dead weight. And the hop limit
+is not the cost control it was built to be: the binding constraint is the model's
+own reluctance, not the budget.
+
+### One full trace
+
+```
+$ memoryos agent ask "what was I working on when the chunking approach changed" --trace
+
+question: what was I working on when the chunking approach changed
+
+[1] search_memories(query='when the chunking approach changed')
+      5 memories (the best ones; there were more) for 'when the chunking approach
+      changed': [1] self::src/memoryos/application/evolution.py (code, 2026-08-12,
+      score 1.945) id: 019ffb6f-06df-74f2-8b26-4ac758ebc20b [...]
+      25 citation(s), truncated, 1465 tokens, 20280ms
+
+[2] get_memory(memory_id='019ffb6f-06df-74f2-8b26-4ac758ebc20b')
+      self::src/memoryos/application/evolution.py (code, 2026-08-12) 1 versions,
+      this is v1 (current) 23 chunks, showing the first 5 [chunk 0] """How one
+      item changed, reconstructed from versions that [...]
+      5 citation(s), truncated, 2733 tokens, 3492ms
+
+[3] answered (359 chars)
+
+When the chunking approach changed, specifically around M1.4, the work involved moving
+chunks across versions rather than rebuilding them if the normalized text remained the
+same, even if the file itself changed. [...]
+
+2 hop(s), stopped: confidence, 3 model call(s), 7675 tokens (7534 in / 141 out), 27.1s
+```
+
+This is a **real** two-hop chain and it is the trace worth reading twice. Hop 2
+takes an id hop 1 printed and reads that memory in full — the chain M7.0 could not
+walk at all, because until this branch **no tool printed a memory id**. It is also
+answering the wrong question: asked what *surrounded* the chunking change, it
+described what the change *was*, and never touched `query_timeline` or
+`find_gaps`, which are the two tools that could have said what else was happening
+that week.
+
+### Was any answer fluent but unsupported by its trajectory?
+
+**One sentence, and the more interesting failure is a different one.**
+
+The unsupported sentence is the last of "which decisions did I later reverse":
+*"The common theme among the 'broke' assumptions is that they relate to the
+completeness or effectiveness of data/processes."* Three broken assumptions, all
+from **one** decision, generalised into a theme. The trajectory does not license
+it: nothing checked whether the assumptions came from independent decisions, which
+is precisely the hop the question needed and the loop did not take.
+
+The more interesting failure is the one that is *not* uncited. "What mistakes have
+I repeated" is supported at every sentence, cites nine resolving locators, and is
+about the wrong subject. **Grounding checks cannot see this**, because it is not
+ungrounded — it is on-corpus, on-citation and off-question. M7.2 verifies claims
+against evidence; a claim that is true, sourced, and answers a question nobody
+asked passes that check. The trajectory is what exposes it, and only because the
+single hop in it is visibly not a decomposition of the question.
+
+### Cost and latency
+
+| | Groq `llama-3.3-70b` | Gemini `gemini-2.5-flash` |
+| --- | --- | --- |
+| tokens, 1-hop question | ~4,300 | ~4,300 |
+| tokens, 3-hop question | not measured (cap) | 10,638 |
+| base prompt (system + 6 schemas) | 2,250 | 1,440 |
+| added per hop | ~1,100 | 600-1,200 |
+| free-tier ceiling | 100,000 tokens/day | 20 requests/day |
+| questions per day | ~10-25 | **4-7** |
+
+**A typical question costs 4-35 seconds, and the spread is not the model.** A cold
+process spends 17-20s in the first `search_memories` loading the embedder and the
+cross-encoder; every warm hop after it is 2-5s. So the honest statement is: the
+first hop of the first question is 20s of model loading, and each additional hop
+is about 4 seconds. The three-hop question took 33.5s end to end, which is past
+the milestone's ~30s bar, and a six-hop one would be roughly a minute.
+
+Latency is a real constraint on this being usable, and the binding half of it is
+this project's own retrieval stack rather than the provider.
+
+Rate limits are `TransientError`, so existing classification applies — and a
+trajectory that dies on one **keeps the hops that already ran**. That is not a
+nicety: on these tiers a 429 arriving mid-trajectory is the normal case, and it
+happened twice during these runs. Both times the completed hops and their
+citations survived in the trajectory, which is the whole reason the loop returns
+an `ERROR` trajectory instead of raising.
+
+### Two chaining defects, both invisible until a second hop existed
+
+Both were M7.0 code, both fixed on this branch, and both have the same shape: a
+result that identifies something to a *reader* and to no *next hop*.
+
+**No tool printed a memory id.** `get_memory` and `traverse_graph` both take one
+"as returned by another tool", and no tool returned one — search, timeline, gaps
+and traversal all rendered `source::external_key`. The id was in
+`result.citations` the whole time, and the model reads `result.content`. M7.0
+could not have seen this: it had no second call to spend an id on, which is why
+two of its six routing questions carried an id in the question text.
+
+**A decision would not hand over the memories it cited.** Asked to find a decision
+and then read what it cited, the model passed the `DECISION <uuid>` it had just
+been shown to `get_memory` and was told there was no such memory:
+
+```
+[1] get_decisions(about='what chunk offsets index into')
+[2] get_memory(memory_id='019ff905-c58a-...')   → There is no memory with id …
+[3] search_memories(query="What do a chunk's char_start and char_end index into")
+[4] get_memory(memory_id='019ffb6f-0468-...')   → the wrong file
+```
+
+Four hops to arrive back where it started. Nothing there was a model mistake: a
+decision id and a memory id are both UUIDs, the block said "2 linked memories" and
+named neither, and the one id in the result was the wrong kind. The evidence line
+now lists the memory ids, the header says outright that a decision id is not one,
+and `get_memory`'s miss names that confusion rather than reporting a deletion.
+
+A third M7.0 defect was pure description: `query_timeline` advertised "day, week,
+month, quarter, year" against a `Period` enum with three members, so a model
+taking it at its word lost a hop to `'year' is not a period`. The description is
+generated from the enum now.
+
+That probe is also the only run that got deep enough to exercise compaction
+live — hop 4's prompt carried hops 1 and 2 as findings with their locators — and
+it ended on a Gemini `MALFORMED_FUNCTION_CALL` at hop 5, which the adapter
+classifies as permanent and the trajectory records with its four completed hops
+intact.
+
+### Deviations and ambiguities
+
+* **`ANSWERED` vs `CONFIDENCE`.** The milestone lists both and describes one
+  voluntary stop. Split as: `CONFIDENCE` = stopped after retrieving, `ANSWERED` =
+  stopped without retrieving anything. Any other split loses the distinction M7.3
+  needs.
+* **`SingleCallAgent` is deleted**, not kept beside the planner.
+  `MultiHopPlanner(max_hops=1)` is the same run, and a second loop nobody calls is
+  a second set of prompts to keep in step with six tool descriptions.
+* **Compaction lives in `compaction.py`**, not in `planner.py`. It is 200 lines of
+  pure logic over steps and a token counter, with its own tests.
+* **One tool per hop.** `Step` holds one tool because a hop is one decision. A
+  model asking for three at once has guessed three independent retrievals, which
+  is the thing this milestone replaces; the first runs and the rest come back as a
+  sentence saying to ask again.
+* **Findings are summarised mechanically**, by taking the head of the result and
+  its locators, not by a second model call. A summarising call per hop would
+  roughly double the cost and would put a generative step between a tool result
+  and the model reading it — which is a place for facts to change.
+* **`ModelTurn` grew `prompt_tokens` and `completion_tokens`**, populated by both
+  adapters from the provider's own usage. A local count would miss the tool
+  schemas the provider serialises, which is most of a six-tool prompt.
+* **Tool failures no longer raise.** M7.0 let `UnknownTool` propagate and was right
+  to; with five hops left, a name that does not exist is a mistake the next hop
+  fixes. The broad `except` around tool calls is the uncomfortable part, and it is
+  logged with its traceback rather than swallowed.
+* **Groq's daily cap was 97% spent before these runs began**, so the five questions
+  ran on Gemini and the two Groq rows are what fitted in the remainder. This is
+  the constraint M7.0 predicted for M7.1 in exactly these words, and it held.
+
+### What this milestone actually establishes
+
+The loop works: dependent hops happen, ids chain, bounds hold, failures preserve
+their trajectories, and the cost is measured rather than estimated.
+
+**And a multi-hop agent over 311 memories and 16 decisions produces confident
+synthesis from almost nothing.** Two of the five questions were answered
+articulately and about the wrong subject; one was refused; one was correct because
+the honest answer happened to be "there is no such gap". The corpus has neither
+the outcome data nor the temporal spread that questions like "what did I abandon"
+and "what mistakes have I repeated" assume, and neither the tools nor the loop say
+so — the model says something else instead, fluently, with citations.
+
+That is the failure to name rather than hide, and it is not fixed by more hops.
+M7.2's verification layer is the next thing, and it will catch the unsupported
+generalisation; it will not catch the answer that is supported, cited, and about
+something else.
 
 ## Migrations
 
