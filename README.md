@@ -41,6 +41,15 @@ budgeting problem wearing a retrieval problem's clothes, [Clients](#clients),
 [Surfacing](#surfacing) — whose headline number is a **54% dismissal rate**, the
 wrong side of the line it set for itself, and whose cause M7.0 then found and
 fixed — and the [Phase 6 retrospective](#phase-6-retrospective).
+**Phase 7 complete**: M7.3 (trajectory evaluation) scores how the agent reasoned
+rather than what it concluded — and its headline is a number it could **not**
+measure: three passes over eight questions costs more than a free tier allows in
+a day, so the variance floor is unknown and every future claim of the form "this
+improved trajectory quality" is currently uncheckable. Of what did run: four agent
+failures in eight, dependency 0.50 concentrated entirely on id-passing, and 10,341
+tokens per question against ~2,000 for single-shot. See
+[Trajectory evaluation](#trajectory-evaluation) and the
+[Phase 7 retrospective](#phase-7-retrospective).
 **Phase 8 begun**: M8.0 (the user model) builds the structure for a model of the
 person — seven dimensions, evidence, supersession, dismissal — and measures how
 much of it this corpus can fill. **None of it**: zero facets across five
@@ -5079,6 +5088,292 @@ answer, it caught three fabricated hop citations, and it flags claims a reader
 should look at. It is an argument that a support rate is a floor and not a
 verdict, and that the next instrument has to be one that can read a sentence
 against a passage rather than measure the angle between them.
+
+## Trajectory evaluation
+
+M7.3 scores how the agent reasoned rather than what it concluded.
+
+```bash
+memoryos agent evaluate --json var/baseline-agent.json --repeat 3 --pace 50
+memoryos agent evaluate --compare var/baseline-agent.json
+```
+
+**An agent can reach a correct answer through terrible reasoning** — the wrong
+tool, four rewordings of one search, a lucky hit in the last of them. Scoring
+only the answer rewards the luck and cannot see the waste, which is M2.0's
+argument about measuring retrieval instead of a proxy that correlates with it
+sometimes, one phase along.
+
+Everything here is a pure function over a `Trajectory`. No model, no network, no
+database — which is what M7.1 built that object to make possible, and the reason
+the metrics can be re-run over a saved baseline without spending a token.
+
+### Five metrics, and what each is really asking
+
+| | Asks | Undefined when |
+| --- | --- | --- |
+| **Tool appropriateness** | did the call match what the step said it wanted? | the step carried no narration — which is most of them |
+| **Information gain** | did the result contain memories no earlier hop returned? | never; a hop with no citations falls back to the loop's own novelty verdict |
+| **Dependency** | was this query written from the previous result? | the first hop, which has nothing to depend on |
+| **Efficiency** | hops taken against the golden minimum, capped at 1.0 | no hops were taken |
+| **Termination** | did it stop in the right place? | never |
+
+**Dependency is the one that can embarrass the design.** Multi-hop reasoning and
+repeated retrieval produce identical-looking trajectories: several hops, several
+calls, a fluent answer. The only thing separating them is whether hop N's query
+came out of hop N-1's result, so that is what is looked for, in two strengths:
+
+* a **memory id** in the arguments that appeared in the previous result — 1.0,
+  and it is deliberately hard to reach by accident, since ids appear nowhere else
+  and no model invents a matching UUID;
+* a **content word** shared with that result and *absent from the question* —
+  0.5, where the exclusion is the whole point: two searches for terms lifted from
+  the question are two independent searches however much they share.
+
+Tool appropriateness is scored from the model's own narration, and the honest
+report of it is that **it is unmeasurable for most steps**. Providers narrate
+inconsistently; a hop called without comment is normal and is not a hop explained
+badly. `judgeable` carries how many steps could be judged at all, and the
+headline `overall` excludes the metric — folding a default into a mean would let
+a quiet provider move the number without the agent changing anything.
+
+Efficiency is capped at 1.0 because beating the golden minimum is not brilliance.
+It means the minimum was wrong or the answer skipped a step it needed, and one
+badly-set question scoring 2.0 is how a benchmark stops being evidence.
+
+### The answer key, and why the questions are not in this file
+
+Eight questions in `var/agent-golden.json`, each carrying the tools that **must**
+appear, the tools that would be **wrong**, the fewest hops that could do it, and
+whether the corpus can support an answer at all. No exact sequence is pinned —
+several paths through six tools are legitimately correct, and scoring the agent
+on matching one guess would measure conformity rather than reasoning.
+
+**The questions are not quoted anywhere in this README or in any tracked source**,
+and that is M2.1's rule rather than fastidiousness. The corpus is this repository
+and the agent's first hop is a search over it, so a question written into a
+tracked file becomes a passage that matches itself — the agent would retrieve its
+own answer key and the trajectory would look brilliant for reading the benchmark.
+`var/**` is in the retrieval golden set's `eval_exclude`, which is the only place
+a question may legally be written down; a second hygiene test enforces the rest.
+Questions are referred to below by id.
+
+| id | shape | min hops | answerable |
+| --- | --- | --- | --- |
+| `fusion-then-evidence` | decision → a memory it cites, read in full | 2 | yes |
+| `offsets-then-source` | decision by topic → one of its evidence files | 2 | yes |
+| `queue-then-connected` | find code → what shares entities with it | 2 | **no** |
+| `embedding-model-why` | one decision, one hop | 1 | yes |
+| `broken-assumptions` | which recorded assumptions failed | 1 | yes |
+| `activity-then-detail` | busiest period → what was in it | 2 | yes |
+| `quiet-stretches` | whether work ever stopped | 1 | yes |
+| `multi-year-trend` | a trend over years | 1 | **no** |
+
+Two are marked unanswerable in the key rather than discovered so in the results.
+`queue-then-connected` is the interesting one: its first half is answerable and
+its second is not, because entity extraction has reached ~13% of the corpus and
+`traverse_graph` returns nothing for almost any seed. **Separating "the agent
+failed" from "the data is not there" is the entire point of the taxonomy** —
+conflating them sends the next milestone to fix a loop that is working.
+
+### The eight questions, once
+
+`var/baseline-agent.json`, `openai/gpt-oss-120b`, `--max-hops 4 --pace 50`.
+
+| id | hops | gain | dep | eff | term | support | tokens | outcome |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `fusion-then-evidence` | 2/2 | 1.00 | 1.00 | 1.00 | 0.00 | — | 5,125 | provider failed |
+| `offsets-then-source` | 4/2 | 0.50 | 0.50 | 0.50 | 0.50 | 100% | 17,363 | looped |
+| `queue-then-connected` | 3/2 | 0.67 | 0.50 | 0.67 | 1.00 | 100% | 11,144 | wrong conclusion |
+| `embedding-model-why` | 2/1 | 0.50 | 1.00 | 0.50 | 0.50 | 80% | 8,000 | **passed** |
+| `broken-assumptions` | 4/1 | 1.00 | 0.33 | 0.25 | 0.50 | 100% | 13,816 | wrong conclusion |
+| `activity-then-detail` | 3/2 | 0.67 | 0.50 | 0.67 | 1.00 | 50% | 10,292 | **passed** |
+| `quiet-stretches` | 1/1 | 1.00 | — | 1.00 | 1.00 | 100% | 3,703 | **passed** |
+| `multi-year-trend` | 4/1 | 1.00 | 0.17 | 0.25 | 0.50 | 100% | 13,288 | wrong arguments |
+| **mean** | | **0.79** | **0.50** | **0.60** | **0.63** | **0.79** | **10,341** | overall **0.63** |
+
+**Tool appropriateness is 0.000 over zero judgeable hops.** Not a score — the
+metric never applied. Across all twenty-six hops the model narrated none of them,
+so there was never a statement of intent to compare a call against. That is a
+real result about the metric rather than about the agent: as specified, tool
+appropriateness is unmeasurable on a provider that does not narrate, and the
+headline `overall` excludes it for exactly that reason.
+
+### The variance floor: not measured, and that is the finding
+
+Three passes over eight questions is roughly 250,000 tokens. `gpt-oss-120b`'s
+daily cap is 200,000. Run 1 completed on 82,731; run 2 died partway; run 3 got
+437 tokens in total. A subset of three questions was then re-run three times on
+`llama-3.3-70b-versatile` after its cap reset — **all nine of those died on the
+first call too.**
+
+So the printed spread of 0.505 on `overall` is the difference between a pass with
+quota and a pass without one. It is not an agent-variance floor and must not be
+quoted as one.
+
+**What this bounds is every future claim about agent improvement.** M2.3a
+established that a milestone reporting a gain smaller than the noise has reported
+nothing, and retrieval's noise was ~0.012. Here the number is unknown, and
+obtaining it costs three full passes in one day — which no free tier this project
+runs on will allow. The honest position is that **no M7.x claim of the form "this
+change improved trajectory quality" is currently checkable**, and the first thing
+a paid tier would buy is not more hops but the ability to run the benchmark three
+times.
+
+This run also produced a taxonomy fix. `insufficient_data` was carrying both "the
+corpus has nothing" and "the provider refused", so a quota failure read as a
+corpus collapse — sixteen of twenty-four questions under one label. `PROVIDER_FAILED`
+is now separate and `Report.scorable` says how many questions reached the model at
+all, because every mean is over the whole set whether or not the whole set ran.
+
+### Failure taxonomy
+
+| | count | agent's fault? |
+| --- | --- | --- |
+| none | 3 | — |
+| wrong conclusion | 2 | yes |
+| looped | 1 | yes |
+| wrong arguments | 1 | yes |
+| provider failed | 1 | no — quota |
+| insufficient data | 0 | — |
+| **agent failures** | **4 of 8** | |
+
+Zero `insufficient_data` is worth a sentence, because two golden questions are
+marked unanswerable. `multi-year-trend` was classified `wrong_arguments` — it
+asked `query_timeline` for a `year` period, which the enum does not have — and
+that one bad argument outranked the fact that it then refused correctly. The
+ordering is arguable and it is the ordering the module documents: a plumbing
+failure is reported before a content one, because the plumbing is what to fix.
+
+### Reading all eight
+
+**`embedding-model-why` — sensible.** `get_decisions('embedding model')` found the
+right decision, then `get_memory` on one of its evidence ids, then an answer
+naming bge-small, the 384-dimension column and the 512-token window. Two hops for
+a one-hop question, which costs efficiency and is not a reasoning error.
+
+**`quiet-stretches` — sensible and correctly cheap.** One `find_gaps`, the right
+answer, stop. The only question in the set the agent handled the way a person
+would. It did cite `[2]` over a one-hop trajectory, which is a fabricated hop
+reference the verification catches.
+
+**`activity-then-detail` — sensible, shallow.** Timeline, then one memory from the
+busiest month, then a search. The answer's "what was being worked on" rests on the
+five sampled memories, not on the 253 counted, and reads more confidently than
+that supports.
+
+**`fusion-then-evidence` — the chain was right and the first hop was wrong.**
+`get_decisions` → evidence id → `get_memory` is exactly the dependency this
+question tests, and the dependency metric scored it 1.00. It ran against the
+*chunk-offsets* decision, because the matcher matched on `into`. Every metric
+looked fine and the answer would have been about something else; this is the
+clearest case in the set for scoring trajectories rather than answers, and it is
+now fixed.
+
+**`offsets-then-source` — right answer, one wasted hop.** Hops 2 and 4 were the
+identical `get_memory` call. The no-new-information rule did not fire because the
+repeats were not consecutive — a real hole in the rule, since a loop with a
+detour through a search is still a loop.
+
+**`queue-then-connected` — honest, and marked wrong.** It found the job queue,
+read it, traversed the graph, and reported plainly that the graph returned
+nothing. That is the correct answer to a question whose second half the corpus
+cannot support. The taxonomy called it `wrong_conclusion` because the golden
+entry marks the question unanswerable and the agent answered anyway — but the
+question is *half* answerable, and a binary `answerable` flag cannot express that.
+A deviation worth naming rather than a metric worth trusting.
+
+**`broken-assumptions` — the worst in the set.** `get_decisions('assumption')`
+returned nothing, because `about` matches the decision's *question* text and no
+question contains that word. It then searched the corpus for a bare UUID, and its
+final answer was a raw tool call: `{ "tool": "get_memory", "id": "…" }`. Four hops,
+no assumptions found, and malformed output that no category in the taxonomy names.
+
+**`multi-year-trend` — correct refusal, reached awkwardly.** Two searches, a
+rejected `period='year'`, then a corrected timeline, then an honest statement that
+the corpus holds no such record. The right answer; three hops spent finding out.
+
+### Phase 7 retrospective
+
+Four milestones: tools behind schemas, a loop over them, a check on what it
+wrote, and a way to score how it got there.
+
+#### Does multi-hop earn its cost over single-shot retrieval?
+
+**On this corpus, for most questions, no — and the exceptions are specific enough
+to name.**
+
+The honest comparison is against `memoryos ask`, which is M2.6's single-shot
+retrieve-and-answer path: one search, one model call, one grounded answer with
+citations. It costs roughly 1.5-3k tokens and two to four seconds warm.
+
+Multi-hop beats it in exactly one situation: when the second query cannot be
+written until the first result exists. Two shapes in this corpus do that, and
+both are id-chasing rather than reasoning —
+
+* a **decision to the memories it cites** (`fusion-then-evidence`,
+  `offsets-then-source`): the evidence ids are printed by one tool and consumed
+  by another, and no single query can produce them;
+* a **search to a specific memory read in full**: the same shape, seeded by a
+  search instead of a decision.
+
+Everything else in the set is a single retrieval wearing extra steps.
+`embedding-model-why`, `broken-assumptions` and `quiet-stretches` are one tool
+call each; the loop's contribution is deciding which tool, which is routing —
+M7.0's job, done in one model call. `quiet-stretches` proves it: one hop, 3,703
+tokens, the correct answer, and nothing multi-hop contributed.
+
+And the cost of the extra steps is measurable. The mean question cost **10,341
+tokens and 34.6 seconds**, against roughly 2,000 tokens and three seconds for
+`memoryos ask`. Five times the price, for a capability two of eight questions
+used.
+
+#### Is the agent reasoning, or performing repeated search with extra steps?
+
+The dependency metric answers it, and the answer is **0.50 across eight
+questions** — with the distribution mattering more than the mean. It is 1.00 on
+the two questions where a tool printed an id the next tool consumed, 0.50 where a
+term was carried across, and 0.17-0.33 on the two questions that searched
+repeatedly. The agent is good at "take the id you were just given and pass it to
+the next tool" and shows almost no sign of writing a query out of the *content* of
+a result.
+
+That is a real capability and it is a smaller one than "multi-hop reasoning"
+suggests. Passing a UUID forward is a data-flow step. Reading five decisions,
+noticing two assumptions are the same mistake in different words, and going back
+for the evidence — the thing M7.1's own opening example described — did not
+happen in any trajectory across Phase 7.
+
+#### What would be built differently
+
+**Fewer, wider tools.** Six tools with careful comparative descriptions cost
+1,400-2,400 prompt tokens before the question is asked, which is a third of every
+hop's bill. Three tools — search, decisions, time — would route as well; the
+graph tool has never returned anything useful and `get_memory` exists because
+search results were once unreadable, which is now a rendering choice rather than
+a tool.
+
+**A planner that decomposes once, rather than a loop that decides each turn.**
+Every hop re-reads six schemas and the whole history to make one choice. Asking
+for the decomposition up front and then executing it would cost one model call
+plus tool work, instead of one model call *per* tool call, and M7.1's finding —
+mean 1.4 hops, the hop limit never fired — says the model is not using the
+turn-by-turn freedom anyway.
+
+**Verification with the right instrument, or not at that layer.** M7.2 measures
+proximity to retrieved text and M7.3 measured what happens when you swap in a
+cross-encoder: it fails, for a documented reason. The instrument this needs is
+entailment, which is a model class neither of the two already loaded belongs to.
+Adding an NLI model is a real dependency and the alternative is honest scope
+reduction: check citation integrity, which is exact, and stop claiming to check
+support.
+
+**A corpus that can answer the questions.** Two of the eight golden questions are
+unanswerable and one more is half-unanswerable, not because the agent is weak but
+because sixteen decisions over three weeks of one project cannot support
+questions about patterns, trends or abandonment. Phase 7 built an agent over a
+corpus that is too small for the questions an agent is for, and every milestone
+in it has said so from a different angle.
 
 ## The user model
 
