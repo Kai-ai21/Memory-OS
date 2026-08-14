@@ -37,7 +37,6 @@ that returned fifty memories at full text would fill a context window in one
 call, and the model would have no way to know that it had.
 """
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -50,7 +49,7 @@ from memoryos.application import decisions as decisions_app
 from memoryos.application import memories as memories_app
 from memoryos.application import sources as sources_app
 from memoryos.application import temporal
-from memoryos.application.agent.tools import ToolResult, ToolSpec, spec_for
+from memoryos.application.agent.tools import Tool, ToolResult, ToolSpec, spec_for
 from memoryos.application.citations import (
     citations_for_chunks,
     citations_for_memories,
@@ -409,22 +408,27 @@ class QueryTimelineTool:
                 )
             )
 
-        occupied = [bucket for bucket in buckets if bucket.count][:MAX_BUCKETS]
+        # Empty buckets are dropped rather than rendered as zeroes. A year of
+        # "0" rows spends the budget saying nothing happened, which the counts
+        # that are shown already imply.
+        occupied = [bucket for bucket in buckets if bucket.count]
+        shown_buckets = occupied[:MAX_BUCKETS]
+        sample = found[:MAX_MEMORIES]
         rows = "\n".join(
             f"  {_fmt(bucket.start)}  {bucket.count:>4}  "
             + ", ".join(f"{kind} {count}" for kind, count in bucket.by_kind.items())
-            for bucket in occupied
+            for bucket in shown_buckets
         )
-        sample = found[:MAX_MEMORIES]
         listed = "\n".join(
             f"  {_fmt(memory.occurred_at)}  {memory.external_key}" for memory in sample
         )
         citations = await citations_for_memories(
             self.sessions, [memory.id for memory in sample]
         )
-        truncated = len(found) > len(sample) or len(
-            [bucket for bucket in buckets if bucket.count]
-        ) > len(occupied)
+        # Either cut counts as truncation: the model is told once, and a reader
+        # of the answer cannot be left believing they saw every bucket *or*
+        # every memory.
+        truncated = len(found) > len(sample) or len(occupied) > len(shown_buckets)
         return ToolResult(
             content=(
                 f"{len(found)} memories are dated between {args.start} and "
@@ -788,7 +792,7 @@ def build_registry(
     search: SearchMemories,
     expand: ExpandThroughGraph,
     weights: FusionWeights,
-) -> "Sequence[Any]":
+) -> tuple[Tool, ...]:
     """The six tools, in the order they are offered to the model.
 
     Search first, deliberately. A model reaching for a tool on a vague question
