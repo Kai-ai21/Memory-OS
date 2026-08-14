@@ -39,7 +39,9 @@ Three conditions, all of them, because **each one fails on its own**:
 * **No new information** catches the loop that is technically progressing — new
   queries, new arguments, same results — which the hop limit only stops after it
   has spent the whole budget. Two consecutive stale hops, not one: a single
-  repeat is often a model re-reading something before pivoting.
+  repeat is often a model re-reading something before pivoting. What counts as
+  "already seen" is *which memories came back*, not the bytes of the rendering;
+  see `_signature`.
 * **The model saying it has enough** is the only one of the three that can stop
   at the *right* time rather than at a bound, because it is the only one that
   knows what the question needed. It is trusted, and only within the other two,
@@ -215,8 +217,12 @@ does not contain what a question assumes it does, and saying that is a better \
 answer than a fluent one.
 - Never invent a file name, a date or a quotation. If you name a source, it must \
 be one a tool result showed you.
-- Stop as soon as you can answer. Extra hops cost real money and do not make a \
-thin answer thicker.
+- Before your first call, decide what the question DECOMPOSES into. "What have I \
+repeated" is not one lookup: it is find the cases, read what each assumed, then \
+check whether they are really the same thing. Take those steps.
+- Stop when you can answer, and not before. One search that returned things only \
+loosely related to the question is not an answer — it is the first hop. Extra \
+hops cost real money, and so does a confident paragraph about the wrong subject.
 - When a result says it was truncated, or when findings were dropped for space, \
 say that your answer covers only part of what exists.
 
@@ -286,7 +292,8 @@ class MultiHopPlanner:
         specs = self._registry.specs()
 
         steps: list[Step] = []
-        seen: set[str] = set()
+        seen_memories: set[str] = set()
+        seen_digests: set[str] = set()
         stale = 0
         calls = 0
         prompt_tokens = 0
@@ -363,9 +370,13 @@ class MultiHopPlanner:
 
             call = turn.tool_calls[0]
             result = await self._call(call, extra=len(turn.tool_calls) - 1)
-            digest = _digest(result.content)
-            novel = digest not in seen
-            seen.add(digest)
+            memories, digest = _signature(result)
+            # A result that cited memories is new when any of them is new. One
+            # unseen memory among five seen ones is still a fact the model did
+            # not have, and calling that stale would stop a loop that is working.
+            novel = bool(memories - seen_memories) if memories else digest not in seen_digests
+            seen_memories |= memories
+            seen_digests.add(digest)
             steps.append(
                 Step(
                     thought=turn.text,
@@ -589,14 +600,27 @@ def _verbatim(history: Compacted) -> str:
     )
 
 
-def _digest(content: str) -> str:
-    """A content hash for the no-new-information rule.
+def _signature(result: ToolResult) -> tuple[frozenset[str], str]:
+    """What a step returned, in the terms the novelty rule should compare.
 
-    Whitespace-normalised, because two renderings of the same five memories that
-    differ by a line break are the same information and a raw hash would call
-    them different — which is exactly the loop this condition exists to catch.
+    **The memories, not the bytes.** M7.1 hashed the whitespace-normalised
+    rendering, and on this system that hash can essentially never repeat for the
+    tool it most needed to catch: `search_memories` prints `score 5.237`, and two
+    calls returning the identical five memories at fractionally different scores
+    produce different hashes. Measured on a real run — "repeated mistakes" then
+    "mistakes I have repeated" — both hops were recorded as new, and the rule
+    that exists to catch a reworded search watched one go past.
+
+    So the primary signature is the set of memory ids the result cited, which is
+    what "results already seen" means in any reading that is about information.
+
+    The digest survives as the fallback for results that cite nothing, and those
+    are not an edge case: "No silences of 30 days or more", "no recorded decision
+    matches", an argument correction. Two of those in a row is a loop, and with
+    no ids to compare it is the only thing left to compare.
     """
-    return hashlib.sha256(" ".join(content.split()).encode()).hexdigest()
+    memories = frozenset(str(citation.memory_id) for citation in result.citations)
+    return memories, hashlib.sha256(" ".join(result.content.split()).encode()).hexdigest()
 
 
 def _ms(started: float) -> int:

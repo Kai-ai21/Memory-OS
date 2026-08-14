@@ -279,6 +279,88 @@ async def test_one_repeat_is_not_enough_to_stop() -> None:
     assert [step.novel for step in trajectory.steps] == [True, False, True, False]
 
 
+async def test_the_same_memories_at_different_scores_are_not_new_information() -> None:
+    """**The case M7.1's content hash could never catch.**
+
+    `search_memories` prints `score 5.237`. Two reworded queries that return the
+    identical five memories render differently by a few thousandths, so a hash of
+    the rendering says "new" every time — and the condition written to stop a
+    model rewording its way in circles watched exactly that go past on a live run.
+
+    Comparing the memories rather than the bytes is the whole fix.
+    """
+
+    class Rescoring:
+        """Same memories every call, one digit of score apart."""
+
+        arguments: type[BaseModel] = Args
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        @property
+        def spec(self) -> ToolSpec:
+            return spec_for(Args, name="search_memories", description="Find.")
+
+        async def call(self, **kwargs: Any) -> ToolResult:
+            self.calls += 1
+            return ToolResult(
+                content=f"[1] self::src/a.py (score {5.0 + self.calls / 1000:.3f})",
+                citations=[citation(1)],
+            )
+
+    trajectory = await planner(
+        ScriptedModel([wants(query="a"), wants(query="b"), wants(query="c")]),
+        Rescoring(),
+    ).run("go", max_hops=6)
+
+    assert trajectory.stopped_because is StopReason.NO_NEW_INFORMATION
+    assert [step.novel for step in trajectory.steps] == [True, False, False]
+
+
+async def test_one_unseen_memory_among_seen_ones_is_still_new() -> None:
+    """The other half, and the one that would be easy to break in fixing the
+    first: four results the model has read plus one it has not is a fact it did
+    not have, and stopping there would end a loop that is working."""
+
+    class Widening:
+        arguments: type[BaseModel] = Args
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        @property
+        def spec(self) -> ToolSpec:
+            return spec_for(Args, name="search_memories", description="Find.")
+
+        async def call(self, **kwargs: Any) -> ToolResult:
+            self.calls += 1
+            # Overlaps heavily with the previous call and adds exactly one.
+            return ToolResult(
+                content="overlapping results",
+                citations=[citation(number) for number in range(1, self.calls + 2)],
+            )
+
+    trajectory = await planner(
+        ScriptedModel([wants(query="a")]), Widening()
+    ).run("go", max_hops=3)
+
+    assert trajectory.stopped_because is StopReason.HOP_LIMIT
+    assert all(step.novel for step in trajectory.steps if step.tool)
+
+
+async def test_a_result_that_cites_nothing_falls_back_to_its_text() -> None:
+    """"No silences of 30 days or more" cites nothing and is not an edge case —
+    two of those in a row is a loop, and with no ids to compare the rendering is
+    the only thing left."""
+    trajectory = await planner(
+        ScriptedModel([wants(query="a"), wants(query="b"), wants(query="c")]),
+        RepeatingTool(),
+    ).run("go", max_hops=6)
+
+    assert trajectory.stopped_because is StopReason.NO_NEW_INFORMATION
+
+
 async def test_a_model_that_stops_on_its_own_is_recorded_as_having_done_so() -> None:
     """The third condition, and the only one that can stop at the right time.
 
