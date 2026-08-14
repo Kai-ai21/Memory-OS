@@ -4304,18 +4304,24 @@ its own output and sets `truncated`, and the content says so in words as well �
 the model reads the content, not the field.
 
 The bounds are **described rather than declared**, and that was forced by a real
-400 from Groq:
+400 from Groq. Asked for ten results against a schema whose `limit` is capped at
+two:
 
 ```
-tool call validation failed: parameters for tool search_memories did not match schema
+400 tool_use_failed: tool call validation failed: parameters for tool
+search_memories did not match schema: errors: [`/limit`: must be <= 2 but found 10]
 ```
 
 Groq validates the model's generated arguments against the declared schema on its
-own side and fails **the entire request** when they miss. A `"maximum": 5` turns
+own side and fails **the entire request** when they miss — so a `"maximum"` turns
 "the model asked for ten" into a dead turn rather than into something
-correctable, because there is no result left to correct from. So the cap is the
-tool's, enforced by clamping: ask for fifty, get five, and be told the result was
-truncated — which is what the milestone specifies caps to do anyway.
+correctable, because there is no result left to correct from. The same question
+with the bound stated in the *description* instead comes back as a normal call
+asking for ten, which the tool then clamps.
+
+So the cap is the tool's, enforced by clamping: ask for fifty, get five, and be
+told the result was truncated — which is what the milestone specifies caps to do
+anyway.
 
 ### Provider compatibility, verified with real calls
 
@@ -4424,16 +4430,29 @@ reference somebody can open.
 
 ### Free tiers are the binding constraint on this milestone's evidence
 
-Both providers' free tiers were exhausted while running the six routing
-questions and the three verification questions. Groq's daily token cap
-(100,000/day) went first, mid-run; Gemini allows **20 requests a day** for
-`gemini-2.5-flash`, and one question is two of them. The routing table above was
-produced on Gemini for that reason, and Groq's half of the compatibility table
-was measured directly against its API rather than through the loop.
+Both providers' free tiers were exhausted during this milestone. Groq's daily
+token cap (100,000/day) went first, mid-run; Gemini allows **20 requests a day**
+for `gemini-2.5-flash`, and one question is two of them.
 
-Worth stating rather than hiding, because it bounds what M7.1 can measure: a
-multi-hop agent is four to six model calls per question, which is three questions
-a day on one free tier and about ten on the other.
+So what was verified live, and on which provider, is worth being exact about:
+
+| | Groq | Gemini |
+| --- | --- | --- |
+| calls tools at all | **yes**, direct API call | **yes**, direct API call |
+| accepts the generated schema | **yes**, direct API call | rejects one key, direct API call |
+| rejects out-of-bound arguments | **yes**, exact error above | not tested |
+| the whole `agent ask` loop | **no — daily cap** | **yes**, nine questions |
+
+The Groq *replay* — the assistant message carrying `tool_calls`, then a
+`role="tool"` message with the matching id — is therefore pinned by unit tests
+against the SDK's own response shape rather than by a live round trip. That is
+weaker evidence than a real call and it is named as such; it is also the evidence
+that keeps working after the daily budget is gone, which during this milestone it
+repeatedly was.
+
+This bounds what M7.1 can measure: a multi-hop agent is four to six model calls
+per question, which is three questions a day on one of these tiers and about ten
+on the other.
 
 ## Migrations
 

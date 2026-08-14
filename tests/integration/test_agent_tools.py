@@ -348,10 +348,15 @@ async def test_asking_past_the_cap_is_clamped_rather_than_refused(
     dead turn**, so the bound is not published and the tool clamps instead.
 
     Groq validates the model's generated arguments against the declared schema
-    on its own side and answers `400 tool call validation failed: parameters for
-    tool search_memories did not match schema` — the whole request, not the one
-    call. Nothing in this system gets to correct that, because there is no
-    result to correct from.
+    on its own side and answers, for the whole request rather than the one call:
+
+        400 tool_use_failed: tool call validation failed: parameters for tool
+        search_memories did not match schema:
+        errors: [`/limit`: must be <= 2 but found 10]
+
+    Nothing in this system gets to correct that, because there is no result left
+    to correct from. With the bound in the description instead, the same model
+    asks for ten, gets the cap, and is told it was truncated.
 
     So a model asking for fifty gets the five best and is told the result was
     cut, which is what the milestone specifies caps to do anyway.
