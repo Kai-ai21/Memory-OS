@@ -165,6 +165,10 @@ export type ReflectionCitation = Reflection["citations"][number];
 export type Surfaced = Ok<paths["/surfacing"]["get"]>[number];
 export type SurfaceReason = Surfaced["reason"];
 
+export type AgentAnswer = Ok<paths["/agent/ask"]["post"]>;
+export type AgentClaim = AgentAnswer["verification"]["claims"][number];
+export type AgentStep = AgentAnswer["steps"][number];
+
 export interface SearchArgs {
   q: string;
   k?: number;
@@ -359,6 +363,16 @@ export const api = {
 
   markSurfacingUseful: (id: string) =>
     request<null>(`/surfacing/${id}/useful`, { method: "POST" }),
+
+  // A minute is a normal duration for this one: six hops is six model calls.
+  // No timeout is set here because the browser's default is longer than any
+  // trajectory this system produces, and a shorter one would abandon work that
+  // has already been paid for.
+  agentAsk: (question: string, maxHops?: number) =>
+    request<AgentAnswer>("/agent/ask", {
+      method: "POST",
+      body: JSON.stringify({ question, max_hops: maxHops ?? null }),
+    }),
 };
 
 export interface TimelineArgs {

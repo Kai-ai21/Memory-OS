@@ -924,6 +924,8 @@ export interface components {
             hops: number;
             /** Question */
             question: string;
+            /** Raw Answer */
+            raw_answer?: string | null;
             /** Retry After */
             retry_after?: number | null;
             /** Steps */
@@ -935,6 +937,7 @@ export interface components {
              * @default false
              */
             truncated: boolean;
+            verification: components["schemas"]["memoryos__api__routes__agent__VerificationOut"];
         };
         /**
          * AnswerIn
@@ -1002,7 +1005,7 @@ export interface components {
             /** Question */
             question: string;
             timing: components["schemas"]["AnswerTimingOut"];
-            verification: components["schemas"]["VerificationOut"];
+            verification: components["schemas"]["memoryos__api__routes__answer__VerificationOut"];
         };
         /** AnswerTimingOut */
         AnswerTimingOut: {
@@ -1274,6 +1277,38 @@ export interface components {
             source_name: string;
             /** Version */
             version: number;
+        };
+        /** ClaimOut */
+        ClaimOut: {
+            /** Cited Step */
+            cited_step?: number | null;
+            /**
+             * Factual
+             * @default true
+             */
+            factual: boolean;
+            /**
+             * From Truncated
+             * @default false
+             */
+            from_truncated: boolean;
+            /** Sentence Index */
+            sentence_index: number;
+            /**
+             * Similarity
+             * @default 0
+             */
+            similarity: number;
+            /** Steps */
+            steps?: number[];
+            /** Support */
+            support: string;
+            /** Support Excerpt */
+            support_excerpt?: string | null;
+            /** Supported */
+            supported: boolean;
+            /** Text */
+            text: string;
         };
         /**
          * ContextCategory
@@ -2761,7 +2796,44 @@ export interface components {
          */
         Verdict: "relevant" | "not_relevant" | "missing";
         /** VerificationOut */
-        VerificationOut: {
+        memoryos__api__routes__agent__VerificationOut: {
+            /** Claims */
+            claims?: components["schemas"]["ClaimOut"][];
+            /** Connective Claims */
+            connective_claims: number;
+            /** Direct Rate */
+            direct_rate: number;
+            /** Factual Claims */
+            factual_claims: number;
+            /** Invalid Citations */
+            invalid_citations?: number[];
+            /**
+             * Refused
+             * @default false
+             */
+            refused: boolean;
+            /** Support Rate */
+            support_rate: number;
+            /** Truncated Citations */
+            truncated_citations?: number[];
+            /** Unresolved Citations */
+            unresolved_citations?: string[];
+            /** Verdict */
+            verdict: string;
+        };
+        /** ContextOut */
+        memoryos__api__routes__answer__ContextOut: {
+            /** Dropped */
+            dropped: number;
+            /** Passages */
+            passages: number;
+            /** Token Budget */
+            token_budget: number;
+            /** Tokens Used */
+            tokens_used: number;
+        };
+        /** VerificationOut */
+        memoryos__api__routes__answer__VerificationOut: {
             /** Citation Rate */
             citation_rate: number;
             /** Cited Indices */
@@ -2778,17 +2850,6 @@ export interface components {
             sentences?: components["schemas"]["SentenceOut"][];
             /** Supported Sentences */
             supported_sentences: number;
-        };
-        /** ContextOut */
-        memoryos__api__routes__answer__ContextOut: {
-            /** Dropped */
-            dropped: number;
-            /** Passages */
-            passages: number;
-            /** Token Budget */
-            token_budget: number;
-            /** Tokens Used */
-            tokens_used: number;
         };
         /** ContextOut */
         memoryos__api__routes__context__ContextOut: {

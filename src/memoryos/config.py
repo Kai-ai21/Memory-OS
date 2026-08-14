@@ -196,6 +196,17 @@ class Settings(BaseSettings):
     # search results already cost ~1,400, so this roughly doubles the history the
     # prompt carries rather than replacing it.
     agent_finding_budget: int = 1200
+    # M7.2. The share of an answer's factual claims that must trace to something
+    # the trajectory retrieved before the answer is shown at all.
+    #
+    # A setting rather than a constant because it is the one number in this
+    # milestone a deployment might legitimately want to move: half of an answer
+    # unsupported is the line here, and somebody running this over a corpus that
+    # genuinely contains their whole history could reasonably demand more. The
+    # two *similarity* thresholds are not settings — see `agent/verify.py`, they
+    # are properties of a specific embedding model and moving one by hand
+    # without re-running the calibration would be worse than not having the knob.
+    agent_min_support: float = 0.5
     # Chunks per extraction request (M3.1). The free tier's binding constraint
     # is requests per day, not tokens per request, so batching is what decides
     # whether a corpus of this size can be extracted at all: 1,308 chunks one at

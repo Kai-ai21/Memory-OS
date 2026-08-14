@@ -458,6 +458,18 @@ _REFLECTION_SENTENCE = re.compile(
 )
 
 
+def split_sentences(text: str) -> list[str]:
+    """Sentences, by the rule above, with the empties dropped.
+
+    Public because M7.2 needs the same splitter and a third copy of this regex
+    is how the three of them start disagreeing. It is the *reflection* rule
+    rather than `_SENTENCE` deliberately: an agent answer quotes decision
+    questions, which end in question marks, and the naive rule turns one cited
+    sentence into three fragments of which two look uncited.
+    """
+    return [part.strip() for part in _REFLECTION_SENTENCE.split(text.strip()) if part.strip()]
+
+
 @dataclass(frozen=True, slots=True)
 class ReflectionCheck:
     """Whether a generated reflection stayed inside the pattern's evidence."""
@@ -556,10 +568,7 @@ def check_reflection(text: str, valid_indices: set[int]) -> ReflectionCheck:
     out_of_evidence: list[int] = []
     cited: list[int] = []
 
-    for raw in _REFLECTION_SENTENCE.split(stripped):
-        sentence = raw.strip()
-        if not sentence:
-            continue
+    for sentence in split_sentences(stripped):
         indices = _indices(sentence)
         cited.extend(index for index in indices if index in valid_indices)
         out_of_evidence.extend(index for index in indices if index not in valid_indices)

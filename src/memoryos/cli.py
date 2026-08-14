@@ -53,6 +53,7 @@ from memoryos.application import (
     temporal,
 )
 from memoryos.application.agent.planner import Trajectory
+from memoryos.application.agent.verify import VerificationResult
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
 from memoryos.application.backfill import (
     enqueue_embedding,
@@ -3214,19 +3215,20 @@ async def run_agent_ask(
     question: str,
     max_hops: int | None,
     trace: bool,
+    verify: bool,
     explain: bool,
 ) -> int:
-    """One question, several dependent retrievals, one answer.
+    """One question, several dependent retrievals, one verified answer.
 
-    **`--trace` prints the trajectory**, which is the artifact M7.1 produces —
-    the answer is one field of it. Without the trace a bad answer is
-    unfalsifiable: four rewordings of the same search and one lucky hit produce
-    the same fluent paragraph as five dependent hops, and only the steps say
-    which happened.
+    **`--trace` prints the trajectory** — the artifact M7.1 produces, of which
+    the answer is one field. Without it a bad answer is unfalsifiable: four
+    rewordings of the same search and one lucky hit produce the same fluent
+    paragraph as five dependent hops, and only the steps say which happened.
 
-    Default output is the answer and its citations. The stop reason is printed
-    either way, because "it ran out of hops" and "it decided it had enough" are
-    different claims about the same paragraph.
+    **`--verify` prints the per-claim support.** It does *not* decide whether the
+    check runs: verification is always on and an ungrounded answer is always
+    withheld, because a guardrail behind a flag is a preference. What the flag
+    buys is seeing which sentence rested on what, and at what similarity.
     """
     container = Container.build(settings)
     try:
@@ -3238,9 +3240,12 @@ async def run_agent_ask(
         except MissingApiKey as exc:
             print(str(exc))
             return 1
-        trajectory = await agent.run(question, max_hops=max_hops)
+        verified = await agent.ask(question, max_hops=max_hops)
     finally:
         await container.dispose()
+
+    trajectory = verified.trajectory
+    checked = verified.verification
 
     if trace:
         _print_trace(trajectory)
@@ -3258,13 +3263,36 @@ async def run_agent_ask(
             print(f"{trajectory.hops} hop(s) had completed. Re-run with --trace.")
         return 1
 
-    for line in textwrap.wrap(trajectory.answer, width=88) or [""]:
+    for line in textwrap.wrap(verified.answer, width=88) or [""]:
         print(line)
+
+    if verified.refused:
+        # The withheld text is still in the trajectory and `--trace` shows it.
+        # Printing it here beside the refusal would defeat the refusal.
+        print(
+            f"\n(An answer was drafted and withheld: only "
+            f"{checked.support_rate:.0%} of its {checked.factual_claims} factual "
+            "claims traced to anything retrieved.)"
+        )
 
     if trajectory.truncated:
         print(
             "\nA tool result was truncated, so this answer covers part of what "
             "exists."
+        )
+
+    if verify:
+        _print_verification(checked)
+
+    if checked.invalid_citations:
+        # Always, flag or no flag. A hop the trajectory does not have is the one
+        # failure detectable with certainty.
+        cited = ", ".join(str(hop) for hop in checked.invalid_citations)
+        print(f"\nThe answer cited hop(s) {cited}, which this run does not have.")
+    if checked.unresolved_citations:
+        print(
+            f"\n{len(checked.unresolved_citations)} citation(s) no longer resolve "
+            "against the stored text. The corpus moved under this answer."
         )
 
     if trajectory.citations:
@@ -3284,11 +3312,39 @@ async def run_agent_ask(
     seconds = trajectory.duration_ms / 1000
     print(
         f"\n{trajectory.hops} hop(s), stopped: {trajectory.stopped_because.value}, "
+        f"verdict: {checked.verdict} ({checked.support_rate:.0%} supported, "
+        f"{checked.direct_rate:.0%} directly), "
         f"{trajectory.model_calls} model call(s), {trajectory.tokens} tokens "
         f"({trajectory.prompt_tokens} in / {trajectory.completion_tokens} out), "
         f"{seconds:.1f}s"
     )
     return 0
+
+
+def _print_verification(checked: VerificationResult) -> None:
+    """Per-claim support: what each sentence rested on, and how firmly.
+
+    Connective sentences are listed too, marked as needing nothing. Hiding them
+    would leave the reader counting the printed claims against the reported
+    total and finding a gap.
+    """
+    print(f"\nclaims ({checked.factual_claims} factual, "
+          f"{checked.connective_claims} connective):")
+    for claim in checked.claims:
+        if not claim.factual:
+            print(f"  ·  {textwrap.shorten(claim.text, width=76)}")
+            continue
+        mark = {"direct": "✓", "inferred": "~", "unsupported": "✗"}[claim.support.value]
+        cited = "" if claim.cited_step is None else f" [cited hop {claim.cited_step}]"
+        hops = ", ".join(str(hop) for hop in claim.steps) or "none"
+        print(f"  {mark}  {textwrap.shorten(claim.text, width=76)}")
+        print(
+            f"     {claim.support.value}, similarity {claim.similarity:.3f}, "
+            f"bears on hop(s) {hops}{cited}"
+            + ("  [source was truncated]" if claim.from_truncated else "")
+        )
+        if claim.support_excerpt:
+            print(f"     ↳ {textwrap.shorten(claim.support_excerpt, width=74)}")
 
 
 def _print_trace(trajectory: Trajectory) -> None:
@@ -4648,6 +4704,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="print every step: thought, tool, arguments and a result summary",
     )
     agent_ask.add_argument(
+        "--verify",
+        action="store_true",
+        help="print per-claim support (the check itself always runs)",
+    )
+    agent_ask.add_argument(
         "--explain",
         action="store_true",
         help="print the excerpt behind each citation as well as its locator",
@@ -5269,6 +5330,7 @@ def main(argv: list[str] | None = None) -> int:
                     question=args.question,
                     max_hops=args.max_hops,
                     trace=args.trace,
+                    verify=args.verify,
                     explain=args.explain,
                 )
             )

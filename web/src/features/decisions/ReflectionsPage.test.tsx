@@ -153,8 +153,14 @@ describe("where reflections are not", () => {
     // while that page is a record of what the system has *already* interrupted
     // them with. Hiding the place to say "that was noise" is how a dismissal
     // rate stays flattering.
+    //
+    // `ask` joins in M7.2, and it is the tab that comes closest to the line this
+    // test guards. It produces prose about the corpus, which is what reflections
+    // do — and it is here because the person asked for it and because every
+    // sentence arrives with its support marked in place. Volunteering a claim is
+    // still the thing that does not happen: nothing on this page speaks first.
     expect(nav.textContent).toBe(
-      "searchtimelinedecisionsjudgementscorpussurfacing",
+      "searchasktimelinedecisionsjudgementscorpussurfacing",
     );
   });
 });

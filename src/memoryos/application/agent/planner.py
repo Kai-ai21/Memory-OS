@@ -217,6 +217,9 @@ does not contain what a question assumes it does, and saying that is a better \
 answer than a fluent one.
 - Never invent a file name, a date or a quotation. If you name a source, it must \
 be one a tool result showed you.
+- In your final answer, mark every factual sentence with the hop it came from, \
+in brackets: "The lease expires after 30 seconds [2]." Use the hop numbers you \
+were given. A sentence you cannot attribute to a hop is one you should not write.
 - Before your first call, decide what the question DECOMPOSES into. "What have I \
 repeated" is not one lookup: it is find the cases, read what each assumed, then \
 check whether they are really the same thing. Take those steps.
@@ -233,9 +236,10 @@ _FINAL_TEMPLATE = """{question}
 {history}
 
 You have no more hops: {why}. Answer the question now from what you gathered \
-above, and nothing else. If what you gathered does not answer it, say exactly \
-that and say what is missing — an honest "the corpus does not contain this" is \
-correct and a confident synthesis of four weak results is not."""
+above, and nothing else, marking each factual sentence with the hop it came from \
+in brackets. If what you gathered does not answer it, say exactly that and say \
+what is missing — an honest "the corpus does not contain this" is correct and a \
+confident synthesis of four weak results is not."""
 
 _WHY = {
     StopReason.HOP_LIMIT: "you have used every hop you were given",
