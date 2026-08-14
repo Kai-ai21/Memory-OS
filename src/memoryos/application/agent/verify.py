@@ -15,18 +15,37 @@ something" but **"does anything it retrieved actually bear on this sentence"**.
 ### Why that check is possible here and was not there
 
 M2.6's stated reason for not attempting it was that judging support needs a
-judge, the only available judge is another language model, and a model grading
+judge, the only available judge is another *language* model, and a model grading
 its own grounding is not evidence. That reasoning still holds and this module
-does not break it — **there is no model here**. Support is measured with the
-embedder the corpus was indexed with, which is a fixed function that knows
-nothing about the answer, cannot be persuaded, and produces the same number
-twice. It is a weaker instrument than a judge and it is an honest one.
+does not break it — **no language model runs here**. Two fixed functions do:
+the bi-encoder the corpus was indexed with, then the cross-encoder retrieval
+already reranks with. Neither knows anything about the answer, neither can be
+persuaded, and both return the same number twice.
 
-What that buys is a real limit, stated up front: this measures *semantic
-proximity to retrieved text*, not entailment. A sentence that says the opposite
-of a passage it closely paraphrases scores as supported. Catching that needs
-entailment, entailment needs a judge, and the judge is the thing we do not have.
-M7.3 is where a scorer with a different instrument belongs.
+### Two stages, for the reason retrieval has two
+
+M7.2 shipped with cosine alone and named two failures it could not catch. Both
+were real and both were measured, and they are the same failure: **cosine
+measures whether a claim is *near* retrieved text, and a fabrication built out of
+retrieved words is near it.** Asked which architectural choices caused production
+incidents — there is no production — an answer said an incident "was traced to"
+a decision that made a request "fail permanently on the first attempt instead of
+being retried", producing "a burst of dead letters during a routine rebuild".
+Every noun phrase came from a passage saying a rebuild *should not* produce dead
+letters. Cosine scored it 0.741 against a 0.62 bar and called it supported.
+
+A cross-encoder reads the claim and the passage *together* rather than comparing
+two independent compressions of them, which is exactly the asymmetry `Reranker`
+exists to describe. Rescored, that sentence lands at **+0.26** against a band of
+real claims running +5.2 to +8.4 and inventions running -9.9 to -6.8. So the
+shape is retrieval's own: shortlist cheaply with the bi-encoder over every
+passage, then score the shortlist expensively.
+
+It is still not entailment, and the honest limit has moved rather than gone: this
+now measures whether a passage *answers* a claim, which is what a relevance
+cross-encoder is trained for. A sentence contradicting a passage it is otherwise
+about can still score well. What it does buy is the two cases above, measured,
+and a score range wide enough for `inferred` to mean something.
 
 ### Three levels, because "supported" is not one thing
 
@@ -64,32 +83,64 @@ from memoryos.domain.grounding import split_sentences
 
 logger = structlog.get_logger(__name__)
 
-# Cosine similarity at which one retrieved passage is taken to *say* a claim.
+# Cross-encoder score at which one retrieved passage is taken to *say* a claim.
 #
-# **Measured, not chosen** — `scripts/calibrate_verification.py` re-runs it, over
-# real tool results and three sets of claims:
+# **Measured, not chosen** — `scripts/calibrate_verification.py` re-runs it over
+# real tool results and four sets of claims. The two instruments, side by side:
 #
-#   sentences real runs wrote from those results   0.631 - 0.835  (median 0.670)
-#   fluent claims about things this corpus lacks   0.525 - 0.596  (median 0.559)
+#                                            cosine          cross-encoder
+#   sentences real runs wrote from results    0.63 - 0.84     -5.1 to +8.4
+#   claims true of the project, not fetched   0.55 - 0.82     -10.8 to -1.8
+#   fluent claims about absent subjects       0.53 - 0.67     -9.9 to -5.0
+#   the production-incident fabrication       0.74  PASSED    +0.26  caught
+#   the over-general "common theme" claim     0.62  PASSED    -5.13  caught
 #
-# The bands do not overlap, and 0.62 sits in the gap: 0.024 above the highest
-# invention and 0.011 below the lowest real claim. That margin is small because
-# bge-small-en-v1.5 compresses everything worth comparing into roughly 0.5-0.85,
-# which is a property of the model rather than of the corpus — and it is the
-# reason this number belongs beside the script that produced it rather than in a
-# config file where somebody would round it.
-DIRECT = 0.62
+# 4.0 sits between the fabrication at +0.26 and the lowest *supported* real claim
+# at +5.25. Cosine has no such gap: with the fabrication's own search results in
+# the pool — the state any real trajectory is in — its invented band reaches 0.67
+# and its real band starts at 0.63, so the two overlap and no threshold
+# separates them.
+#
+# **The cost is one false flag in eight.** One true sentence — "One assumption was
+# that running a second database is worth it for one query shape, and it broke" —
+# scores -5.1 against the decision block that contains it. That is the trade this
+# takes deliberately: a flagged true sentence is marked and still on screen,
+# while a passed fabrication is the failure the milestone exists to prevent.
+JUDGE_DIRECT = 4.0
 
 # Where a passage stops bearing on a claim at all. Two hops that each clear this
-# without either clearing DIRECT is what "the claim combines two results" looks
-# like from here.
+# without either clearing `JUDGE_DIRECT` is what "the claim combines two results"
+# looks like from here.
 #
-# **The band between the two is thin, and the calibration says so**: with the
-# thresholds that separate the measured bands cleanly, `INFERRED` fired for none
-# of the twenty-two calibration claims. Widening it to make the level interesting
-# would mean moving DIRECT up into the supported band and flagging true claims,
-# which is a worse trade than a level that rarely fires. See the README.
+# Zero, which is this model's own hinge: it is trained to score a relevant pair
+# positive and an irrelevant one negative, so the natural reading of "bears on
+# but does not say" is a positive score below the direct bar.
+#
+# **`inferred` still fires for nothing, and the cross-encoder is not why.** M7.2
+# blamed the 0.04-wide cosine band; with an eighteen-unit range the level is just
+# as empty, because the highest *second-step* score among real claims is -2.9.
+# Sentences in these answers are supported by one passage or by none. That is a
+# fact about the answers rather than about either instrument, and it is the
+# honest correction to what M7.2's report predicted.
+JUDGE_INFERRED = 0.0
+
+# The same two decisions on cosine, used only when no cross-encoder is available
+# — `MEMOS_RERANK_ENABLED=false`, or a deployment that never loads one.
+#
+# **Kept, and reported.** A verification that silently fell back to the weaker
+# instrument would produce the same verdicts with none of the discrimination, and
+# `VerificationResult.judged_by` is how a reader tells which ran.
+DIRECT = 0.62
 INFERRED = 0.58
+
+# Passages per claim that reach the cross-encoder.
+#
+# Retrieval's own shape and its own argument: fifty candidates cheaply, ten
+# scored expensively. A six-hop trajectory offers a few hundred passages and one
+# forward pass each would be seconds; the bi-encoder is a good enough filter to
+# pick which twelve are worth reading properly, and a passage outside the cosine
+# top twelve for a claim is not the passage that supports it.
+SHORTLIST = 12
 
 # Below this share of factual claims supported, the answer is not returned.
 MIN_SUPPORT = 0.5
@@ -202,6 +253,18 @@ class Embedder(Protocol):
     def embed_passage(self, texts: Sequence[str]) -> list[list[float]]: ...
 
 
+class Judge(Protocol):
+    """Scores a claim against passages, reading both together.
+
+    Structurally `Reranker`, and satisfied by the same object — deliberately not
+    *named* `Reranker` here, because what it is doing is not ranking. Retrieval
+    asks "which of these is most relevant"; this asks "does this one say it", and
+    the answer is a threshold rather than an order.
+    """
+
+    def rerank(self, query: str, documents: Sequence[str]) -> list[float]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class Claim:
     """One sentence of the answer, and what in the trajectory bears on it."""
@@ -248,6 +311,11 @@ class VerificationResult:
     invalid_citations: list[int] = field(default_factory=list)
     verdict: str = "grounded"
     claims: list[Claim] = field(default_factory=list)
+    # Which instrument decided support. **Reported rather than assumed**: a
+    # deployment with reranking off falls back to cosine, which reaches the same
+    # verdicts with far less discrimination, and a reader comparing two runs has
+    # to be able to see that they were not scored the same way.
+    judged_by: str = "cross-encoder"
     # Cited hops whose result was truncated. Not a failure: a reason to trust the
     # sentence less, reported rather than folded into the rate.
     truncated_citations: list[int] = field(default_factory=list)
@@ -293,6 +361,7 @@ class VerificationResult:
             "support_rate": round(self.support_rate, 4),
             "direct_rate": round(self.direct_rate, 4),
             "verdict": self.verdict,
+            "judged_by": self.judged_by,
             "factual_claims": self.factual_claims,
             "connective_claims": self.connective_claims,
             "unsupported": [claim.text for claim in self.unsupported],
@@ -316,18 +385,33 @@ REFUSAL = (
 def verify(
     trajectory: Trajectory,
     embedder: Embedder,
+    judge: Judge | None = None,
     *,
-    direct: float = DIRECT,
-    inferred: float = INFERRED,
+    direct: float | None = None,
+    inferred: float | None = None,
     min_support: float = MIN_SUPPORT,
     unresolved: Sequence[str] = (),
 ) -> VerificationResult:
     """Check an answer against the trajectory that produced it.
 
+    `judge` is the cross-encoder. Optional, because a deployment can turn
+    reranking off — and when it is absent the thresholds fall back to cosine's,
+    which is a materially weaker check that `judged_by` names rather than hides.
+
     `unresolved` is the locators whose offsets no longer resolve, checked by the
     caller because it needs a database and this does not. Empty is the normal
     case and the only good one.
     """
+    # Defaulted here rather than in the signature, because which pair is right
+    # depends on which instrument is running and a caller passing neither should
+    # get the correct pair rather than the cosine one.
+    direct = (JUDGE_DIRECT if judge is not None else DIRECT) if direct is None else direct
+    inferred = (
+        (JUDGE_INFERRED if judge is not None else INFERRED)
+        if inferred is None
+        else inferred
+    )
+
     answer = (trajectory.answer or "").strip()
     if not answer:
         # Nothing was returned, so there is nothing to be ungrounded about. The
@@ -340,7 +424,9 @@ def verify(
 
     claims = _classify(answer)
     factual = [claim for claim in claims if claim.factual]
-    checked = _support(factual, acted, embedder, direct=direct, inferred=inferred)
+    checked = _support(
+        factual, acted, embedder, judge, direct=direct, inferred=inferred
+    )
 
     by_index = {claim.sentence_index: claim for claim in checked}
     claims = [by_index.get(claim.sentence_index, claim) for claim in claims]
@@ -388,11 +474,13 @@ def verify(
         invalid_citations=invalid,
         verdict=_verdict(support_rate, invalid, min_support=min_support),
         claims=claims,
+        judged_by="cross-encoder" if judge is not None else "cosine",
         truncated_citations=truncated,
         unresolved_citations=list(unresolved),
     )
     logger.info(
         "agent.verified",
+        judged_by=result.judged_by,
         verdict=result.verdict,
         support_rate=round(support_rate, 3),
         direct_rate=round(direct_rate, 3),
@@ -441,8 +529,9 @@ class VerifiedAgent:
     through here, so an ungrounded answer is withheld on all of them or on none.
 
     The cost is one embedding pass over the answer's sentences and the
-    trajectory's passages — tens of milliseconds against a loop that just spent
-    twenty seconds and several thousand tokens.
+    trajectory's passages, then twelve cross-encoder pairs per factual claim —
+    a few hundred milliseconds against a loop that just spent twenty seconds and
+    several thousand tokens.
     """
 
     def __init__(
@@ -450,12 +539,14 @@ class VerifiedAgent:
         planner: MultiHopPlanner,
         sessions: async_sessionmaker[AsyncSession],
         embedder: Embedder,
+        judge: Judge | None = None,
         *,
         min_support: float = MIN_SUPPORT,
     ) -> None:
         self._planner = planner
         self._sessions = sessions
         self._embedder = embedder
+        self._judge = judge
         self._min_support = min_support
 
     async def ask(self, question: str, *, max_hops: int | None = None) -> VerifiedAnswer:
@@ -464,6 +555,7 @@ class VerifiedAgent:
         result = verify(
             trajectory,
             self._embedder,
+            self._judge,
             min_support=self._min_support,
             unresolved=unresolved,
         )
@@ -517,6 +609,7 @@ def _support(
     claims: Sequence[Claim],
     steps: Sequence[Step],
     embedder: Embedder,
+    judge: Judge | None,
     *,
     direct: float,
     inferred: float,
@@ -527,6 +620,11 @@ def _support(
     true sentence and attributed it to the wrong hop has made a citation mistake,
     not a fabrication, and conflating the two would report the honest error and
     the invented one identically.
+
+    Two stages when a judge is available: cosine picks `SHORTLIST` passages per
+    claim from all of them, then the cross-encoder scores those pairs properly
+    and its scores are what the thresholds read. Without a judge the cosine
+    scores stand, with the weaker thresholds and `judged_by` saying so.
     """
     if not claims:
         return []
@@ -564,11 +662,31 @@ def _support(
 
     checked: list[Claim] = []
     for claim, vector in zip(claims, claim_vectors, strict=True):
-        scores = [_cosine(vector, unit) for unit in unit_vectors]
-        best_at = max(range(len(scores)), key=scores.__getitem__)
-        best = scores[best_at]
+        cosines = [_cosine(vector, unit) for unit in unit_vectors]
+        if judge is None:
+            scores, indices = cosines, list(range(len(units)))
+        else:
+            # The shortlist is cosine's; the verdict is the cross-encoder's. A
+            # passage outside the top `SHORTLIST` by cosine is not the one that
+            # supports this claim, and paying a forward pass to confirm that for
+            # three hundred passages would put seconds between the answer and
+            # the screen.
+            indices = sorted(
+                range(len(units)), key=cosines.__getitem__, reverse=True
+            )[:SHORTLIST]
+            scores = judge.rerank(claim.text, [units[at] for at in indices])
+
+        top = max(range(len(scores)), key=scores.__getitem__)
+        best_at = indices[top]
+        best = scores[top]
         bearing = tuple(
-            sorted({owners[at] for at, score in enumerate(scores) if score >= inferred})
+            sorted(
+                {
+                    owners[indices[at]]
+                    for at, score in enumerate(scores)
+                    if score >= inferred
+                }
+            )
         )
 
         if best >= direct:

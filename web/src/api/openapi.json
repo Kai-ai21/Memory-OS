@@ -4737,6 +4737,11 @@
             "title": "Invalid Citations",
             "type": "array"
           },
+          "judged_by": {
+            "default": "cross-encoder",
+            "title": "Judged By",
+            "type": "string"
+          },
           "refused": {
             "default": false,
             "title": "Refused",

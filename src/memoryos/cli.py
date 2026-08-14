@@ -3330,8 +3330,10 @@ def _print_verification(checked: VerificationResult) -> None:
     would leave the reader counting the printed claims against the reported
     total and finding a gap.
     """
-    print(f"\nclaims ({checked.factual_claims} factual, "
-          f"{checked.connective_claims} connective):")
+    print(
+        f"\nclaims ({checked.factual_claims} factual, "
+        f"{checked.connective_claims} connective; judged by {checked.judged_by}):"
+    )
     for claim in checked.claims:
         if not claim.factual:
             print(f"  ·  {textwrap.shorten(claim.text, width=76)}")

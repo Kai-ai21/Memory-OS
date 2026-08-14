@@ -377,6 +377,12 @@ class Container:
                 planner,
                 self.database.session_factory,
                 self.embedder,
+                # The same cross-encoder search reranks with, doing the same
+                # thing for a different question: there it decides which of ten
+                # passages answers a query best, here whether any of twelve says
+                # what a sentence claims. `None` when reranking is off, which
+                # `judged_by` reports rather than hides.
+                self.reranker,
                 min_support=self.settings.agent_min_support,
             )
         raise ToolsUnsupported(
