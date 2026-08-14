@@ -541,12 +541,19 @@ async def derive(session_factory: async_sessionmaker[AsyncSession]) -> DeriveRep
                 unchanged += 1
                 continue
 
-            facet = _insert(session, candidate)
+            facet_id = new_id()
             if existing is not None:
-                # Supersede rather than update: how the model changed is part of
-                # the model, and an UPDATE would leave nothing to compare.
-                existing.superseded_by = facet.id
+                # **The old row is retired before the new one is written**, and
+                # the order is forced by the partial unique index: it allows one
+                # live row per (detector, subject), so inserting first would put
+                # two live rows in the table for the length of a statement and
+                # Postgres rejects that. Supersede rather than update, because
+                # how the model changed is part of the model and an UPDATE would
+                # leave nothing to compare.
+                existing.superseded_by = facet_id
+                await session.flush()
                 superseded += 1
+            await _insert(session, candidate, facet_id=facet_id)
             written += 1
 
     assessments = await assess(session_factory)
@@ -572,9 +579,19 @@ async def derive(session_factory: async_sessionmaker[AsyncSession]) -> DeriveRep
     return report
 
 
-def _insert(session: AsyncSession, candidate: Candidate) -> models.UserModelFacet:
+async def _insert(
+    session: AsyncSession, candidate: Candidate, *, facet_id: UUID
+) -> models.UserModelFacet:
+    """Write the facet, then its evidence.
+
+    The flush between them is not incidental. `user_model_facets` carries a
+    self-referential foreign key, and with one in the table SQLAlchemy's unit of
+    work stops ordering these two inserts by their dependency — the evidence goes
+    first and Postgres rejects it for pointing at a row that does not exist yet.
+    Flushing the parent explicitly says the order rather than hoping for it.
+    """
     facet = models.UserModelFacet(
-        id=new_id(),
+        id=facet_id,
         dimension=candidate.dimension.value,
         statement=candidate.statement,
         confidence=candidate.confidence,
@@ -587,6 +604,7 @@ def _insert(session: AsyncSession, candidate: Candidate) -> models.UserModelFace
         subject_key=candidate.subject_key,
     )
     session.add(facet)
+    await session.flush()
     seen: set[tuple[str, UUID, str]] = set()
     for kind, ref_id, relation in candidate.evidence:
         key = (kind.value, ref_id, relation.value)

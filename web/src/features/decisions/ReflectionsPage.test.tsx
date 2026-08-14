@@ -159,8 +159,15 @@ describe("where reflections are not", () => {
     // do — and it is here because the person asked for it and because every
     // sentence arrives with its support marked in place. Volunteering a claim is
     // still the thing that does not happen: nothing on this page speaks first.
+    //
+    // `model` joins in M8.0 and is closer still: it is a page of claims about
+    // the person, which is the register a reflection is written in. It is here
+    // for the same two reasons — the person navigated to it, and every statement
+    // carries its support count while every absence carries its cause. The rule
+    // this test protects is about *volunteering*, and nothing on that page
+    // speaks unasked either.
     expect(nav.textContent).toBe(
-      "searchasktimelinedecisionsjudgementscorpussurfacing",
+      "searchasktimelinedecisionsjudgementscorpussurfacingmodel",
     );
   });
 });

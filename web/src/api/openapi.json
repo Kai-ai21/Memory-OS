@@ -354,6 +354,34 @@
         "title": "AnswerTimingOut",
         "type": "object"
       },
+      "AssessmentOut": {
+        "properties": {
+          "best_support": {
+            "default": 0,
+            "title": "Best Support",
+            "type": "integer"
+          },
+          "dimension": {
+            "title": "Dimension",
+            "type": "string"
+          },
+          "facets": {
+            "title": "Facets",
+            "type": "integer"
+          },
+          "gap": {
+            "default": "",
+            "title": "Gap",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dimension",
+          "facets"
+        ],
+        "title": "AssessmentOut",
+        "type": "object"
+      },
       "AssumptionDetailOut": {
         "properties": {
           "confidence": {
@@ -1464,7 +1492,7 @@
           },
           "evidence": {
             "items": {
-              "$ref": "#/components/schemas/EvidenceOut"
+              "$ref": "#/components/schemas/memoryos__api__routes__decisions__EvidenceOut"
             },
             "title": "Evidence",
             "type": "array"
@@ -2101,65 +2129,6 @@
         "title": "EvidenceKind",
         "type": "string"
       },
-      "EvidenceOut": {
-        "properties": {
-          "chunk_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Chunk Id"
-          },
-          "chunk_ordinal": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Chunk Ordinal"
-          },
-          "external_key": {
-            "title": "External Key",
-            "type": "string"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "memory_id": {
-            "format": "uuid",
-            "title": "Memory Id",
-            "type": "string"
-          },
-          "relation": {
-            "$ref": "#/components/schemas/EvidenceRelation"
-          },
-          "source_name": {
-            "title": "Source Name",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "memory_id",
-          "chunk_id",
-          "source_name",
-          "external_key",
-          "chunk_ordinal",
-          "relation"
-        ],
-        "title": "EvidenceOut",
-        "type": "object"
-      },
       "EvidenceRelation": {
         "description": "How a memory relates to a decision.\n\n**`INFORMED` and `RECORDS` are not the same relation and must not be\ncollapsed.** A design discussion informed the decision and existed before\nit; an ADR records the decision and exists after it. Both are evidence and\nonly one is testimony. M5.1 needs to know which came first in order to say\nanything about whether the decision predicted its outcome \u2014 a record written\nafterwards agrees with the decision by construction, so treating it as\ninput would be reading the answer off the answer sheet.\n\n`CONTRADICTS` is the one worth capturing deliberately, because nothing else\nin the system will volunteer it: a memory that argues against the choice is\nexactly what a later reflection needs and exactly what a suggestion pass\ntrained on agreement will never propose.",
         "enum": [
@@ -2301,6 +2270,108 @@
           "why"
         ],
         "title": "ExplanationOut",
+        "type": "object"
+      },
+      "FacetOut": {
+        "properties": {
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "contradiction_count": {
+            "title": "Contradiction Count",
+            "type": "integer"
+          },
+          "detector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detector"
+          },
+          "dimension": {
+            "title": "Dimension",
+            "type": "string"
+          },
+          "dismissed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dismissed At"
+          },
+          "dismissed_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dismissed Reason"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/memoryos__api__routes__model__EvidenceOut"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "statement": {
+            "title": "Statement",
+            "type": "string"
+          },
+          "superseded_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superseded By"
+          },
+          "support_count": {
+            "title": "Support Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "dimension",
+          "statement",
+          "support_count",
+          "contradiction_count",
+          "origin"
+        ],
+        "title": "FacetOut",
         "type": "object"
       },
       "FindingOut": {
@@ -3011,6 +3082,36 @@
           "deleted_at"
         ],
         "title": "MemoryOut",
+        "type": "object"
+      },
+      "ModelOut": {
+        "properties": {
+          "assessments": {
+            "items": {
+              "$ref": "#/components/schemas/AssessmentOut"
+            },
+            "title": "Assessments",
+            "type": "array"
+          },
+          "dismissed": {
+            "items": {
+              "$ref": "#/components/schemas/FacetOut"
+            },
+            "title": "Dismissed",
+            "type": "array"
+          },
+          "facets": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/FacetOut"
+              },
+              "type": "array"
+            },
+            "title": "Facets",
+            "type": "object"
+          }
+        },
+        "title": "ModelOut",
         "type": "object"
       },
       "OptionIn": {
@@ -4895,6 +4996,65 @@
         "title": "ContextOut",
         "type": "object"
       },
+      "memoryos__api__routes__decisions__EvidenceOut": {
+        "properties": {
+          "chunk_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Id"
+          },
+          "chunk_ordinal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Ordinal"
+          },
+          "external_key": {
+            "title": "External Key",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "memory_id": {
+            "format": "uuid",
+            "title": "Memory Id",
+            "type": "string"
+          },
+          "relation": {
+            "$ref": "#/components/schemas/EvidenceRelation"
+          },
+          "source_name": {
+            "title": "Source Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "memory_id",
+          "chunk_id",
+          "source_name",
+          "external_key",
+          "chunk_ordinal",
+          "relation"
+        ],
+        "title": "EvidenceOut",
+        "type": "object"
+      },
       "memoryos__api__routes__evolution__VersionOut": {
         "properties": {
           "adopted": {
@@ -5216,6 +5376,30 @@
           "deleted_at"
         ],
         "title": "VersionOut",
+        "type": "object"
+      },
+      "memoryos__api__routes__model__EvidenceOut": {
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "ref_id": {
+            "format": "uuid",
+            "title": "Ref Id",
+            "type": "string"
+          },
+          "relation": {
+            "title": "Relation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "ref_id",
+          "relation"
+        ],
+        "title": "EvidenceOut",
         "type": "object"
       },
       "memoryos__api__routes__search__ChunkOut": {
@@ -6568,6 +6752,103 @@
         "summary": "Get Evolution",
         "tags": [
           "evolution"
+        ]
+      }
+    },
+    "/model": {
+      "get": {
+        "operationId": "show_model_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "dimension",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dimension"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Show",
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/model/{facet_id}/history": {
+      "get": {
+        "description": "Every version of one facet, oldest first.\n\n**This is what `superseded_by` is for.** A model that could only show its\ncurrent state cannot answer the question that makes it worth having, which is\nwhat changed and when.",
+        "operationId": "history_model__facet_id__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "facet_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Facet Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FacetOut"
+                  },
+                  "title": "Response History Model  Facet Id  History Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "History",
+        "tags": [
+          "model"
         ]
       }
     },

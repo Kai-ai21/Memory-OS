@@ -2735,8 +2735,17 @@ class UserModelFacet(Base):
     )
     detector: Mapped[str | None] = mapped_column(Text)
     subject_key: Mapped[str | None] = mapped_column(Text)
+    # Deferred to commit: retiring a facet and inserting its replacement is
+    # circular under the partial unique index below, which allows one live row
+    # per subject. See the migration.
     superseded_by: Mapped[UUID | None] = mapped_column(
-        _UUID, ForeignKey("user_model_facets.id", ondelete="SET NULL")
+        _UUID,
+        ForeignKey(
+            "user_model_facets.id",
+            ondelete="SET NULL",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
     )
     dismissed_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
     dismissed_reason: Mapped[str | None] = mapped_column(Text)

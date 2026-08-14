@@ -20,6 +20,7 @@ import { ReflectionsPage } from "./features/decisions/ReflectionsPage";
 import { ReviewQueue } from "./features/decisions/ReviewQueue";
 import { JudgementsPage } from "./features/judgements/JudgementsPage";
 import { MemoryPage } from "./features/memory/MemoryPage";
+import { ModelPage } from "./features/model/ModelPage";
 import { SearchPage } from "./features/search/SearchPage";
 import { SurfacingPage } from "./features/surfacing/SurfacingPage";
 import { TimelinePage } from "./features/timeline/TimelinePage";
@@ -48,6 +49,12 @@ export function App() {
                 hiding the place to say "that was noise" is how the dismissal
                 rate stays flattering. */}
             <Tab to="/surfacing">surfacing</Tab>
+            {/* M8.0. A tab, and the one on this bar that most needs its empty
+                sections visible: a page of claims about somebody's goals and
+                weaknesses is the shape of a horoscope, and what separates this
+                from one is that every statement carries its support and every
+                absence carries its reason. */}
+            <Tab to="/model">model</Tab>
           </nav>
         </div>
         {/* Which API is being read. On a tool with several environments, not
@@ -59,6 +66,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<SearchPage />} />
           <Route path="/ask" element={<AgentPage />} />
+          <Route path="/model" element={<ModelPage />} />
           <Route path="/timeline" element={<TimelinePage />} />
           <Route path="/memory/:id" element={<MemoryPage />} />
           {/* The two literal segments before the parameterised one. React Router

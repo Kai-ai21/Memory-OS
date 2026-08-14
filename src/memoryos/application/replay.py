@@ -163,6 +163,33 @@ USER_AUTHORED_TABLES: frozenset[str] = frozenset(
         # user-authored and never truncated. Nothing a replay does can reach it.
         "patterns",
         "pattern_evidence",
+        # M8.0's two, and the argument is `patterns`' argument with one addition.
+        #
+        # Most of `user_model_facets` is derived: the statements are templates
+        # with counts in them and `model derive` reproduces them exactly. Three
+        # things in it are not, and each alone would be enough.
+        #
+        # `origin = 'asserted'` rows are somebody's own words. A goal is stated
+        # rather than inferred — that is the whole reason the dimension has no
+        # deriver — and a replay that truncated this table would delete every
+        # goal anybody had entered and regenerate none of them.
+        #
+        # `dismissed_at` and `dismissed_reason` are a person having read a claim
+        # about themselves and refused it, which is the property this set exists
+        # for and which `patterns` is here for already.
+        #
+        # And `superseded_by` is a *history*: which statement replaced which, and
+        # when. A rebuild produces today's facets, so a truncation would collapse
+        # the chain to its current end — losing exactly the part that makes a
+        # model of a person worth keeping, since "you used to believe this" is
+        # only answerable while the superseded row exists.
+        #
+        # No snapshot needed. `facet_evidence` holds no foreign key at all — see
+        # the note on `ref_id` — so nothing a replay does to `memories` can reach
+        # it, and its one real foreign key points at `user_model_facets`, which
+        # is never truncated.
+        "user_model_facets",
+        "facet_evidence",
         # M5.4's two, and the least arguable classification in this file since
         # `query_judgements`.
         #

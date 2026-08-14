@@ -78,10 +78,22 @@ def upgrade() -> None:
         # Two derivations of the same underlying regularity must produce the same
         # key so the second supersedes the first rather than duplicating it.
         sa.Column("subject_key", sa.Text(), nullable=True),
+        # **Deferrable, and it has to be.** Retiring a facet and writing its
+        # replacement is circular under two constraints that are both wanted:
+        # the partial unique index below allows one live row per subject, so the
+        # old row must stop being live before the new one is inserted; this
+        # foreign key requires the new row to exist before the old one may point
+        # at it. Deferring the check to commit lets both hold at the only moment
+        # anybody can observe the table.
         sa.Column(
             "superseded_by",
             postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("user_model_facets.id", ondelete="SET NULL"),
+            sa.ForeignKey(
+                "user_model_facets.id",
+                ondelete="SET NULL",
+                deferrable=True,
+                initially="DEFERRED",
+            ),
             nullable=True,
         ),
         sa.Column("dismissed_at", postgresql.TIMESTAMP(timezone=True), nullable=True),

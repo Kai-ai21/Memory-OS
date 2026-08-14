@@ -496,6 +496,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Show */
+        get: operations["show_model_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model/{facet_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * History
+         * @description Every version of one facet, oldest first.
+         *
+         *     **This is what `superseded_by` is for.** A model that could only show its
+         *     current state cannot answer the question that makes it worth having, which is
+         *     what changed and when.
+         */
+        get: operations["history_model__facet_id__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/outcomes/rate": {
         parameters: {
             query?: never;
@@ -1020,6 +1061,23 @@ export interface components {
             /** Verify Ms */
             verify_ms: number;
         };
+        /** AssessmentOut */
+        AssessmentOut: {
+            /**
+             * Best Support
+             * @default 0
+             */
+            best_support: number;
+            /** Dimension */
+            dimension: string;
+            /** Facets */
+            facets: number;
+            /**
+             * Gap
+             * @default
+             */
+            gap: string;
+        };
         /** AssumptionDetailOut */
         AssumptionDetailOut: {
             /** Confidence */
@@ -1417,7 +1475,7 @@ export interface components {
             decided_at: string;
             decided_at_source: components["schemas"]["TimeProvenance"];
             /** Evidence */
-            evidence: components["schemas"]["EvidenceOut"][];
+            evidence: components["schemas"]["memoryos__api__routes__decisions__EvidenceOut"][];
             /** Expected Outcome */
             expected_outcome: string | null;
             /**
@@ -1673,28 +1731,6 @@ export interface components {
          * @enum {string}
          */
         EvidenceKind: "declared" | "inferred";
-        /** EvidenceOut */
-        EvidenceOut: {
-            /** Chunk Id */
-            chunk_id: string | null;
-            /** Chunk Ordinal */
-            chunk_ordinal: number | null;
-            /** External Key */
-            external_key: string;
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Memory Id
-             * Format: uuid
-             */
-            memory_id: string;
-            relation: components["schemas"]["EvidenceRelation"];
-            /** Source Name */
-            source_name: string;
-        };
         /**
          * EvidenceRelation
          * @description How a memory relates to a decision.
@@ -1769,6 +1805,36 @@ export interface components {
             rerank_score?: number | null;
             /** Why */
             why: string;
+        };
+        /** FacetOut */
+        FacetOut: {
+            /** Confidence */
+            confidence?: number | null;
+            /** Contradiction Count */
+            contradiction_count: number;
+            /** Detector */
+            detector?: string | null;
+            /** Dimension */
+            dimension: string;
+            /** Dismissed At */
+            dismissed_at?: string | null;
+            /** Dismissed Reason */
+            dismissed_reason?: string | null;
+            /** Evidence */
+            evidence?: components["schemas"]["memoryos__api__routes__model__EvidenceOut"][];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Origin */
+            origin: string;
+            /** Statement */
+            statement: string;
+            /** Superseded By */
+            superseded_by?: string | null;
+            /** Support Count */
+            support_count: number;
         };
         /** FindingOut */
         FindingOut: {
@@ -2027,6 +2093,17 @@ export interface components {
             title: string | null;
             /** Version */
             version: number;
+        };
+        /** ModelOut */
+        ModelOut: {
+            /** Assessments */
+            assessments?: components["schemas"]["AssessmentOut"][];
+            /** Dismissed */
+            dismissed?: components["schemas"]["FacetOut"][];
+            /** Facets */
+            facets?: {
+                [key: string]: components["schemas"]["FacetOut"][];
+            };
         };
         /** OptionIn */
         OptionIn: {
@@ -2866,6 +2943,28 @@ export interface components {
             /** Tokens Used */
             tokens_used: number;
         };
+        /** EvidenceOut */
+        memoryos__api__routes__decisions__EvidenceOut: {
+            /** Chunk Id */
+            chunk_id: string | null;
+            /** Chunk Ordinal */
+            chunk_ordinal: number | null;
+            /** External Key */
+            external_key: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Memory Id
+             * Format: uuid
+             */
+            memory_id: string;
+            relation: components["schemas"]["EvidenceRelation"];
+            /** Source Name */
+            source_name: string;
+        };
         /** VersionOut */
         memoryos__api__routes__evolution__VersionOut: {
             /** Adopted */
@@ -2992,6 +3091,18 @@ export interface components {
             occurred_at_source: string;
             /** Version */
             version: number;
+        };
+        /** EvidenceOut */
+        memoryos__api__routes__model__EvidenceOut: {
+            /** Kind */
+            kind: string;
+            /**
+             * Ref Id
+             * Format: uuid
+             */
+            ref_id: string;
+            /** Relation */
+            relation: string;
         };
         /** ChunkOut */
         memoryos__api__routes__search__ChunkOut: {
@@ -3804,6 +3915,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EvolutionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    show_model_get: {
+        parameters: {
+            query?: {
+                dimension?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    history_model__facet_id__history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                facet_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetOut"][];
                 };
             };
             /** @description Validation Error */
