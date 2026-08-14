@@ -47,6 +47,110 @@
         "title": "AffectedChunkOut",
         "type": "object"
       },
+      "AgentAskIn": {
+        "properties": {
+          "max_hops": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Hops"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "AgentAskIn",
+        "type": "object"
+      },
+      "AgentAskOut": {
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/CitationOut"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "cost": {
+            "$ref": "#/components/schemas/CostOut"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "hops": {
+            "title": "Hops",
+            "type": "integer"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "retry_after": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry After"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/StepOut"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "stopped_because": {
+            "title": "Stopped Because",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "question",
+          "answer",
+          "stopped_because",
+          "hops",
+          "cost"
+        ],
+        "title": "AgentAskOut",
+        "type": "object"
+      },
       "AnswerIn": {
         "description": "Everything a search takes, plus the generation budget.\n\nInherited rather than redeclared: an answer is a search with a model on the\nend, and two definitions of \"how do I filter\" is how they drift apart.",
         "properties": {
@@ -1130,6 +1234,34 @@
           "share"
         ],
         "title": "ContributionOut",
+        "type": "object"
+      },
+      "CostOut": {
+        "properties": {
+          "completion_tokens": {
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "model_calls": {
+            "title": "Model Calls",
+            "type": "integer"
+          },
+          "prompt_tokens": {
+            "title": "Prompt Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "model_calls",
+          "prompt_tokens",
+          "completion_tokens",
+          "duration_ms"
+        ],
+        "title": "CostOut",
         "type": "object"
       },
       "CreateSource": {
@@ -3935,6 +4067,72 @@
         "title": "StatsOut",
         "type": "object"
       },
+      "StepOut": {
+        "properties": {
+          "args": {
+            "additionalProperties": true,
+            "title": "Args",
+            "type": "object"
+          },
+          "citations": {
+            "default": 0,
+            "title": "Citations",
+            "type": "integer"
+          },
+          "duration_ms": {
+            "default": 0,
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "novel": {
+            "default": true,
+            "title": "Novel",
+            "type": "boolean"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "thought": {
+            "title": "Thought",
+            "type": "string"
+          },
+          "tokens": {
+            "default": 0,
+            "title": "Tokens",
+            "type": "integer"
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "thought",
+          "tool"
+        ],
+        "title": "StepOut",
+        "type": "object"
+      },
       "SuccessRateOut": {
         "properties": {
           "failed": {
@@ -4922,6 +5120,47 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/agent/ask": {
+      "post": {
+        "operationId": "ask_agent_ask_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentAskIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentAskOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ask",
+        "tags": [
+          "agent"
+        ]
+      }
+    },
     "/answer": {
       "post": {
         "operationId": "answer_answer_post",
@@ -6037,6 +6276,7 @@
     },
     "/memories/{memory_id}": {
       "get": {
+        "description": "One memory, its chunks and its versions.\n\n**The three queries this used to run now live in `application/memories.py`.**\nM7.0 needed the same thing for a tool and found there was no use case to\ncall \u2014 the whole capability was in this function body, reachable only over\nHTTP. Nothing about the response changed; the query moved down a layer and\nthis became what a route should be, which is a mapping from a domain type to\na wire type.",
         "operationId": "get_memory_memories__memory_id__get",
         "parameters": [
           {
