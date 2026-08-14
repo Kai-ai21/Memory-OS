@@ -162,6 +162,8 @@ export type Calibration = Ok<paths["/patterns/calibration"]["get"]>;
 export type CalibrationBand = Calibration["decisions"][number];
 export type Reflection = Ok<paths["/reflections"]["get"]>[number];
 export type ReflectionCitation = Reflection["citations"][number];
+export type Surfaced = Ok<paths["/surfacing"]["get"]>[number];
+export type SurfaceReason = Surfaced["reason"];
 
 export interface SearchArgs {
   q: string;
@@ -332,6 +334,31 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ reason }),
     }),
+
+  /**
+   * What the system volunteered, and — with `includeRefused` — every time it
+   * decided not to.
+   *
+   * The default is the panel's view: shown, unjudged, recent. The other one is
+   * the answer to "why didn't it show me anything", which is a question only a
+   * push system has to be able to answer and only a log of refusals can.
+   */
+  surfacing: (includeRefused = false, focus?: string) => {
+    const params = new URLSearchParams();
+    if (includeRefused) params.set("include_refused", "true");
+    if (focus) params.set("focus", focus);
+    const query = params.toString();
+    return request<Surfaced[]>(`/surfacing${query ? `?${query}` : ""}`);
+  },
+
+  // Two calls rather than one taking a verdict, mirroring the API. They are not
+  // symmetric: dismissing raises this focus's bar and suppresses the same
+  // context for a month, marking useful lowers it and does nothing else.
+  dismissSurfacing: (id: string) =>
+    request<null>(`/surfacing/${id}/dismiss`, { method: "POST" }),
+
+  markSurfacingUseful: (id: string) =>
+    request<null>(`/surfacing/${id}/useful`, { method: "POST" }),
 };
 
 export interface TimelineArgs {

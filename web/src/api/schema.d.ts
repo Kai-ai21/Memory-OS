@@ -65,6 +65,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Context
+         * @description Cached context for a focus, or `202` and a build enqueued.
+         *
+         *     The fingerprint is recomputed on every call — two indexed aggregates — so a
+         *     sync that landed a second ago invalidates the entry rather than being served
+         *     around. That cost is the price of the cache being safe rather than merely
+         *     fast, and it is four orders of magnitude below the assembly it avoids.
+         */
+        get: operations["get_context_context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/decisions": {
         parameters: {
             query?: never;
@@ -229,6 +254,30 @@ export interface paths {
         get: operations["get_doctor_doctor_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Event
+         * @description Accept one event, store it, and enqueue a job per subscribed handler.
+         *
+         *     `202` rather than `201`: the event is recorded and the work is queued, and
+         *     the work has not happened. A `201` would promise a created *result*, which is
+         *     exactly the thing that has not been produced yet.
+         */
+        post: operations["ingest_event_events_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -721,6 +770,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/surfacing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Surfacing
+         * @description Recent surfacing decisions. Shown-and-unjudged by default.
+         */
+        get: operations["list_surfacing_surfacing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/surfacing/{surfacing_id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss
+         * @description Not worth having been shown. Raises this focus's bar for a month.
+         */
+        post: operations["dismiss_surfacing__surfacing_id__dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/surfacing/{surfacing_id}/useful": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark Useful
+         * @description Worth having been shown. Lowers this focus's bar, slowly.
+         */
+        post: operations["mark_useful_surfacing__surfacing_id__useful_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/timeline": {
         parameters: {
             query?: never;
@@ -826,7 +935,7 @@ export interface components {
             answer: string;
             /** Citations */
             citations?: components["schemas"]["CitationOut"][];
-            context: components["schemas"]["ContextOut"];
+            context: components["schemas"]["memoryos__api__routes__answer__ContextOut"];
             /** Marked Answer */
             marked_answer: string;
             /** Model Id */
@@ -1107,16 +1216,44 @@ export interface components {
             /** Version */
             version: number;
         };
-        /** ContextOut */
-        ContextOut: {
-            /** Dropped */
-            dropped: number;
-            /** Passages */
-            passages: number;
-            /** Token Budget */
-            token_budget: number;
-            /** Tokens Used */
-            tokens_used: number;
+        /**
+         * ContextCategory
+         * @description What kind of thing an item is, for the purpose of not returning twelve.
+         *
+         *     Coarser than `MemoryKind` on purpose. The cap exists to stop one *sort* of
+         *     material crowding out another, and a reader does not experience a note and a
+         *     document as different sorts — they experience "prose about the system" versus
+         *     "the code" versus "a decision somebody recorded". Splitting those finely
+         *     would give each a cap so generous that nothing ever hits one.
+         *
+         *     `DECISION` is the category with no `MemoryKind` behind it, and it is the
+         *     reason this enum exists rather than reusing that one. A decision is not a
+         *     memory: it has no chunks, no embedding and no place in the corpus, and it is
+         *     frequently the single most useful item in a context.
+         * @enum {string}
+         */
+        ContextCategory: "code" | "prose" | "decision" | "other";
+        /** ContextItemOut */
+        ContextItemOut: {
+            category: components["schemas"]["ContextCategory"];
+            /** Decision Id */
+            decision_id?: string | null;
+            /** External Key */
+            external_key?: string | null;
+            /** Memory Id */
+            memory_id?: string | null;
+            /** Position */
+            position: number;
+            /** Sources */
+            sources: {
+                [key: string]: number;
+            };
+            /** Text */
+            text: string;
+            /** Title */
+            title: string;
+            /** Tokens */
+            tokens: number;
         };
         /** ContributionOut */
         ContributionOut: {
@@ -1343,6 +1480,63 @@ export interface components {
             healthy: boolean;
             /** Model Window */
             model_window: number;
+        };
+        /** EventIn */
+        EventIn: {
+            /** Dedupe Key */
+            dedupe_key?: string | null;
+            /** Kind */
+            kind: string;
+            /** Occurred At */
+            occurred_at?: string | null;
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            };
+            /** Source */
+            source: string;
+        };
+        /**
+         * EventKind
+         * @description What happened outside, in the four shapes this system accepts.
+         *
+         *     Closed, and validated at the edge rather than stored and sorted out later.
+         *     An unknown kind is refused with the list of known ones rather than written —
+         *     a row nothing subscribes to is a row that sits unprocessed forever, and a
+         *     queue full of those is indistinguishable from a queue that is behind.
+         *
+         *     `EDITOR_OPENED` and `FILE_FOCUSED` are the high-volume pair and the reason
+         *     both defences above exist. `MEETING_UPCOMING` is the one with a deadline
+         *     attached, and the one whose latency actually matters. `MANUAL` is a person
+         *     saying "do it now", which is also what makes the pipeline testable without
+         *     a plugin.
+         * @enum {string}
+         */
+        EventKind: "editor_opened" | "file_focused" | "meeting_upcoming" | "manual";
+        /** EventOut */
+        EventOut: {
+            /** Created */
+            created: boolean;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Jobs */
+            jobs: number;
+            kind: components["schemas"]["EventKind"];
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /**
+             * Received At
+             * Format: date-time
+             */
+            received_at: string;
+            /** Source */
+            source: string;
         };
         /** EvidenceIn */
         EvidenceIn: {
@@ -2332,6 +2526,48 @@ export interface components {
             /** Unsupported */
             unsupported?: string[];
         };
+        /**
+         * SurfaceReason
+         * @description Why context was surfaced, or why it was not.
+         *
+         *     **Recorded for both outcomes, which is the point.** "Why didn't it show me
+         *     anything?" is the question a proactive system has to be able to answer, and
+         *     a system that only logs what it did cannot: silence looks identical whether
+         *     the gate refused, the corpus was empty, or nothing ever ran.
+         * @enum {string}
+         */
+        SurfaceReason: "cleared" | "no_context" | "nothing_new" | "below_threshold" | "dismissed" | "already_surfaced";
+        /** SurfacedOut */
+        SurfacedOut: {
+            /** Decided At */
+            decided_at: string;
+            /** Explanation */
+            explanation: string;
+            /** Focus */
+            focus: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Item Count */
+            item_count: number;
+            reason: components["schemas"]["SurfaceReason"];
+            /** Score */
+            score: number;
+            /** Surfaced */
+            surfaced: boolean;
+            /** Threshold */
+            threshold: number;
+            /** Top Key */
+            top_key: string | null;
+            /** Top Title */
+            top_title: string | null;
+            /** Trigger Kind */
+            trigger_kind: string | null;
+            /** Verdict */
+            verdict: string | null;
+        };
         /** SyncAccepted */
         SyncAccepted: {
             /** Full */
@@ -2434,6 +2670,30 @@ export interface components {
             sentences?: components["schemas"]["SentenceOut"][];
             /** Supported Sentences */
             supported_sentences: number;
+        };
+        /** ContextOut */
+        memoryos__api__routes__answer__ContextOut: {
+            /** Dropped */
+            dropped: number;
+            /** Passages */
+            passages: number;
+            /** Token Budget */
+            token_budget: number;
+            /** Tokens Used */
+            tokens_used: number;
+        };
+        /** ContextOut */
+        memoryos__api__routes__context__ContextOut: {
+            /** Focus */
+            focus: string;
+            /** Items */
+            items: components["schemas"]["ContextItemOut"][];
+            /** Ready */
+            ready: boolean;
+            /** Token Budget */
+            token_budget: number;
+            /** Tokens Used */
+            tokens_used: number;
         };
         /** VersionOut */
         memoryos__api__routes__evolution__VersionOut: {
@@ -2676,6 +2936,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AssumptionStatsOut"];
+                };
+            };
+        };
+    };
+    get_context_context_get: {
+        parameters: {
+            query: {
+                focus: string;
+                token_budget?: number;
+                max_items?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["memoryos__api__routes__context__ContextOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -2995,6 +3288,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DoctorOut"];
+                };
+            };
+        };
+    };
+    ingest_event_events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EventIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3756,6 +4082,97 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StatsOut"];
+                };
+            };
+        };
+    };
+    list_surfacing_surfacing_get: {
+        parameters: {
+            query?: {
+                focus?: string | null;
+                include_refused?: boolean;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SurfacedOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dismiss_surfacing__surfacing_id__dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                surfacing_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_useful_surfacing__surfacing_id__useful_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                surfacing_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

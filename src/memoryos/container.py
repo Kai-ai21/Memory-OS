@@ -40,6 +40,7 @@ from memoryos.application.events import (
     EventBus,
     LogEventHandler,
     build_default_bus,
+    focus_of,
 )
 from memoryos.application.extraction import ExtractEntities
 from memoryos.application.graph_expand import ExpandThroughGraph
@@ -52,6 +53,7 @@ from memoryos.application.relationships import ExtractRelationships
 from memoryos.application.replay import ReplayCorpus
 from memoryos.application.resolution import DEFAULT_THRESHOLD, ResolveEntities
 from memoryos.application.search import FusionWeights, SearchMemories
+from memoryos.application.surfacing import build_handler as build_surfacing_handler
 from memoryos.application.sync import SyncSource
 from memoryos.config import Settings
 from memoryos.domain.events import Event
@@ -166,7 +168,7 @@ class Container:
         )
 
     def event_bus(self) -> EventBus:
-        """The event bus, with M6.0's one handler subscribed.
+        """The event bus, with every handler this build knows about.
 
         Built per call rather than cached, and that is safe because the bus holds
         no state at all beyond its subscriptions — it enqueues into a transaction
@@ -180,6 +182,17 @@ class Container:
                 # constructing it loads the embedder — and a deployment that only
                 # receives events should not pay for a model it may never use.
                 ContextEventHandler(_LazyAssembler(self)),
+                # M6.3, and a separate handler rather than a branch inside the
+                # one above. They want opposite things from a failure: assembly
+                # that raises should retry with M1.2's backoff, and a gate that
+                # raises must not take the assembly down with it, because the
+                # cached context is the useful half and the interruption is the
+                # speculative one. One job each is what makes that true.
+                build_surfacing_handler(
+                    self.database.session_factory,
+                    self.assemble_context,
+                    focus_of,
+                ),
             ]
         )
 

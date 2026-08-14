@@ -20,6 +20,7 @@ import { ReviewQueue } from "./features/decisions/ReviewQueue";
 import { JudgementsPage } from "./features/judgements/JudgementsPage";
 import { MemoryPage } from "./features/memory/MemoryPage";
 import { SearchPage } from "./features/search/SearchPage";
+import { SurfacingPage } from "./features/surfacing/SurfacingPage";
 import { TimelinePage } from "./features/timeline/TimelinePage";
 
 export function App() {
@@ -34,6 +35,13 @@ export function App() {
             <Tab to="/decisions">decisions</Tab>
             <Tab to="/judgements">judgements</Tab>
             <Tab to="/corpus">corpus</Tab>
+            {/* A tab, unlike reflections, and the difference is what the page
+                contains. A reflection is a claim about somebody's judgement and
+                volunteering it is the failure M5.4 was built to avoid. This is a
+                record of what the system already interrupted them with, and
+                hiding the place to say "that was noise" is how the dismissal
+                rate stays flattering. */}
+            <Tab to="/surfacing">surfacing</Tab>
           </nav>
         </div>
         {/* Which API is being read. On a tool with several environments, not
@@ -64,6 +72,7 @@ export function App() {
           <Route path="/decisions/:id" element={<DecisionPage />} />
           <Route path="/judgements" element={<JudgementsPage />} />
           <Route path="/corpus" element={<CorpusPage />} />
+          <Route path="/surfacing" element={<SurfacingPage />} />
           <Route
             path="*"
             element={<p className="meta text-muted">no such page</p>}

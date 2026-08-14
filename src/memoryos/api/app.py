@@ -16,6 +16,7 @@ from memoryos.api.routes import (
     search,
     sources,
     stats,
+    surfacing,
     timeline,
 )
 from memoryos.config import Settings, get_settings
@@ -68,6 +69,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # M6.2's read path for the editor panel. Serves the cache and enqueues on a
     # miss; it never assembles, because assembly loads two models.
     app.include_router(context.router)
+    # M6.3's feedback path. Reads the log of what was volunteered and takes the
+    # two clicks that judge it; nothing here can cause a surfacing, which is the
+    # property that keeps push and pull from blurring into each other.
+    app.include_router(surfacing.router)
     return app
 
 

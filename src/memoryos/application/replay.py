@@ -182,6 +182,29 @@ USER_AUTHORED_TABLES: frozenset[str] = frozenset(
         # never truncated, so neither needs the snapshot the evidence tables do.
         "reflections",
         "reflection_citations",
+        # M6.3, and the first table in this set whose *origin* is operational.
+        #
+        # Everything else here was written by a person on purpose. A surfacing
+        # decision is written by the gate, unasked, at the rate an editor fires
+        # events — which is exactly the description `OPERATIONAL_TABLES` opens
+        # with, and where the majority of these rows belong on their own merits.
+        #
+        # Two columns move the whole table. `dismissed_at` and `acted_on_at` are
+        # somebody having judged what they were shown, they exist nowhere else,
+        # and `application/surfacing.py` *reads* them: a focus whose context is
+        # dismissed repeatedly gets a higher bar. So a replay that truncated this
+        # would un-dismiss every dismissal and reset every adapted threshold to
+        # its default — and the next trigger would volunteer precisely what
+        # somebody had already refused, which is the failure M6.3 exists to
+        # prevent, arriving by way of the rebuild.
+        #
+        # The same shape as `patterns` in M5.3: most of it derivable, two columns
+        # not, and the two decide. The refusal rows come along for the ride.
+        #
+        # No snapshot needed. `trigger_id` points at `events` and is deliberately
+        # not a foreign key — see the model — so nothing here is reachable by a
+        # cascade from anything a replay truncates.
+        "surfacing_log",
     }
 )
 

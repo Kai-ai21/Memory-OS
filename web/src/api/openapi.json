@@ -169,7 +169,7 @@
             "type": "array"
           },
           "context": {
-            "$ref": "#/components/schemas/ContextOut"
+            "$ref": "#/components/schemas/memoryos__api__routes__answer__ContextOut"
           },
           "marked_answer": {
             "title": "Marked Answer",
@@ -1002,32 +1002,90 @@
         "title": "CitationOut",
         "type": "object"
       },
-      "ContextOut": {
+      "ContextCategory": {
+        "description": "What kind of thing an item is, for the purpose of not returning twelve.\n\nCoarser than `MemoryKind` on purpose. The cap exists to stop one *sort* of\nmaterial crowding out another, and a reader does not experience a note and a\ndocument as different sorts \u2014 they experience \"prose about the system\" versus\n\"the code\" versus \"a decision somebody recorded\". Splitting those finely\nwould give each a cap so generous that nothing ever hits one.\n\n`DECISION` is the category with no `MemoryKind` behind it, and it is the\nreason this enum exists rather than reusing that one. A decision is not a\nmemory: it has no chunks, no embedding and no place in the corpus, and it is\nfrequently the single most useful item in a context.",
+        "enum": [
+          "code",
+          "prose",
+          "decision",
+          "other"
+        ],
+        "title": "ContextCategory",
+        "type": "string"
+      },
+      "ContextItemOut": {
         "properties": {
-          "dropped": {
-            "title": "Dropped",
+          "category": {
+            "$ref": "#/components/schemas/ContextCategory"
+          },
+          "decision_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Id"
+          },
+          "external_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Key"
+          },
+          "memory_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Id"
+          },
+          "position": {
+            "title": "Position",
             "type": "integer"
           },
-          "passages": {
-            "title": "Passages",
-            "type": "integer"
+          "sources": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Sources",
+            "type": "object"
           },
-          "token_budget": {
-            "title": "Token Budget",
-            "type": "integer"
+          "text": {
+            "title": "Text",
+            "type": "string"
           },
-          "tokens_used": {
-            "title": "Tokens Used",
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "tokens": {
+            "title": "Tokens",
             "type": "integer"
           }
         },
         "required": [
-          "passages",
-          "dropped",
-          "token_budget",
-          "tokens_used"
+          "position",
+          "title",
+          "category",
+          "text",
+          "tokens",
+          "sources"
         ],
-        "title": "ContextOut",
+        "title": "ContextItemOut",
         "type": "object"
       },
       "ContributionOut": {
@@ -1666,6 +1724,110 @@
           "model_window"
         ],
         "title": "DoctorOut",
+        "type": "object"
+      },
+      "EventIn": {
+        "properties": {
+          "dedupe_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dedupe Key"
+          },
+          "kind": {
+            "minLength": 1,
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "source": {
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "source"
+        ],
+        "title": "EventIn",
+        "type": "object"
+      },
+      "EventKind": {
+        "description": "What happened outside, in the four shapes this system accepts.\n\nClosed, and validated at the edge rather than stored and sorted out later.\nAn unknown kind is refused with the list of known ones rather than written \u2014\na row nothing subscribes to is a row that sits unprocessed forever, and a\nqueue full of those is indistinguishable from a queue that is behind.\n\n`EDITOR_OPENED` and `FILE_FOCUSED` are the high-volume pair and the reason\nboth defences above exist. `MEETING_UPCOMING` is the one with a deadline\nattached, and the one whose latency actually matters. `MANUAL` is a person\nsaying \"do it now\", which is also what makes the pipeline testable without\na plugin.",
+        "enum": [
+          "editor_opened",
+          "file_focused",
+          "meeting_upcoming",
+          "manual"
+        ],
+        "title": "EventKind",
+        "type": "string"
+      },
+      "EventOut": {
+        "properties": {
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "jobs": {
+            "title": "Jobs",
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EventKind"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "received_at": {
+            "format": "date-time",
+            "title": "Received At",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "source",
+          "occurred_at",
+          "received_at",
+          "created",
+          "jobs"
+        ],
+        "title": "EventOut",
         "type": "object"
       },
       "EvidenceIn": {
@@ -3973,6 +4135,120 @@
         "title": "SummaryOut",
         "type": "object"
       },
+      "SurfaceReason": {
+        "description": "Why context was surfaced, or why it was not.\n\n**Recorded for both outcomes, which is the point.** \"Why didn't it show me\nanything?\" is the question a proactive system has to be able to answer, and\na system that only logs what it did cannot: silence looks identical whether\nthe gate refused, the corpus was empty, or nothing ever ran.",
+        "enum": [
+          "cleared",
+          "no_context",
+          "nothing_new",
+          "below_threshold",
+          "dismissed",
+          "already_surfaced"
+        ],
+        "title": "SurfaceReason",
+        "type": "string"
+      },
+      "SurfacedOut": {
+        "properties": {
+          "decided_at": {
+            "title": "Decided At",
+            "type": "string"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "focus": {
+            "title": "Focus",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "item_count": {
+            "title": "Item Count",
+            "type": "integer"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/SurfaceReason"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "surfaced": {
+            "title": "Surfaced",
+            "type": "boolean"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "number"
+          },
+          "top_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top Key"
+          },
+          "top_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top Title"
+          },
+          "trigger_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Kind"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          }
+        },
+        "required": [
+          "id",
+          "focus",
+          "reason",
+          "explanation",
+          "score",
+          "threshold",
+          "top_key",
+          "top_title",
+          "item_count",
+          "trigger_kind",
+          "decided_at",
+          "surfaced",
+          "verdict"
+        ],
+        "title": "SurfacedOut",
+        "type": "object"
+      },
       "SyncAccepted": {
         "properties": {
           "full": {
@@ -4195,6 +4471,70 @@
           "grounded"
         ],
         "title": "VerificationOut",
+        "type": "object"
+      },
+      "memoryos__api__routes__answer__ContextOut": {
+        "properties": {
+          "dropped": {
+            "title": "Dropped",
+            "type": "integer"
+          },
+          "passages": {
+            "title": "Passages",
+            "type": "integer"
+          },
+          "token_budget": {
+            "title": "Token Budget",
+            "type": "integer"
+          },
+          "tokens_used": {
+            "title": "Tokens Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "passages",
+          "dropped",
+          "token_budget",
+          "tokens_used"
+        ],
+        "title": "ContextOut",
+        "type": "object"
+      },
+      "memoryos__api__routes__context__ContextOut": {
+        "properties": {
+          "focus": {
+            "title": "Focus",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ContextItemOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "token_budget": {
+            "title": "Token Budget",
+            "type": "integer"
+          },
+          "tokens_used": {
+            "title": "Tokens Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "focus",
+          "ready",
+          "token_budget",
+          "tokens_used",
+          "items"
+        ],
+        "title": "ContextOut",
         "type": "object"
       },
       "memoryos__api__routes__evolution__VersionOut": {
@@ -4722,6 +5062,74 @@
         ]
       }
     },
+    "/context": {
+      "get": {
+        "description": "Cached context for a focus, or `202` and a build enqueued.\n\nThe fingerprint is recomputed on every call \u2014 two indexed aggregates \u2014 so a\nsync that landed a second ago invalidates the entry rather than being served\naround. That cost is the price of the cache being safe rather than merely\nfast, and it is four orders of magnitude below the assembly it avoids.",
+        "operationId": "get_context_context_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "focus",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Focus",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token_budget",
+            "required": false,
+            "schema": {
+              "default": 4000,
+              "maximum": 32000,
+              "minimum": 1,
+              "title": "Token Budget",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_items",
+            "required": false,
+            "schema": {
+              "default": 12,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Max Items",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/memoryos__api__routes__context__ContextOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Context",
+        "tags": [
+          "context"
+        ]
+      }
+    },
     "/decisions": {
       "get": {
         "operationId": "list_decisions_decisions_get",
@@ -5217,6 +5625,48 @@
         "summary": "Get Doctor",
         "tags": [
           "stats"
+        ]
+      }
+    },
+    "/events": {
+      "post": {
+        "description": "Accept one event, store it, and enqueue a job per subscribed handler.\n\n`202` rather than `201`: the event is recorded and the work is queued, and\nthe work has not happened. A `201` would promise a created *result*, which is\nexactly the thing that has not been produced yet.",
+        "operationId": "ingest_event_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ingest Event",
+        "tags": [
+          "events"
         ]
       }
     },
@@ -6543,6 +6993,156 @@
         "summary": "Get Stats",
         "tags": [
           "stats"
+        ]
+      }
+    },
+    "/surfacing": {
+      "get": {
+        "description": "Recent surfacing decisions. Shown-and-unjudged by default.",
+        "operationId": "list_surfacing_surfacing_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "focus",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Focus"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_refused",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Refused",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SurfacedOut"
+                  },
+                  "title": "Response List Surfacing Surfacing Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Surfacing",
+        "tags": [
+          "surfacing"
+        ]
+      }
+    },
+    "/surfacing/{surfacing_id}/dismiss": {
+      "post": {
+        "description": "Not worth having been shown. Raises this focus's bar for a month.",
+        "operationId": "dismiss_surfacing__surfacing_id__dismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "surfacing_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Surfacing Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss",
+        "tags": [
+          "surfacing"
+        ]
+      }
+    },
+    "/surfacing/{surfacing_id}/useful": {
+      "post": {
+        "description": "Worth having been shown. Lowers this focus's bar, slowly.",
+        "operationId": "mark_useful_surfacing__surfacing_id__useful_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "surfacing_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Surfacing Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark Useful",
+        "tags": [
+          "surfacing"
         ]
       }
     },

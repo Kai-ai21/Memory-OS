@@ -29,14 +29,18 @@ measurement of how little decision-shaped content this corpus actually holds,
 [Outcomes](#outcomes), [Assumptions](#assumptions), [Patterns](#patterns),
 [Reflections](#reflections) and the
 [Phase 5 retrospective](#phase-5-retrospective).
-**Phase 6 begun**: M6.0 (the event bus and triggers) inverts the direction — an
-event arrives and the system queues work nobody asked for — M6.1 (context
-assembly) puts every earlier phase behind that trigger and decides what fits, and
+**Phase 6 complete**: M6.0 (the event bus and triggers) inverts the direction —
+an event arrives and the system queues work nobody asked for — M6.1 (context
+assembly) puts every earlier phase behind that trigger and decides what fits,
 M6.2 (client integration) gets real events from a file watcher and a VS Code
-extension and surfaces the context where the work happens.
-See [Events](#events), which measures whether a Postgres queue is fast enough to
-push through rather than guessing, [Context](#context), which is a budgeting
-problem wearing a retrieval problem's clothes, and [Clients](#clients).
+extension and surfaces the context where the work happens, and M6.3 (proactive
+surfacing) finally lets it speak first, which turns out to be a milestone about
+restraint. See [Events](#events), which measures whether a Postgres queue is fast
+enough to push through rather than guessing, [Context](#context), which is a
+budgeting problem wearing a retrieval problem's clothes, [Clients](#clients),
+[Surfacing](#surfacing) — whose headline number is a **54% dismissal rate**, the
+wrong side of the line it set for itself — and the
+[Phase 6 retrospective](#phase-6-retrospective).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -156,6 +160,7 @@ such table fails the build rather than losing its rows in a cascade nobody watch
 | `reflection_citations` | Each `[n]` in that prose, frozen to the decision it points at. |
 | `events`           | M6.0. Something that happened outside. Operational, discardable. |
 | `context_cache`    | M6.1. An assembled context, keyed on a corpus fingerprint.      |
+| `surfacing_log`    | M6.3. Every decision to speak, every decision not to, and what came of it. |
 
 Two design points carry the most weight:
 
@@ -3755,6 +3760,402 @@ itself, which settles for 350ms rather than 30s — would still produce one
 assembly per tab passed through. What would settle it is a week of watcher events
 with the panel's hit rate beside them.
 
+## Surfacing
+
+M6.3 lets the system speak first. **It is mostly a milestone about not doing
+that**, and the number it produced says why.
+
+```bash
+memoryos surfacing stats
+memoryos surfacing log [--focus src/memoryos/cli.py] [--surfaced] [--limit 30]
+memoryos surfacing check src/memoryos/application/search.py   # records nothing
+```
+
+### The bar for volunteering is much higher than the bar for answering
+
+A bad pull answer costs one query and you move on. A bad push teaches its reader
+to ignore the output — and a tool that interrupts with mediocre suggestions gets
+muted, after which its good suggestions are muted too. So the asymmetry is the
+whole design: **a false positive costs trust and a false negative costs nothing**,
+because the pull path is still one keystroke away.
+
+The threshold is a structural property rather than a tuned number, and that is
+the part worth keeping. RRF scores mean nothing on their own — `domain/fusion`
+says so and `domain/context` uses only their ordering — with one exception: the
+most a single ranking can contribute is `1 / (k + 1)`, by putting an item first.
+
+```
+SINGLE_ROUTE_BEST = 1 / (60 + 1) = 0.01639
+default threshold =        1.8x  = 0.02951
+```
+
+So the bar is expressed in multiples of that, and 1.8 is chosen for a property
+rather than for a score: **no item found by only one of the four sources can ever
+be surfaced, at any rank.** Search is happy to return such an item — it is a
+legitimate answer to a question somebody asked. Volunteering it is a guess.
+
+The floor of the adaptation is exactly `1.0x`, so no amount of positive feedback
+can buy that invariant away; the invariant holds at every point of the range
+rather than at the default.
+
+Two of Step 1's three conditions collapse into one function. "The top item's
+score exceeds a high threshold" and "the context contains something the reader
+does not already have open" are the same requirement applied to the same item, so
+the score considered is that of the best item that is *not* the focused file.
+Scoring the top item and separately asking whether anything is novel would let a
+context be surfaced on the strength of an item nobody would be shown.
+
+### Suppression compares overlap, not hashes
+
+Never the same context twice for the same focus inside a window; something
+dismissed stays quiet far longer.
+
+| | |
+| --- | --- |
+| repeat window | 4 hours |
+| dismissed window | **30 days** |
+
+Two orders of magnitude apart, and that ratio is the point rather than a tuning
+choice. Repeating something somebody explicitly refused is the fastest way to be
+ignored permanently, and there is no evidence at all that thirty days later they
+want it back — so the window is set by what a mistake costs, not by a half-life.
+
+**One item different is a different hash and the same interruption**, so
+similarity is Jaccard overlap of item keys at 0.6 rather than hash equality. The
+hash is kept as the row's identity — "is this exactly what you saw" — and the
+overlap answers "is this the same thing again". A gate that suppressed on the
+hash would be defeated by MMR swapping the eleventh item.
+
+Both windows are checked against every similar prior before either verdict wins,
+so a context shown twice and dismissed once is dismissed whichever row the query
+returned first. A suppression that depended on row order is one that stops
+holding the day somebody changes an `ORDER BY`.
+
+### Feedback moves the bar, per focus and asymmetrically
+
+```
+threshold = clamp(1.8 + 0.6 x dismissals - 0.2 x useful, 1.0, 4.0) x SINGLE_ROUTE_BEST
+```
+
+**Per focus, never global.** One noisy file must not be able to silence the whole
+system, and a global counter has that failure by construction: a fortnight of
+dismissals on a generated file would raise the bar everywhere, including on the
+focuses that were working.
+
+Asymmetric on purpose. One dismissal moves the bar three times as far as one
+"useful": three dismissals reach the ceiling and that focus goes quiet, and it
+takes nine good ones to walk the same distance back. Being wrong loudly costs
+more than being wrong quietly, so the system moves fast towards silence and
+slowly away from it.
+
+Linear in the counts rather than a ratio. A ratio would treat one dismissal out
+of one as identical to fifty out of fifty, so a single irritated click would
+silence a focus outright and a long good history could be erased by two bad days.
+
+### One row per decision, not one per interruption
+
+```
+surfacing_log(focus, context_hash, item_keys, top_key, top_title,
+              score, threshold, reason, trigger_kind, trigger_id,
+              decided_at, surfaced_at NULL, dismissed_at NULL, acted_on_at NULL)
+```
+
+The only departure from the schema this milestone specified, and the reason is
+the question a push system has to be able to answer: **why didn't it show me
+anything?** A table of things that were shown cannot answer it. Silence from a
+gate that refused looks identical to silence from a handler that never ran, or
+from a corpus with nothing to say. So `surfaced_at` is nullable, `reason` is not,
+and a refusal is a row carrying the score it reached and the bar it did not.
+Refusals are the majority of the table by design and they are the useful half.
+
+Three CHECK constraints keep the columns from disagreeing: `reason = 'cleared'`
+exactly when `surfaced_at IS NOT NULL`, feedback only on something surfaced, and
+never both verdicts on one row — "useful" and "dismissed" are the same click made
+two ways, and a row holding both would be counted twice in the dismissal rate.
+
+`score` and `threshold` are both stored even though the threshold is a pure
+function of that focus's feedback, because the function's *inputs* change:
+recompute it a week later and you get today's bar rather than the one the
+decision was made under.
+
+**Classified user-authored**, which is not where its origin would put it. Nothing
+rebuilds from this table and no replay reproduces a gate decision — by that test
+it belongs with `events` in `OPERATIONAL_TABLES`. Two columns decide otherwise.
+`dismissed_at` and `acted_on_at` are somebody's judgement, they exist nowhere
+else, and the threshold reads them: a replay that truncated this table would
+un-dismiss every dismissal, reset every adapted bar, and the next trigger would
+volunteer exactly what somebody had told it not to. That is the failure this
+milestone exists to prevent, arriving by way of the rebuild. Same shape as the
+argument `patterns` settled in M5.3.
+
+### It never assembles for a file focus
+
+`SurfaceOnTrigger` subscribes to three kinds and assembles for two, which is
+M6.1's precompute policy unchanged rather than a new one. A `MEETING_UPCOMING` is
+scheduled and an `EDITOR_OPENED` predicts a session. A `FILE_FOCUSED` fires on
+every file glanced at, so the gate **reads the cache and stops when it is empty**
+— a context somebody's panel already caused to be built is free to judge, and one
+nobody asked for stays unbuilt.
+
+That has a consequence worth stating plainly: on this deployment, surfacing for a
+focused file only happens where the editor panel is running, because the panel's
+`GET /context` is what fills the cache. A watcher on its own produces events that
+reach the handler and find nothing to judge.
+
+### The pre-meeting case, and the data source that is absent
+
+**No calendar is connected to this system.** No `meeting_upcoming` event has ever
+arrived from one, and every meeting event in this corpus was posted by hand. The
+handler works end to end against a manually emitted event — that is asserted in
+the tests and was run for real below — so the day a connector exists the path it
+feeds is already built rather than written under time pressure. Faking a demo
+here would have been the easiest thing in this milestone and the least honest.
+
+### Where it can interrupt you
+
+The VS Code panel gets a strip at the top with two links, and that is the loudest
+this system is allowed to be: **no notification, no modal, no badge, no status
+bar item.** M6.2 said M6.3 was where something would finally be allowed to
+interrupt; what was allowed is a strip in a panel the reader already has open,
+because a toast would be a second claim on attention for something already on
+screen.
+
+The two links are `command:` URIs rather than script. The panel keeps
+`enableScripts: false` — its excerpts are arbitrary text from your own repository
+— and `enableCommandUris` is scoped to the two commands the extension owns.
+
+The web UI gets a page where **refusals sit at the same visual weight as
+surfacings**, for the reason the patterns page puts counter-evidence beside
+evidence: a screen showing only the interruptions cannot distinguish a careful
+system from one that never ran. The dismissal rate is at the top, and above half
+the page says "this is noise" in those words.
+
+### What it did during real use
+
+Fourteen focuses, driven through the path the panel takes — `GET /context` then
+`POST /events` — for the files this milestone was actually written in. Then every
+surfaced item judged by hand on one question: *would I have wanted to be told
+this while working on that file?*
+
+```
+decisions      34        surfaced       13
+dismissed       7        acted on        6
+suppressed     13        unrated         0
+
+  already_surfaced   13
+  cleared            13
+  below_threshold     8
+
+  dismissal rate  54%  (7 of 13 shown)
+```
+
+Thirty-four decisions and thirteen interruptions: **the gate stayed quiet for
+62% of what it looked at**, which is the shape it was built to have. The
+dismissal rate is over the thirteen it did not stay quiet for.
+
+**54%. Above the line, so by this milestone's own standard the system is noise.**
+The six it got right were a file's own tests — `application/events.py` →
+`tests/integration/test_events.py`, `domain/surfacing.py` → its unit test, the
+two surfacing test files pointing at each other. The seven it got wrong were
+mostly the same two files: `cli.py` and `README.md`, which M6.1 already reported
+rank high for almost any focus, plus a test file adjacent to the right one.
+
+### The scores are all in one place, and that is the finding
+
+| focus | top item | score |
+| --- | --- | --- |
+| `application/cli.py` | `tests/integration/test_events.py` | 0.03252 |
+| `application/events.py` | `tests/integration/test_events.py` | 0.03226 |
+| `api/routes/surfacing.py` | `tests/integration/test_surfacing.py` | 0.03178 |
+| `application/context_engine.py` | `tests/unit/test_surfacing_gate.py` | 0.03154 |
+| `application/replay.py` | `README.md` | 0.02973 |
+| **the bar** | | **0.02951** |
+| `adapters/db/models.py` | `tests/integration/test_context_engine.py` | 0.02929 |
+| `container.py` | `src/memoryos/cli.py` | 0.02901 |
+
+**Every one of fourteen focuses landed within ±10% of the threshold**, and the
+two refusals missed by 0.0002 and 0.0005. A bar sitting inside that band is not
+separating good context from bad; it is slicing a nearly flat distribution, and
+whether a focus cleared it was close to arbitrary. That is why six of thirteen
+were useful — a bar that discriminated would not produce a coin flip.
+
+The cause is visible in the source reports: **one of the four "independent"
+routes is not about the focus at all.** M6.1's temporal source ranks the corpus
+by recency after its by-name half, so every file edited this week appears in
+every context at a high temporal rank. "Two independent routes agreed" therefore
+frequently means "retrieval mentioned it and it is recent" — and on a repository
+somebody is actively working in, that is nearly everything. The structural
+threshold is real; the independence it assumes is not.
+
+### The feedback loop, working on real events
+
+The clearest thing in this run is not the rate. Twenty seconds after `cli.py`'s
+surfacing was dismissed, the file watcher emitted a real `file_focused` for the
+same file, and:
+
+```
+2026-08-14 05:52:32  cleared           0.03252/0.02951   src/memoryos/cli.py
+2026-08-14 05:54:36  below_threshold   0.03252/0.03934   src/memoryos/cli.py
+```
+
+Twenty-two seconds, same context, same score, refused — because the bar for that
+one focus had moved and no other focus's had. It happened three more times
+unprompted while this section was being written: the watcher fired on `README.md`
+at 05:59, 06:01 and 06:02, and each was refused at `0.03033` against the
+`0.03934` that file had earned by being dismissed once.
+
+Thresholds after adaptation: `0.03934` for the seven dismissed focuses, `0.02623`
+for the six useful ones, `0.02951` for the two that were never shown anything.
+
+### Did I run it for a week?
+
+**No, and that is the honest answer rather than a caveat.**
+
+This ran for about an hour of real work, against the repository it was being
+written in, driving the requests the VS Code panel makes rather than sitting in
+VS Code. The file watcher ran alongside it for the same hour and emitted **one**
+event, which is M6.2's ratio holding — a watcher sees hundreds of filesystem
+notifications and almost none of them are worth an event.
+
+So the dismissal rate is thirteen interruptions judged by one reader over one
+hour. It is enough to say the gate is not discriminating, because six of thirteen
+is not close to a boundary. It is nowhere near enough to say what the rate would
+settle at, whether the per-focus adaptation converges, or — the question that
+actually matters — whether somebody leaves it switched on.
+
+**Would I have kept it on?** In the state it is in: no. Not because it is
+annoying — a strip in a panel is easy to ignore — but because at 54% I would stop
+reading the strip within a day, which is the failure mode this milestone opened
+by naming, arriving on schedule. The pull path stays on.
+
+### What the queue did under three handlers
+
+M6.0 measured the event bus with two handlers subscribed. M6.3 adds a third, and
+every `file_focused` now enqueues three jobs. Twenty events posted back to back
+against a warm worker:
+
+| | |
+| --- | --- |
+| POST throughput | 153 events/s (M6.0: 167/s with two handlers) |
+| queue latency, p50 | **0.747s** (M6.0: 0.218s) |
+| queue latency, p95 | 0.863s |
+| whole burst | 20 events, 60 jobs, 0.996s — **60 jobs/s** |
+
+The rise from 0.22s to 0.75s is the milestone's own work rather than the queue's:
+the surfacing handler does three indexed reads per event — the focus's feedback
+counts, its recent surfacings, and the context cache — where M6.0's handler wrote
+a log line. Postgres is still nowhere near the constraint.
+
+**The one number that looked alarming was not the queue.** During the session
+burst, `file_focused` events reached p50 71s and p95 188s. The cause was a single
+worker holding a rate-limited `extract_entities` job that sleeps 121 seconds
+*inside the handler*, while 98 jobs queued behind it. That is worker concurrency
+and handler design, not storage: a second worker process fixes it, and a broker
+would not have.
+
+## Phase 6 retrospective
+
+Four milestones: an event bus, context assembly, two client integrations, and a
+gate that decides whether to speak. The phase that inverts the direction of the
+whole system — everything through Phase 5 answers when asked, and this phase
+starts talking.
+
+### Does proactive context work, or is pull the right model?
+
+**On this corpus, pull is the right model, and the evidence is one number.** Six
+of thirteen volunteered items were worth having. A coin flip is not a feature,
+and the same six items were all reachable by `memoryos context <file>` in under
+two seconds whenever anybody actually wanted them.
+
+But the failure is more specific than "push does not work", and the specificity
+matters because it is fixable. Push failed here for a reason that has nothing to
+do with push: **the ranking underneath it does not separate good context from
+bad on this corpus.** Every one of fourteen focuses scored within ±10% of the
+threshold. Any gate placed in that band is arbitrary; a higher one would have
+been silent, a lower one would have surfaced everything, and neither would have
+been more correct. M6.1 said the same thing in its own words — two of five
+focuses were what it would have assembled by hand — and M6.3 is what that number
+looks like when a system acts on it unasked instead of showing it to somebody who
+asked.
+
+The three defences work. Deduplication, suppression and the per-focus threshold
+all did exactly what they were built to do, on real events: the same context was
+never offered twice, a dismissal moved one focus's bar and no other's, and twenty
+seconds after being dismissed the same context was refused at the same score. The
+plumbing is right. **The judgement it is asked to make is one this corpus cannot
+support**, and no amount of gating arithmetic fixes a ranking whose top items are
+all the same distance apart.
+
+There is a second, quieter finding. The gate's central claim — that requiring two
+independent routes to agree is a structural guarantee — is weaker than it reads,
+because one of the four routes is recency over the whole corpus. On a repository
+somebody is working in daily, "found by retrieval and recent" is most of the
+corpus. The invariant is real and the independence is not.
+
+### Would I build it this way again?
+
+**Yes for M6.0 through M6.2, and yes for M6.3 with the order changed.**
+
+The event bus is the piece I would keep unchanged. Dispatch enqueuing one job per
+handler rather than running handlers inline paid for itself three times in this
+phase: M6.3 added a third handler by writing a class and one line in the
+container, its failures cannot take assembly down, and the "one handler failing
+cannot block another" property is what made a gate that reads three tables safe
+to put behind the same event as a context assembly that loads two models.
+
+The order I would change is measurement before mechanism. M6.3 built a gate, a
+log, an adaptation loop, two clients' worth of feedback UI and a stats command
+before anybody had established that the underlying ranking could tell a good
+context from a mediocre one at the resolution a gate needs. **The
+score-distribution plot is thirty lines of SQL and it is the thing that decides
+whether this milestone can work at all.** Running it first would not have changed
+the design — the gate is the right gate — but it would have set the expectation
+correctly, and the milestone would have opened by saying "the bar has to sit
+inside a band where scores do not separate" rather than discovering it at the
+end.
+
+The thing I would keep from the process: **writing the refusals to the same table
+as the surfacings.** It cost one nullable column, and it is the only reason any
+of the above is knowable. A push feature that logs only what it did is a feature
+whose silence is unexplainable, and unexplainable silence is indistinguishable
+from broken.
+
+### What would make it genuinely useful rather than merely functional
+
+**A relevance signal that is about the focus.** The single change with the
+largest effect is removing global recency from the fusion when the focus is a
+path, or splitting the temporal source into its two halves — "other versions of
+this file" is about the focus and "what changed lately" is not. Three routes that
+are genuinely independent of each other would make "two agreed" mean what the
+threshold assumes it means, and would spread the score distribution enough for a
+bar to sit somewhere meaningful.
+
+**Structural neighbours, not just semantic ones.** Every item the gate got right
+was a file's own test, and it found them through prose similarity plus recency —
+by accident, essentially. `search.py` and `test_search.py` are neighbours by a
+naming convention, an import graph and a co-edit history, and none of the four
+sources knows any of those. A fifth source built on `git log --follow` pairs —
+files that change in the same commit — would find the right neighbour directly
+rather than hoping the embedder does, and unlike everything else in this phase it
+needs no model.
+
+**A trigger that predicts intent better than a file focus.** The pre-meeting case
+is the one where push is obviously right: the deadline is real, the context is
+worth having five minutes early and worthless five minutes late, and nobody can
+pull what they have not thought to ask for. It is also the one case with no data
+source. A calendar connector would test proactive context under the conditions it
+was designed for, rather than under the conditions a file watcher happens to
+provide — where the reader is already looking at the file, already has an editor
+open on it, and could have asked.
+
+**And the honest structural answer: make the pull path faster instead.** A
+`GET /context` cache hit is 4ms. If the pull path is one keystroke and effectively
+instant, the bar a push has to clear is not "is this relevant" but "is this worth
+more than the keystroke it saves" — and at 54% it is not close. Everything this
+phase built is still the right foundation for that, because the expensive parts —
+assembly, the budget, the cache, the fingerprint — serve both directions. Only the
+gate is push-specific, and it is 300 lines.
+
 ## Migrations
 
 ```bash
@@ -3839,6 +4240,16 @@ hash.
 | `POST /reflections/{id}/dismiss` | "This is wrong about me." Stops regeneration too.     |
 | `POST /events`             | Accept one external event and queue a job per handler.      |
 | `GET /context`             | Cached context for a focus, or `202` and a build enqueued.   |
+| `GET /surfacing`           | What was volunteered and, with `include_refused`, every refusal. |
+| `POST /surfacing/{id}/dismiss` | "Not worth showing me." Raises that focus's bar for a month. |
+| `POST /surfacing/{id}/useful`  | "Worth showing me." Lowers that focus's bar, slowly.      |
+
+There is deliberately no route that *causes* a surfacing. Volunteering something
+happens because an event arrived; an endpoint that could be called to produce an
+interruption would be a pull path wearing a push path's clothes, and the
+dismissal rate would then count interruptions nobody ever saw. `GET /surfacing`
+reads decisions already made, and `memoryos surfacing check` runs the gate
+without recording anything.
 
 There is no route that returns a reflection alongside anything else — not in a search result,
 not on a decision, not in a corpus summary. They are fetched from `GET /reflections` and nowhere

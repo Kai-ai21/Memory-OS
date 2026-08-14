@@ -6,8 +6,10 @@ command gets written in it; the commands here do not need one.
 
 import argparse
 import asyncio
+import contextlib
 import json
 import math
+import signal
 import textwrap
 import time
 from datetime import UTC, datetime, timedelta
@@ -46,6 +48,7 @@ from memoryos.application import (
     outcomes,
     patterns,
     reflections,
+    surfacing,
     temporal,
 )
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
@@ -104,6 +107,11 @@ from memoryos.domain.jobs import JobStatus, JobType, PermanentError, TransientEr
 from memoryos.domain.patterns import (
     DEFAULT_MIN_SUPPORT,
     REFLECTION_MIN_CONFIDENCE,
+)
+from memoryos.domain.surfacing import (
+    BASE_MULTIPLE,
+    EXPLANATIONS,
+    SINGLE_ROUTE_BEST,
 )
 from memoryos.domain.values import (
     DEFAULT_SEARCH_MODE,
@@ -1391,6 +1399,44 @@ def _stamp(moment: datetime | None) -> str:
     return "—" if moment is None else f"{moment:%Y-%m-%d %H:%M:%S}"
 
 
+def stop_on_interrupt() -> asyncio.Event:
+    """An event that Ctrl-C sets, for the commands that run until stopped.
+
+    **`except KeyboardInterrupt` inside a coroutine does not work, and both
+    long-running commands here shipped with one.** `asyncio.run` installs no
+    handler: the signal interrupts the *loop*, `KeyboardInterrupt` is raised
+    inside `runner.run` rather than inside the awaiting coroutine, and the
+    coroutine is cancelled instead. So the `except` clause never matched, the
+    exception escaped to the top level, and every `memoryos watch` ended with a
+    two-frame traceback and exit 130 — on a tool whose entire stated design
+    constraint is that a dev tool which throws at you gets uninstalled.
+
+    Worse than the traceback: the code *after* the `try` never ran either, so
+    the run summary the watcher exists to print — observed, filtered,
+    debounced, emitted — was unreachable on the only exit path a watcher has.
+    M6.2 reported those numbers from a log line, which is why nobody noticed.
+
+    `Worker._install_signal_handlers` has done this correctly since M1.2. This
+    is the same three lines, one module over.
+
+    The handler removes itself, so a second Ctrl-C is the default one again and
+    kills a process whose clean shutdown is itself stuck.
+    """
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def interrupt() -> None:
+        stop.set()
+        with contextlib.suppress(NotImplementedError, RuntimeError):
+            loop.remove_signal_handler(signal.SIGINT)
+
+    # Not available on every platform; a command that cannot be interrupted
+    # cleanly is still better than one that refuses to start.
+    with contextlib.suppress(NotImplementedError):
+        loop.add_signal_handler(signal.SIGINT, interrupt)
+    return stop
+
+
 def parse_moment(value: str, *, name: str) -> datetime:
     """A date or a timestamp on the command line, as an instant in UTC.
 
@@ -2662,7 +2708,10 @@ async def run_watch(
     print(f"api        {api_url}")
     print("\nCtrl-C to stop. The API being down is not an error here.\n")
 
-    stop = asyncio.Event()
+    # Set by SIGINT, which is what makes `WatchTree.run`'s `stop` parameter
+    # load-bearing rather than decorative — until now nothing ever set it, and
+    # the loop was ended by a cancellation instead. See `stop_on_interrupt`.
+    stop = stop_on_interrupt()
     try:
         async with httpx.AsyncClient() as client:
             watcher = WatchTree(
@@ -2674,8 +2723,6 @@ async def run_watch(
                 client=client,
             )
             report = await watcher.run(stop=stop)
-    except KeyboardInterrupt:
-        return 0
     finally:
         await database.dispose()
 
@@ -2897,15 +2944,21 @@ async def run_events_tail(
         # long-running follow does not re-render what it has already printed and
         # does not grow more expensive the longer it runs.
         since = rows[-1].received_at if rows else datetime.now(UTC)
-        while True:
-            await asyncio.sleep(1.0)
+        # The same fix as `run_watch`: the `except KeyboardInterrupt` that used
+        # to sit at the bottom of this function could never match, because the
+        # signal reaches `asyncio.run` rather than this coroutine. See
+        # `stop_on_interrupt`. Waiting on the event rather than sleeping also
+        # means Ctrl-C is noticed immediately rather than after the poll.
+        stop = stop_on_interrupt()
+        while not stop.is_set():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=1.0)
             fresh = await events.tail(sessions, kind=EventKind(kind) if kind else None,
                                       limit=200, since=since)
             for event in fresh:
                 _print_event(event)
             if fresh and fresh[-1].received_at is not None:
                 since = fresh[-1].received_at
-    except KeyboardInterrupt:
         return 0
     finally:
         await container.dispose()
@@ -2958,6 +3011,193 @@ async def run_events_stats(settings: Settings) -> int:
         "\nArrival is occurred_at -> received_at, kept separate on purpose: a slow "
         "queue is\nthis system's fault and a slow delivery is the network's."
     )
+    return 0
+
+
+# --------------------------------------------------------------------------
+# Surfacing
+# --------------------------------------------------------------------------
+
+
+async def run_surfacing_stats(settings: Settings) -> int:
+    """**The dismissal rate, and everything needed to read it honestly.**
+
+    A rate above 50% means the system is noise, and printing that sentence beside
+    the number is the point: a proactive feature reports its own failure or
+    nobody does. The rest of the table is what makes the rate interpretable —
+    surfaced against decided says how often the gate speaks at all, and the
+    per-focus thresholds say which focuses have talked themselves quiet.
+    """
+    # `Database.from_url` rather than `Container.build`, which is the lesson
+    # M6.2 learned for the watcher: building the container constructs the
+    # embedder and the cross-encoder, and counting rows needs neither. Ten
+    # seconds and half a gigabyte for four aggregates.
+    database = Database.from_url(settings.database_url, echo=settings.db_echo)
+    try:
+        report = await surfacing.stats(database.session_factory)
+    finally:
+        await database.dispose()
+
+    if report.decisions == 0:
+        print("no surfacing decisions recorded")
+        print(
+            "\nThe gate runs when an event arrives. Post one:\n"
+            "  curl -X POST localhost:8000/events -H 'Content-Type: application/json' \\\n"
+            "    -d '{\"kind\":\"file_focused\",\"source\":\"cli\",\"payload\":"
+            "{\"path\":\"README.md\"}}'"
+        )
+        return 0
+
+    print(f"decisions      {report.decisions}")
+    print(f"surfaced       {report.surfaced}")
+    print(f"dismissed      {report.dismissed}")
+    print(f"acted on       {report.acted_on}")
+    print(f"unrated        {report.unrated}")
+    print(f"suppressed     {report.suppressed}")
+
+    print("\n  why, over every decision")
+    for reason, count in report.by_reason.items():
+        print(f"  {reason.value:<18} {count:>5}   {EXPLANATIONS[reason]}")
+
+    rate = report.dismissal_rate
+    if rate is None:
+        print(
+            "\nNothing has been surfaced, so there is no dismissal rate. That is not "
+            "a\nfailure: the gate defaults to silence, and every refusal above has "
+            "its reason."
+        )
+    else:
+        print(f"\n  dismissal rate  {rate:.0%}  ({report.dismissed} of {report.surfaced} shown)")
+        rated = report.rated_dismissal_rate
+        if rated is not None:
+            print(
+                f"  among rated     {rated:.0%}  ({report.dismissed} of "
+                f"{report.dismissed + report.acted_on} judged)"
+            )
+        # Both denominators, and the harsher one is the headline. An
+        # interruption nobody bothered to rate was still an interruption, and
+        # counting only the judged ones lets a feature that is ignored score the
+        # same as one that is valued.
+        if rate > 0.5:
+            print(
+                "\n**Above 50%: this is noise.** More than half of what it "
+                "volunteered was\nrefused, and a tool that interrupts with "
+                "mediocre suggestions gets muted —\nafter which its good ones "
+                "are muted too."
+            )
+        elif rate == 0.5:
+            # Its own branch rather than rounding into one of the others,
+            # because this is the number the first real run produced and both
+            # neighbouring sentences would have been a lie about it.
+            print(
+                "\n**Exactly half.** Not above the line and not below it: one in two "
+                "of these\ninterruptions was worth having. A coin flip is not a "
+                "feature, and the honest\nreading is that the bar is not yet "
+                "discriminating."
+            )
+        else:
+            print(
+                "\nBelow 50%, which is the bar this milestone set for itself. It is "
+                "not\nevidence the feature is *useful*; it is evidence it is not "
+                "actively harmful."
+            )
+
+    if report.per_focus:
+        print("\n  per focus — the threshold each one has adapted to")
+        print(
+            f"  {'focus':<44} {'decided':>7} {'shown':>6} {'dism':>5} {'good':>5}"
+            f"  {'threshold':>9}"
+        )
+        for row in report.per_focus[:20]:
+            focus = row.focus if len(row.focus) <= 44 else "…" + row.focus[-43:]
+            marker = "" if row.dismissed == 0 and row.acted_on == 0 else "  *"
+            print(
+                f"  {focus:<44} {row.decisions:>7} {row.surfaced:>6} "
+                f"{row.dismissed:>5} {row.acted_on:>5}  {row.threshold:>9.5f}{marker}"
+            )
+        print(
+            f"\n  default threshold {BASE_MULTIPLE * SINGLE_ROUTE_BEST:.5f} "
+            f"({BASE_MULTIPLE}x the most one route can score). "
+            "Rows marked * have moved."
+        )
+    return 0
+
+
+async def run_surfacing_log(
+    settings: Settings, *, focus: str | None, limit: int, surfaced_only: bool
+) -> int:
+    """Every decision with its reason — which is how "why didn't it show me
+    anything?" is answered.
+
+    Refusals are the majority of these rows and they are the useful half. A
+    system that logged only what it did cannot distinguish a gate that refused
+    from a handler that never ran, and both look like silence.
+    """
+    # No container, for the reason `surfacing stats` gives: reading a log does
+    # not need two models loaded.
+    database = Database.from_url(settings.database_url, echo=settings.db_echo)
+    try:
+        rows = await surfacing.recent(
+            database.session_factory,
+            focus=focus,
+            surfaced_only=surfaced_only,
+            limit=limit,
+        )
+    finally:
+        await database.dispose()
+
+    if not rows:
+        if focus is None:
+            print("no surfacing decisions recorded")
+        else:
+            print(f"nothing decided for {focus!r}")
+        return 0
+
+    print(f"  {'when':<20} {'reason':<17} {'score/bar':>17}  focus")
+    for row in reversed(rows):
+        verdict = row.rated
+        mark = {"dismissed": "✗", "useful": "✓", None: " "}[verdict]
+        print(
+            f"  {_stamp(row.decided_at):<20} {row.reason.value:<17} "
+            f"{row.score:>7.5f}/{row.threshold:<7.5f} {mark} {row.focus}"
+        )
+        if row.top_title:
+            print(f"  {'':<20} └ {row.top_title}")
+    print(f"\n{len(rows)} decision(s), newest last. ✓ marked useful, ✗ dismissed.")
+    return 0
+
+
+async def run_surfacing_check(settings: Settings, *, focus: str) -> int:
+    """Run the gate against one focus and print the verdict. Records nothing.
+
+    **Deliberately read-only, and that is not a convenience.** A command that
+    could produce a surfacing would let a person manufacture the row that
+    suppresses the next real one, and the dismissal rate would then include
+    interruptions nobody ever saw. It assembles context — which the gate
+    normally receives rather than fetches — and reports what the decision would
+    be right now.
+    """
+    container = Container.build(settings)
+    sessions = container.database.session_factory
+    try:
+        assembled = await container.assemble_context()(
+            context_engine.ContextRequest(focus=focus)
+        )
+        decision = await surfacing.should_surface(sessions, assembled)
+    finally:
+        await container.dispose()
+
+    verdict = "SURFACE" if decision.surface else "stay quiet"
+    print(f"{verdict}: {decision.reason.value}")
+    print(f"\n{decision.explanation}.")
+    print(f"\n  items assembled  {len(assembled.items)}")
+    if decision.top is not None:
+        print(f"  best new item    {decision.top.title}")
+        print(f"  found by         {decision.top.routes} of 4 sources")
+    print(f"  score            {decision.score:.5f}")
+    print(f"  threshold        {decision.threshold:.5f}")
+    print(f"  margin           {decision.margin:+.5f}")
+    print("\nNothing was recorded. This is the gate's opinion, not an interruption.")
     return 0
 
 
@@ -4209,6 +4449,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="events by kind, processed against pending, and the mean latency",
     )
 
+    surfacing_parser = commands.add_parser(
+        "surfacing", help="what was volunteered unasked, and what came of it"
+    )
+    surfacing_commands = surfacing_parser.add_subparsers(
+        dest="surfacing_command", required=True
+    )
+    surfacing_commands.add_parser(
+        "stats",
+        help="surfaced, dismissed, acted on, suppressed — and the dismissal rate",
+    )
+    surfacing_log = surfacing_commands.add_parser(
+        "log",
+        help="recent decisions with their reasons, refusals included",
+    )
+    surfacing_log.add_argument("--focus", help="only decisions about this focus")
+    surfacing_log.add_argument("--limit", type=int, default=20)
+    surfacing_log.add_argument(
+        "--surfaced",
+        action="store_true",
+        help="only what was actually shown, rather than every decision",
+    )
+    surfacing_check = surfacing_commands.add_parser(
+        "check",
+        help="run the gate against one focus without recording anything",
+    )
+    surfacing_check.add_argument("focus")
+
     reflect_parser = commands.add_parser(
         "reflect",
         help="describe a pattern in prose, with citations; refuses below the bar",
@@ -4813,6 +5080,21 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.events_command == "stats":
             return asyncio.run(run_events_stats(settings))
+
+    if args.command == "surfacing":
+        if args.surfacing_command == "stats":
+            return asyncio.run(run_surfacing_stats(settings))
+        if args.surfacing_command == "log":
+            return asyncio.run(
+                run_surfacing_log(
+                    settings,
+                    focus=args.focus,
+                    limit=args.limit,
+                    surfaced_only=args.surfaced,
+                )
+            )
+        if args.surfacing_command == "check":
+            return asyncio.run(run_surfacing_check(settings, focus=args.focus))
 
     if args.command == "reflect":
         if not args.all_patterns and args.pattern_id is None:

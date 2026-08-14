@@ -21,6 +21,7 @@ from sqlalchemy import (
     CheckConstraint,
     Computed,
     DateTime,
+    Float,
     ForeignKey,
     Identity,
     Index,
@@ -37,6 +38,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from memoryos.domain.events import EventKind
 from memoryos.domain.jobs import DEFAULT_MAX_ATTEMPTS, JobStatus
+from memoryos.domain.surfacing import SurfaceReason
 from memoryos.domain.values import (
     HEX64_PATTERN,
     AssumptionVerdict,
@@ -2568,4 +2570,108 @@ class ContextCache(Base):
         # sweep that removes dead rows, which is otherwise a full scan of the
         # table most likely to accumulate them.
         Index("ix_context_cache_expires", "expires_at"),
+    )
+
+
+class SurfacingLog(Base):
+    """Every decision to volunteer context, and every decision not to.
+
+    **One row per decision rather than one per interruption**, which is the only
+    thing here that is not what M6.3 asked for, and the reason is the question a
+    push system has to be able to answer: *why didn't it show me anything?* A
+    table of what was shown cannot answer it — silence looks the same whether the
+    gate refused, the corpus was empty, or nothing ever ran. So `surfaced_at` is
+    nullable, `reason` is not, and a refusal is a row carrying the score it
+    reached and the bar it did not.
+
+    `score` and `threshold` are both stored even though the threshold is a pure
+    function of this focus's feedback. That function's *inputs* change: recompute
+    it a week later and you get today's bar, not the one the decision was made
+    under, and the log would quietly start disagreeing with itself.
+
+    `item_keys` sits beside `context_hash` because the two answer different
+    questions. The hash is identity — is this exactly what you were shown — and
+    the keys are what makes similarity computable, since one item different is a
+    different hash and the same interruption. `domain/surfacing.overlap` is the
+    comparison.
+
+    **Classified user-authored**, which is not where its origin would put it.
+    Nothing rebuilds from this table and no replay reproduces a gate decision, so
+    by that test it belongs with `events` in `OPERATIONAL_TABLES`. Two columns
+    decide otherwise: `dismissed_at` and `acted_on_at` are a person's judgement,
+    they exist nowhere else, and `application/surfacing.py` reads them to raise
+    the bar on a focus whose context keeps being refused. Truncating this would
+    un-dismiss every dismissal and reset every adapted threshold, so the next
+    trigger would surface exactly what somebody had told it not to. Same shape as
+    the argument `patterns` settled in M5.3.
+
+    No foreign key to `events` despite `trigger_id`. `events` is operational and
+    a replay truncates it, so the constraint would either cascade away somebody's
+    dismissal or block the truncation. A dangling breadcrumb is the honest price
+    of pointing at a discardable table.
+    """
+
+    __tablename__ = "surfacing_log"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    focus: Mapped[str] = mapped_column(Text, nullable=False)
+    context_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    item_keys: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    # The best item that was not the file already open, so the log can say what
+    # was surfaced without re-assembling a context whose corpus has moved on.
+    top_key: Mapped[str | None] = mapped_column(Text)
+    top_title: Mapped[str | None] = mapped_column(Text)
+    # Double precision, unlike the REAL this schema uses for confidences. Those
+    # are opinions on a 0-1 scale; these are the two sides of a comparison
+    # somebody may re-run, and a value that does not round-trip exactly would
+    # make the row disagree with the decision it records.
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+    threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    trigger_kind: Mapped[str | None] = mapped_column(Text)
+    trigger_id: Mapped[UUID | None] = mapped_column(_UUID)
+    decided_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    surfaced_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    dismissed_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    acted_on_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+
+    __table_args__ = (
+        CheckConstraint("length(btrim(focus)) > 0", name="ck_surfacing_focus"),
+        CheckConstraint(
+            "reason IN ('"
+            + "', '".join(reason.value for reason in SurfaceReason)
+            + "')",
+            name="ck_surfacing_reason",
+        ),
+        # The verdict and the outcome are stored separately because the report
+        # needs both, and two columns that must agree eventually will not.
+        CheckConstraint(
+            "(reason = 'cleared') = (surfaced_at IS NOT NULL)",
+            name="ck_surfacing_reason_matches_outcome",
+        ),
+        CheckConstraint(
+            "surfaced_at IS NOT NULL OR (dismissed_at IS NULL AND acted_on_at IS NULL)",
+            name="ck_surfacing_feedback_needs_surfacing",
+        ),
+        # "Useful" and "dismissed" are the same click made two ways. A row
+        # holding both would be counted twice in the dismissal rate, which is
+        # the one number this milestone is judged on.
+        CheckConstraint(
+            "NOT (dismissed_at IS NOT NULL AND acted_on_at IS NOT NULL)",
+            name="ck_surfacing_one_verdict",
+        ),
+        # Partial: refusals are the majority of this table by design, and none
+        # of them suppress anything.
+        Index(
+            "ix_surfacing_focus_surfaced",
+            "focus",
+            "surfaced_at",
+            postgresql_where=text("surfaced_at IS NOT NULL"),
+        ),
+        Index("ix_surfacing_decided", "decided_at"),
+        Index("ix_surfacing_focus", "focus"),
     )

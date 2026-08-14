@@ -13,7 +13,7 @@
  * happened to contain.
  */
 
-import type { ContextItem, ContextResult } from "./client";
+import type { ContextItem, ContextResult, SurfacedItem } from "./client";
 
 export function escapeHtml(value: string): string {
   return value
@@ -46,6 +46,27 @@ export interface RenderOptions {
   webUrl: string;
   /** Shown in the footer. The milestone's requirement is a number, not a feel. */
   lastLatencyMs?: number;
+  /**
+   * What the gate volunteered for this focus and nobody has judged yet.
+   *
+   * Almost always empty, and that is the feature working. The panel is a pull
+   * surface — it shows this file's context because you opened the file — and
+   * this is the one part of it that says something without being asked.
+   */
+  surfaced?: SurfacedItem[];
+}
+
+/**
+ * A `command:` link, which is how this panel gets a button without a script.
+ *
+ * The webview keeps `enableScripts: false` — the excerpts in it are arbitrary
+ * text from your own corpus, and a panel that ran script to collect two clicks
+ * would be a much larger surface than two clicks are worth. Command URIs are
+ * the mechanism VS Code provides for exactly this, and `enableCommandUris` is
+ * scoped to the two commands named here.
+ */
+export function commandLink(command: string, ...args: unknown[]): string {
+  return `command:${command}?${encodeURIComponent(JSON.stringify(args))}`;
 }
 
 export function renderPanel(
@@ -76,6 +97,12 @@ export function renderPanel(
   .quiet { color: var(--vscode-descriptionForeground); padding: 12px 0; }
   .tag { border: 1px solid var(--vscode-panel-border); padding: 0 4px;
          margin-right: 4px; border-radius: 2px; }
+  /* A left rule rather than a coloured box. The panel is already open; this
+     needs to be findable, not attention-grabbing. */
+  .surfaced { border-left: 2px solid var(--vscode-textLink-foreground);
+              padding: 6px 0 6px 8px; margin: 6px 0; }
+  .verdict { margin-top: 4px; }
+  .verdict a { margin-right: 10px; }
   a { color: var(--vscode-textLink-foreground); }
   footer { color: var(--vscode-descriptionForeground); font-size: 11px;
            padding-top: 8px; }
@@ -95,6 +122,7 @@ function renderBody(
   }
 
   const heading = `<h2>${escapeHtml(focus)}</h2>`;
+  const volunteered = renderSurfaced(options.surfaced ?? []);
 
   // Failure first, and it is a line rather than a banner. The API being stopped
   // is the normal state of a laptop; a red box every time you open the editor
@@ -110,11 +138,11 @@ function renderBody(
     // "Assembling" and not a spinner: the work is happening on a worker and
     // will still be there when this panel is next opened, so the honest word is
     // what is happening rather than an animation implying a wait.
-    return `${heading}<p class="quiet">Assembling context…</p>`;
+    return `${heading}${volunteered}<p class="quiet">Assembling context…</p>`;
   }
 
   if (result.items.length === 0) {
-    return `${heading}<p class="quiet">Nothing in the corpus relates to this file yet.</p>`;
+    return `${heading}${volunteered}<p class="quiet">Nothing in the corpus relates to this file yet.</p>`;
   }
 
   const items = result.items.map((item) => renderItem(item, options)).join("");
@@ -122,9 +150,43 @@ function renderBody(
     options.lastLatencyMs === undefined
       ? ""
       : ` · ${options.lastLatencyMs}ms`;
-  return `${heading}${items}<footer>${result.items.length} items · ${
+  return `${heading}${volunteered}${items}<footer>${result.items.length} items · ${
     result.tokensUsed
   }/${result.tokenBudget} tokens${latency}</footer>`;
+}
+
+/**
+ * The one part of this panel that says something nobody asked for.
+ *
+ * **It is a strip at the top of a panel you already opened, and that is the
+ * loudest this extension is allowed to be.** No notification, no modal, no
+ * badge, no sound. M6.2 said "M6.3 is where anything is allowed to interrupt";
+ * this is what was allowed, and the reason it is this small is that the panel
+ * is already open on the file — a toast would be a second claim on attention
+ * for something already on screen.
+ *
+ * The reason the gate gave is rendered beside the item, not behind a tooltip.
+ * It is what lets a reader decide the interruption was fair, and a reader who
+ * cannot do that either trusts everything or nothing.
+ */
+function renderSurfaced(items: SurfacedItem[]): string {
+  if (items.length === 0) {
+    return "";
+  }
+  return items
+    .map(
+      (item) => `<div class="surfaced">
+  <div class="meta"><span class="tag">surfaced</span>${escapeHtml(
+    item.explanation,
+  )}</div>
+  <div class="title">${escapeHtml(item.top_title ?? item.focus)}</div>
+  <div class="verdict">
+    <a href="${escapeHtml(commandLink("memoryos.markUseful", item.id))}">useful</a>
+    <a href="${escapeHtml(commandLink("memoryos.dismiss", item.id))}">dismiss</a>
+  </div>
+</div>`,
+    )
+    .join("");
 }
 
 function renderItem(item: ContextItem, options: RenderOptions): string {

@@ -12,7 +12,9 @@ watchdog's ability to notice a write — somebody else's code — and does it
 slowly and flakily.
 """
 
+import asyncio
 import json
+import signal
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,7 @@ from memoryos.application.watcher import (
     external_key_for,
     is_watchable,
 )
+from memoryos.cli import stop_on_interrupt
 from memoryos.domain.debounce import Debounce
 
 NOW = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
@@ -256,3 +259,33 @@ async def test_a_failure_still_consumes_the_debounce_window() -> None:
 
     assert attempts == 1
     assert watch.report.debounced == 4
+
+
+async def test_ctrl_c_sets_the_stop_event_rather_than_raising() -> None:
+    """The M6.2 defect this fixes, and it is not about the watcher's logic.
+
+    `run_watch` shipped with `except KeyboardInterrupt` around its loop. That
+    clause can never match: `asyncio.run` installs no signal handler, so SIGINT
+    raises inside `runner.run` rather than inside the awaiting coroutine, which
+    is cancelled instead. Every `memoryos watch` therefore ended in a two-frame
+    traceback and exit 130, and the run summary after the `try` was unreachable
+    on the only exit path a watcher has — which is why nobody noticed that the
+    numbers M6.2 reported came from a log line.
+
+    Asserted on the handler rather than on the CLI, because what broke is the
+    handler's absence and a test that spawned a process to send it a signal
+    would be testing the operating system.
+    """
+    stop = stop_on_interrupt()
+    assert not stop.is_set()
+
+    signal.raise_signal(signal.SIGINT)
+    # A loop signal handler runs when the loop next polls its wake-up pipe,
+    # which is a real iteration rather than the bare yield `sleep(0)` gives.
+    await asyncio.wait_for(stop.wait(), timeout=2)
+
+    assert stop.is_set()
+
+    # And a second one is the default handler again, so a shutdown that hangs
+    # can still be killed with a second Ctrl-C rather than needing SIGKILL.
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
