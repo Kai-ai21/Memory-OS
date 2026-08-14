@@ -270,14 +270,30 @@ class GeminiLanguageModel(LanguageModel):
                 + (f" ({reason})" if reason else "")
             )
 
+        # Gemini's own names for the two halves, and both are optional on the
+        # response type. `candidates_token_count` is the completion; there is a
+        # `total_token_count` as well, but it includes thinking tokens the other
+        # two do not, so adding the two halves here would disagree with the
+        # provider's own total. The two halves are what Groq reports, so the two
+        # halves are what this port carries.
+        metadata = response.usage_metadata
+        prompt_tokens = (metadata.prompt_token_count or 0) if metadata else 0
+        completion_tokens = (metadata.candidates_token_count or 0) if metadata else 0
         logger.info(
             "llm.turn",
             model=self._model_name,
             tools_offered=len(tools),
             tool_calls=len(calls),
             answer_chars=len(text),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
-        return ModelTurn(text=text, tool_calls=tuple(calls))
+        return ModelTurn(
+            text=text,
+            tool_calls=tuple(calls),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
 
     def _load(self) -> "genai.Client":
         if self._client is None:

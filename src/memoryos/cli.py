@@ -31,7 +31,7 @@ from memoryos.adapters.db.engine import Database
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.extraction.llm import ExtractionStats
 from memoryos.adapters.graph.schema import SCHEMA_VERSION
-from memoryos.adapters.llm.errors import MissingApiKey, RateLimited
+from memoryos.adapters.llm.errors import MissingApiKey
 from memoryos.application import (
     assumption_groups,
     assumption_suggest,
@@ -52,6 +52,7 @@ from memoryos.application import (
     surfacing,
     temporal,
 )
+from memoryos.application.agent.planner import Trajectory
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
 from memoryos.application.backfill import (
     enqueue_embedding,
@@ -3207,12 +3208,25 @@ async def run_surfacing_check(settings: Settings, *, focus: str) -> int:
 # --------------------------------------------------------------------------
 
 
-async def run_agent_ask(settings: Settings, *, question: str, explain: bool) -> int:
-    """One question, at most one tool call, one answer.
+async def run_agent_ask(
+    settings: Settings,
+    *,
+    question: str,
+    max_hops: int | None,
+    trace: bool,
+    explain: bool,
+) -> int:
+    """One question, several dependent retrievals, one answer.
 
-    **Which tool it chose is printed by default**, because that is what M7.0 is
-    judged on. A question routed to the wrong tool is a description problem, and
-    an agent that answered without saying how is one nobody can debug.
+    **`--trace` prints the trajectory**, which is the artifact M7.1 produces —
+    the answer is one field of it. Without the trace a bad answer is
+    unfalsifiable: four rewordings of the same search and one lucky hit produce
+    the same fluent paragraph as five dependent hops, and only the steps say
+    which happened.
+
+    Default output is the answer and its citations. The stop reason is printed
+    either way, because "it ran out of hops" and "it decided it had enough" are
+    different claims about the same paragraph.
     """
     container = Container.build(settings)
     try:
@@ -3224,62 +3238,89 @@ async def run_agent_ask(settings: Settings, *, question: str, explain: bool) -> 
         except MissingApiKey as exc:
             print(str(exc))
             return 1
-        try:
-            answer = await agent.ask(question)
-        except RateLimited as exc:
-            # The expected steady state on a free tier, not an exception — this
-            # project has said so since M2.6a. A traceback for it teaches the
-            # reader to ignore tracebacks.
-            wait = (
-                "" if exc.retry_after is None else f" Try again in {exc.retry_after:.0f}s."
-            )
-            print(f"The language model is rate limited.{wait}")
-            return 1
-        except (TransientError, PermanentError) as exc:
-            # One line, and the provider's own words. Every one of these is
-            # actionable — a dead model id, a missing quota, a network that is
-            # not there — and none of them is a bug in this system to be read
-            # off a stack.
-            print(f"The language model could not answer: {exc}")
-            return 1
+        trajectory = await agent.run(question, max_hops=max_hops)
     finally:
         await container.dispose()
 
-    chose = answer.tool or "no tool — answered directly"
-    print(f"tool: {chose}")
-    if answer.tool_arguments:
-        rendered = ", ".join(
-            f"{name}={value!r}" for name, value in sorted(answer.tool_arguments.items())
+    if trace:
+        _print_trace(trajectory)
+
+    if trajectory.answer is None:
+        # An ERROR trajectory still has its steps, and they are the useful part:
+        # a rate limit at hop five did not undo hops one to four.
+        wait = (
+            ""
+            if trajectory.retry_after is None
+            else f" Try again in {trajectory.retry_after:.0f}s."
         )
-        print(f"args: {rendered}")
-    print()
-    for line in textwrap.wrap(answer.answer, width=88) or [""]:
+        print(f"No answer: {trajectory.error}{wait}")
+        if not trace and trajectory.steps:
+            print(f"{trajectory.hops} hop(s) had completed. Re-run with --trace.")
+        return 1
+
+    for line in textwrap.wrap(trajectory.answer, width=88) or [""]:
         print(line)
 
-    if answer.truncated:
+    if trajectory.truncated:
         print(
-            "\nThe tool result was truncated, so this answer covers part of what "
+            "\nA tool result was truncated, so this answer covers part of what "
             "exists."
         )
 
-    if answer.citations:
+    if trajectory.citations:
         # Printed whether or not `--explain` was passed. The citations are the
         # only thing standing between a fluent answer and an unfalsifiable one,
         # and hiding them behind a flag is how they stop being read.
-        print(f"\nsources ({len(answer.citations)}):")
-        for citation in answer.citations[:10]:
+        print(f"\nsources ({len(trajectory.citations)}):")
+        for citation in trajectory.citations[:10]:
             print(f"  {citation.locator}")
             if explain:
                 print(f"      {textwrap.shorten(citation.excerpt, width=76)}")
-        if len(answer.citations) > 10:
-            print(f"  … and {len(answer.citations) - 10} more")
-    elif answer.used_a_tool:
-        print("\nNo sources: the tool returned nothing citable.")
+        if len(trajectory.citations) > 10:
+            print(f"  … and {len(trajectory.citations) - 10} more")
+    elif trajectory.hops:
+        print("\nNo sources: nothing the tools returned was citable.")
 
+    seconds = trajectory.duration_ms / 1000
     print(
-        f"\n{answer.model_calls} model call(s), {answer.duration_ms}ms"
+        f"\n{trajectory.hops} hop(s), stopped: {trajectory.stopped_because.value}, "
+        f"{trajectory.model_calls} model call(s), {trajectory.tokens} tokens "
+        f"({trajectory.prompt_tokens} in / {trajectory.completion_tokens} out), "
+        f"{seconds:.1f}s"
     )
     return 0
+
+
+def _print_trace(trajectory: Trajectory) -> None:
+    """Every step, in the order it happened.
+
+    The thought is printed before the call rather than after, because that is the
+    order it was produced in and reading a plan after its consequence is how a
+    trace stops being evidence and becomes a justification.
+    """
+    print(f"question: {trajectory.question}\n")
+    for number, step in enumerate(trajectory.steps, start=1):
+        if step.thought:
+            for line in textwrap.wrap(step.thought, width=84):
+                print(f"  {line}")
+        if step.tool is None:
+            print(f"[{number}] answered\n")
+            continue
+        rendered = ", ".join(
+            f"{name}={value!r}" for name, value in sorted(step.args.items())
+        )
+        stale = "" if step.novel else "   [nothing new]"
+        print(f"[{number}] {step.tool}({rendered}){stale}")
+        result = step.result
+        if result is not None:
+            summary = textwrap.shorten(" ".join(result.content.split()), width=200)
+            print(f"      {summary}")
+            print(
+                f"      {len(result.citations)} citation(s)"
+                + (", truncated" if result.truncated else "")
+                + f", {step.tokens} tokens, {step.duration_ms}ms"
+            )
+        print()
 
 
 async def run_agent_tools(settings: Settings) -> int:
@@ -4586,13 +4627,24 @@ def build_parser() -> argparse.ArgumentParser:
     surfacing_check.add_argument("focus")
 
     agent_parser = commands.add_parser(
-        "agent", help="ask a question and let the model choose one tool"
+        "agent", help="ask a question the model answers over several retrievals"
     )
     agent_commands = agent_parser.add_subparsers(dest="agent_command", required=True)
     agent_ask = agent_commands.add_parser(
-        "ask", help="one question, at most one tool call, one answer"
+        "ask", help="one question, several dependent tool calls, one answer"
     )
     agent_ask.add_argument("question")
+    agent_ask.add_argument(
+        "--max-hops",
+        type=int,
+        default=None,
+        help="retrievals before the loop is stopped (default: MEMOS_AGENT_MAX_HOPS)",
+    )
+    agent_ask.add_argument(
+        "--trace",
+        action="store_true",
+        help="print every step: thought, tool, arguments and a result summary",
+    )
     agent_ask.add_argument(
         "--explain",
         action="store_true",
@@ -5210,7 +5262,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "agent":
         if args.agent_command == "ask":
             return asyncio.run(
-                run_agent_ask(settings, question=args.question, explain=args.explain)
+                run_agent_ask(
+                    settings,
+                    question=args.question,
+                    max_hops=args.max_hops,
+                    trace=args.trace,
+                    explain=args.explain,
+                )
             )
         if args.agent_command == "tools":
             return asyncio.run(run_agent_tools(settings))

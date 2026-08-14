@@ -183,6 +183,19 @@ class Settings(BaseSettings):
     event_rate_limit: int = 60
     event_rate_window_seconds: int = 60
     answer_max_tokens: int = 1024
+    # M7.1. Retrievals one question may make before the loop is stopped.
+    #
+    # Six is a bound on cost, not a target: it is roughly the number of dependent
+    # steps the hardest question in this milestone's set actually decomposes into
+    # ("find poor outcomes, read their assumptions, group them, check
+    # independence, gather evidence"), and it is also six model calls plus tool
+    # work, which on a free tier is minutes and a measurable share of a daily
+    # cap. Raising it makes drift cheaper before it makes answers better.
+    agent_max_hops: int = 6
+    # Tokens the compacted findings from earlier hops may occupy. Two verbatim
+    # search results already cost ~1,400, so this roughly doubles the history the
+    # prompt carries rather than replacing it.
+    agent_finding_budget: int = 1200
     # Chunks per extraction request (M3.1). The free tier's binding constraint
     # is requests per day, not tokens per request, so batching is what decides
     # whether a corpus of this size can be extracted at all: 1,308 chunks one at

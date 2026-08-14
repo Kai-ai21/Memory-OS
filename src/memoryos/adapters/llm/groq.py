@@ -245,14 +245,22 @@ class GroqLanguageModel(LanguageModel):
                 + (f" ({reason})" if reason else "")
             )
 
+        usage = response.usage
         logger.info(
             "llm.turn",
             model=self._model_name,
             tools_offered=len(tools),
             tool_calls=len(calls),
             answer_chars=len(text),
+            prompt_tokens=usage.prompt_tokens if usage else 0,
+            completion_tokens=usage.completion_tokens if usage else 0,
         )
-        return ModelTurn(text=text, tool_calls=calls)
+        return ModelTurn(
+            text=text,
+            tool_calls=calls,
+            prompt_tokens=usage.prompt_tokens if usage else 0,
+            completion_tokens=usage.completion_tokens if usage else 0,
+        )
 
     def _load(self) -> "AsyncGroq":
         if self._client is None:
