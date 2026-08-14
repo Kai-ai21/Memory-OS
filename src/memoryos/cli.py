@@ -3707,6 +3707,15 @@ def _print_report(report: Report, *, label: str) -> None:
         if count:
             print(f"    {name:20} {count}")
     print(f"    {'agent failures':20} {report.agent_failures} of {len(report.scores)}")
+    if report.scorable < len(report.scores):
+        # Loud, because every mean above is over all eight questions whether or
+        # not eight ran. A pass where the provider refused half of them has a
+        # mean that reads as a collapse and measures a token bucket.
+        print(
+            f"\n  WARNING: only {report.scorable} of {len(report.scores)} questions "
+            "reached the provider. The means above are not comparable with a "
+            "complete run."
+        )
 
 
 def _print_variance(spread: dict[str, dict[str, float]]) -> None:

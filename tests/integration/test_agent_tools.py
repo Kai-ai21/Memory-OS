@@ -590,3 +590,51 @@ def test_each_tool_wraps_exactly_one_use_case() -> None:
     ):
         assert dataclasses.is_dataclass(tool)
         assert dataclasses.fields(tool), f"{tool.__name__} holds no collaborators"
+
+
+async def test_the_most_generic_word_in_a_query_does_not_decide_the_result(
+    harness: Harness,
+) -> None:
+    """**Found by reading an M7.3 trajectory rather than by reasoning about it.**
+
+    Asked for the decision about "combining two retrievers into one ranking",
+    `get_decisions` returned the chunk-offsets decision — matched on the word
+    `into`, from "char_end index into", and returned first because it happened to
+    be the more recent of the two. The agent then ran a perfectly correct two-hop
+    chain against the wrong decision, which is the failure mode a support count
+    cannot see and a trajectory can.
+
+    An `any()` over substring matches lets the most generic term in a query
+    decide the answer. Counting matches is the smallest change that makes the
+    ranking mean something.
+    """
+    await harness.ingest()
+    registry = tools(harness)
+
+    for question, chosen in (
+        ("How are two retrievers combined into one ranking?", "Reciprocal rank fusion"),
+        (
+            "What do a chunk's char_start and char_end index into?",
+            "The memory's text",
+        ),
+    ):
+        await record_decision(
+            harness.sessions,
+            DecisionDraft(
+                question=question,
+                chosen=chosen,
+                options=(OptionInput(description="something else"),),
+            ),
+            decided_at=DECIDED_AT,
+            decided_at_source=TimeProvenance.DECLARED,
+        )
+
+    result = await registry.call(
+        "get_decisions",
+        {"about": "combining two retrievers into one ranking", "limit": 1},
+    )
+
+    # Five terms match the fusion decision and one matches the other. The one
+    # that matches five comes first.
+    assert "Reciprocal rank fusion" in result.content
+    assert "char_start" not in result.content
