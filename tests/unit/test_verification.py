@@ -137,6 +137,23 @@ def test_a_citation_to_a_nonexistent_step_is_rejected() -> None:
     assert result.claims[0].supported
 
 
+def test_every_hop_in_one_bracket_is_checked_not_only_the_first() -> None:
+    """**Found by running it.** A real answer over a one-hop trajectory wrote
+    `[2, 3]`; with only the singular `cited_step`, hop 2 was reported invalid and
+    hop 3 went unmentioned.
+
+    The unambiguous failure is the one number that must never be under-counted —
+    it is the whole reason M2.6 has it — so integrity reads every index and
+    `cited_step` keeps M7.2's shape by naming the first.
+    """
+    claim = "The system stops regenerating dismissed patterns [2, 3]."
+    result = verify(trajectory(claim, step(PASSAGE)), aligned(claim, PASSAGE))
+
+    assert result.invalid_citations == [2, 3]
+    assert result.claims[0].cited_steps == (2, 3)
+    assert result.claims[0].cited_step == 2
+
+
 def test_a_citation_to_a_hop_that_exists_is_not_rejected() -> None:
     claim = "The lease expires after thirty seconds [1]."
     result = verify(trajectory(claim, step(PASSAGE)), aligned(claim, PASSAGE))
@@ -288,6 +305,32 @@ def test_a_statement_of_absence_is_connective_rather_than_an_uncited_claim() -> 
 # --------------------------------------------------------------------------
 # 4. Below the threshold, the answer is not returned
 # --------------------------------------------------------------------------
+
+
+def test_a_negation_buried_in_a_claim_does_not_excuse_it_from_citing() -> None:
+    """**The connective escape hatch is the one to keep narrow**, because a
+    sentence that takes it is never checked against anything.
+
+    Found by running it. This sentence — a real one, with a quotation in it —
+    matched `not … finding` ninety characters in and was classified as a
+    statement of absence, so a claim about Jaccard similarity was excused from
+    needing any support. A sentence that is *about* an absence says so first.
+    """
+    claim = (
+        "There's also a mechanism using Jaccard similarity to prevent re-showing "
+        '"the same list with an edit, not a new finding".'
+    )
+
+    result = verify(
+        trajectory(claim, step(PASSAGE)),
+        AngleEmbedder({claim: 2.0, PASSAGE: 0.0}),
+    )
+
+    assert result.factual_claims == 1
+    assert result.unsupported and result.unsupported[0].text == claim
+    # And the genuine article still passes, matched inside the window.
+    honest = "The corpus does not contain a record of production incidents."
+    assert verify(trajectory(honest, step(PASSAGE)), aligned(PASSAGE)).factual_claims == 0
 
 
 def test_below_threshold_support_returns_a_refusal_rather_than_the_answer() -> None:

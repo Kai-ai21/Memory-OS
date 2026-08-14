@@ -167,6 +167,12 @@ _ABSENCE = re.compile(
     re.IGNORECASE,
 )
 
+# How far into a sentence a statement of absence may begin. Roughly a clause:
+# "I could not find" starts at 2, "The corpus does not contain" at 12, and a
+# negation that turns up ninety characters in is part of a claim rather than the
+# point of the sentence.
+ABSENCE_WINDOW = 60
+
 _HAS_LETTERS = re.compile(r"[A-Za-z]")
 
 # Markdown scaffolding a model puts around a list. Stripped before classifying,
@@ -205,6 +211,15 @@ class Claim:
     cited_step: int | None
     supported: bool
     support_excerpt: str | None
+    # Every hop the sentence named, where `cited_step` is only the first.
+    #
+    # **Not redundant, and the difference was found by running it.** A real
+    # answer wrote `[2, 3]` in a one-hop trajectory; with only the singular
+    # field, hop 2 was reported invalid and hop 3 was silently dropped. The
+    # unambiguous failure is the one thing that must not be under-counted, so
+    # `invalid_citations` is computed from this and `cited_step` keeps M7.2's
+    # shape by naming the first.
+    cited_steps: tuple[int, ...] = ()
     # The fields below are not in M7.2's shape; they are what makes a flagged
     # answer debuggable rather than merely marked.
     support: Support = Support.UNSUPPORTED
@@ -329,17 +344,18 @@ def verify(
         {
             hop
             for claim in claims
-            if claim.cited_step is not None and claim.cited_step not in valid_hops
-            for hop in (claim.cited_step,)
+            for hop in claim.cited_steps
+            if hop not in valid_hops
         }
     )
     truncated = sorted(
         {
-            claim.cited_step
+            hop
             for claim in claims
-            if claim.cited_step in valid_hops
-            and acted[claim.cited_step - 1].result is not None
-            and acted[claim.cited_step - 1].result.truncated  # type: ignore[union-attr]
+            for hop in claim.cited_steps
+            if hop in valid_hops
+            and acted[hop - 1].result is not None
+            and acted[hop - 1].result.truncated  # type: ignore[union-attr]
         }
     )
 
@@ -464,13 +480,14 @@ def _classify(answer: str) -> list[Claim]:
     """Sentences, split and marked factual or connective."""
     claims: list[Claim] = []
     for index, sentence in enumerate(split_sentences(answer)):
-        cited = _cited_step(sentence)
+        cited = _cited_steps(sentence)
         factual = _is_factual(sentence)
         claims.append(
             Claim(
                 text=sentence,
                 sentence_index=index,
-                cited_step=cited,
+                cited_step=cited[0] if cited else None,
+                cited_steps=cited,
                 # A connective sentence is `supported` by construction: it needs
                 # no citation, so it cannot fail to have one. Reporting it as
                 # unsupported would put "In summary:" in the flagged list.
@@ -520,6 +537,7 @@ def _support(
                 text=claim.text,
                 sentence_index=claim.sentence_index,
                 cited_step=claim.cited_step,
+                cited_steps=claim.cited_steps,
                 supported=False,
                 support_excerpt=None,
                 support=Support.UNSUPPORTED,
@@ -554,6 +572,7 @@ def _support(
                 text=claim.text,
                 sentence_index=claim.sentence_index,
                 cited_step=claim.cited_step,
+                cited_steps=claim.cited_steps,
                 supported=level is not Support.UNSUPPORTED,
                 support_excerpt=(
                     None if level is Support.UNSUPPORTED else _clip(units[best_at], 240)
@@ -609,18 +628,19 @@ def _blocks(content: str) -> list[str]:
     return blocks
 
 
-def _cited_step(sentence: str) -> int | None:
-    """The hop a sentence cited, or None.
+def _cited_steps(sentence: str) -> tuple[int, ...]:
+    """Every hop a sentence named, in order, deduplicated.
 
-    The first when several are named. `Claim.cited_step` is singular by M7.2's
-    shape, and the rest are not lost — support is computed against every step
-    regardless, so a sentence citing [2][4] is checked against both whatever this
-    returns.
+    All of them, because `invalid_citations` reads this. `Claim.cited_step` keeps
+    M7.2's singular shape by taking the first — which is a reasonable thing to
+    show a reader and a disastrous thing to check integrity against, as one real
+    answer citing `[2, 3]` in a one-hop run demonstrated by having its second
+    fabricated hop go unreported.
     """
-    match = _CITATION.search(sentence)
-    if match is None:
-        return None
-    return int(match.group(1).split(",")[0])
+    found: list[int] = []
+    for match in _CITATION.finditer(sentence):
+        found.extend(int(part) for part in match.group(1).split(","))
+    return tuple(dict.fromkeys(found))
 
 
 def _is_factual(sentence: str) -> bool:
@@ -635,7 +655,15 @@ def _is_factual(sentence: str) -> bool:
     # Requiring evidence for "the corpus does not contain this" would score the
     # honest answer below the confident one, which is the exact inversion every
     # grounding check in this project is arranged against.
-    return _ABSENCE.search(bare) is None
+    #
+    # **Only near the opening**, and that bound was earned. A real answer
+    # containing the clause `"the same list with an edit, not a new finding"` —
+    # a quotation, ninety characters in, inside a perfectly ordinary factual
+    # sentence — matched `not … finding` and was excused from needing any
+    # support at all. A sentence that is *about* an absence says so first; one
+    # that merely contains a negation later is a claim.
+    match = _ABSENCE.search(bare)
+    return match is None or match.start() > ABSENCE_WINDOW
 
 
 def _cosine(left: Sequence[float], right: Sequence[float]) -> float:

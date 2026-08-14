@@ -81,6 +81,9 @@ class ClaimOut(BaseModel):
     text: str
     sentence_index: int
     cited_step: int | None = None
+    # Every hop the sentence named. `cited_step` is the first of these, kept for
+    # the shape M7.2 specifies; integrity is checked against all of them.
+    cited_steps: list[int] = Field(default_factory=list)
     supported: bool
     support_excerpt: str | None = None
     # direct | inferred | unsupported. A client rendering the answer needs the
@@ -199,6 +202,7 @@ def _claim_out(claim: Claim) -> ClaimOut:
         text=claim.text,
         sentence_index=claim.sentence_index,
         cited_step=claim.cited_step,
+        cited_steps=list(claim.cited_steps),
         supported=claim.supported,
         support_excerpt=claim.support_excerpt,
         support=claim.support.value,
