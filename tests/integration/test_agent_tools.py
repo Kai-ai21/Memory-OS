@@ -523,9 +523,18 @@ def test_every_schema_survives_both_providers() -> None:
     assert "title" not in spec.parameters
 
 
-def test_the_six_tools_are_registered_once_each(harness: Harness) -> None:
+def test_every_tool_is_registered_once_and_in_the_order_offered(
+    harness: Harness,
+) -> None:
     """The registry refuses a duplicate name, because two tools under one name
-    means the model's choice no longer identifies which code runs."""
+    means the model's choice no longer identifies which code runs.
+
+    The order is pinned as well as the set. It is the order the model reads them
+    in and the first plausible one is what a vague question reaches for: search
+    leads because it is the right default for almost everything, and M8.1's gap
+    analysis is last because it is the only one that reports what is *not* there
+    and answers "nothing" most of the time.
+    """
     registry = tools(harness)
 
     assert registry.names() == [
@@ -535,6 +544,7 @@ def test_the_six_tools_are_registered_once_each(harness: Harness) -> None:
         "find_gaps",
         "traverse_graph",
         "get_memory",
+        "find_gaps_in_reasoning",
     ]
     with pytest.raises(ValueError, match="already registered"):
         registry.register(GetMemoryTool(sessions=harness.sessions))
