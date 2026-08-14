@@ -345,6 +345,67 @@ async def test_a_result_hands_the_next_tool_the_id_it_needs(harness: Harness) ->
     assert re.search(r"id: [0-9a-f-]{36}", timeline.content), timeline.content
 
 
+async def test_a_decision_hands_over_its_evidences_ids_and_not_its_own(
+    harness: Harness,
+) -> None:
+    """**A decision id and a memory id are both UUIDs, and one of them works.**
+
+    Found by running it: asked to find a decision and then read what it cited,
+    the model passed the `DECISION <uuid>` it had just been shown to
+    `get_memory`, was told there was no such memory, and went off searching for
+    the text instead — three hops to arrive back where it started.
+
+    The block named a count and no ids, so the id the model needed was the one
+    thing the result did not contain. Now it lists them, the header says outright
+    which kind of id it is carrying, and `get_memory` names the confusion rather
+    than reporting a missing memory.
+    """
+    await harness.ingest()
+    registry = tools(harness)
+
+    async with harness.sessions() as session:
+        from sqlalchemy import select
+
+        from memoryos.adapters.db import models
+
+        key = (
+            await session.execute(select(models.Memory.external_key).limit(1))
+        ).scalar_one()
+
+    await record_decision(
+        harness.sessions,
+        DecisionDraft(
+            question="What do chunk offsets index into?",
+            chosen="The memory's text",
+            options=(OptionInput(description="The stored chunk text"),),
+            evidence=(
+                EvidenceInput(
+                    source_name=harness.source.name,
+                    external_key=key,
+                    relation=EvidenceRelation.INFORMED,
+                ),
+            ),
+        ),
+        decided_at=DECIDED_AT,
+        decided_at_source=TimeProvenance.DECLARED,
+    )
+
+    decisions = await registry.call("get_decisions", {"about": "chunk offsets"})
+    ids = re.findall(r"ids: ([0-9a-f-]{36})", decisions.content)
+    assert ids, decisions.content
+    assert "NOT a memory id" in decisions.content
+
+    read = await registry.call("get_memory", {"memory_id": ids[0]})
+    assert "There is no memory" not in read.content
+
+    # And the decision's own id, offered to the tool that does not take it, says
+    # what went wrong rather than that something is missing.
+    decision_id = re.search(r"DECISION ([0-9a-f-]{36})", decisions.content)
+    assert decision_id is not None
+    wrong = await registry.call("get_memory", {"memory_id": decision_id.group(1)})
+    assert "decision id" in wrong.content
+
+
 def test_every_option_a_description_offers_is_one_the_tool_takes(
     harness: Harness,
 ) -> None:

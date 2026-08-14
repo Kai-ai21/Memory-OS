@@ -3300,12 +3300,14 @@ def _print_trace(trajectory: Trajectory) -> None:
     """
     print(f"question: {trajectory.question}\n")
     for number, step in enumerate(trajectory.steps, start=1):
+        if step.tool is None:
+            # The prose is the answer, and it is printed in full below. Repeating
+            # it here would make every trace half duplicate.
+            print(f"[{number}] answered ({len(step.thought)} chars)\n")
+            continue
         if step.thought:
             for line in textwrap.wrap(step.thought, width=84):
                 print(f"  {line}")
-        if step.tool is None:
-            print(f"[{number}] answered\n")
-            continue
         rendered = ", ".join(
             f"{name}={value!r}" for name, value in sorted(step.args.items())
         )

@@ -613,7 +613,9 @@ class GetDecisionsTool:
                 "— 'why did we choose X', 'what were the alternatives to Y', "
                 "'what were we assuming'. A decision's reasoning and its rejected "
                 "options are recorded here and appear nowhere in the corpus text, "
-                "so search_memories cannot find them."
+                "so search_memories cannot find them. Each decision lists the "
+                "memory ids of its evidence, which get_memory and traverse_graph "
+                "do take; the decision's own id is not one of them."
             ),
         )
 
@@ -652,15 +654,23 @@ class GetDecisionsTool:
             )
             evidence = [row for row in detail.evidence if row.memory_id is not None]
             cited.extend(row.memory_id for row in evidence if row.memory_id)
+            # **The evidence's memory ids, so the next hop can read them.**
+            # Without these the chain "find the decision, then read what it cites"
+            # dead-ends: the block said "2 linked memories" and named neither, and
+            # a model wanting one of them has only the decision id to try. Which
+            # is what it tried — see the note on the header below.
+            linked = ", ".join(str(row.memory_id) for row in evidence)
             blocks.append(
-                f"DECISION {detail.id} ({_fmt(detail.decided_at)}, {detail.status.value})\n"
+                f"DECISION {detail.id} (this is a decision id, NOT a memory id; "
+                f"get_memory and traverse_graph will not accept it) "
+                f"({_fmt(detail.decided_at)}, {detail.status.value})\n"
                 f"  Question: {detail.question}\n"
                 f"  Chose: {detail.chosen}\n"
                 + (f"  Because: {_clip(detail.reasoning)}\n" if detail.reasoning else "")
                 + (f"  Rejected: {rejected}\n" if rejected else "")
                 + (f"  Assumed: {assumptions}\n" if assumptions else "")
                 + (
-                    f"  Evidence: {len(evidence)} linked memories\n"
+                    f"  Evidence: {len(evidence)} linked memories, ids: {linked}\n"
                     if evidence
                     else "  Evidence: none linked in the corpus\n"
                 )
@@ -728,7 +738,18 @@ class GetMemoryTool:
         try:
             detail = await memories_app.show(self.sessions, memory_id)
         except memories_app.UnknownMemory:
-            return ToolResult(content=f"There is no memory with id {memory_id}.")
+            # Names the mistake that actually happens rather than only the fact.
+            # A decision id and a memory id are both UUIDs, so a model that read
+            # a `DECISION <uuid>` line has no way to tell from the shape that it
+            # is the wrong kind of id — and "there is no memory with id X" reads
+            # as "that memory was deleted", which sends the next hop searching.
+            return ToolResult(
+                content=(
+                    f"There is no memory with id {memory_id}. If you took it from "
+                    "a DECISION line, that is a decision id: use the ids on the "
+                    "decision's Evidence line instead."
+                )
+            )
 
         body = detail.content or ""
         # Whole-item tools are the ones most likely to blow a context window, so
