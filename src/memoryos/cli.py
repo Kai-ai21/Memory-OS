@@ -3201,8 +3201,23 @@ async def run_report(
                 "  this command exists to stop."
             )
             print()
+            # **A metric nobody could measure must not print as a zero.**
+            # `tool_appropriateness` is undefined for a trajectory the provider
+            # did not narrate, and it is 0.000 here on every question because
+            # `judgeable` is 0 on every question — not because the agent chose
+            # badly. `overall` already excludes it; this line stops the table
+            # from saying what `overall` refuses to.
+            judgeable = sum(
+                int(row.get("judgeable", 0)) for row in recorded.get("scores", [])
+            )
             for metric, value in sorted(means.items()):
-                print(f"    {metric:<22} {float(value):.3f}")
+                note = ""
+                if metric == "tool_appropriateness" and not judgeable:
+                    note = (
+                        "  ← not measurable: no hop was narrated in any "
+                        "trajectory; excluded from overall"
+                    )
+                print(f"    {metric:<22} {float(value):.3f}{note}")
             for metric, value in sorted(cost.items()):
                 print(f"    {metric:<22} {float(value):,.1f}")
             failures = recorded.get("failures", {})

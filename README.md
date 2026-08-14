@@ -1,82 +1,166 @@
 # Memory Intelligence OS
 
-A long-term AI memory system. The goal is durable, queryable memory for AI agents — storing
-what was learned, retrieving it by meaning rather than by keyword, and keeping it coherent as
-it grows. Postgres 17 with `pgvector` is the storage substrate.
+It ingests a corpus, stores every version of every document with the log that
+produced it, and answers questions about that corpus by meaning — retrieving,
+citing, and declining when nothing supports an answer. On top of that it records
+decisions with their alternatives and assumptions, projects entities into a
+graph, tracks how the corpus changed over time, and runs a multi-hop agent that
+plans several dependent retrievals and verifies every claim it makes against
+what it actually retrieved. Everything derived can be thrown away and rebuilt
+from the log, and the rebuild is proved identical rather than assumed.
+
+**Eight phases, one corpus: this repository, ingesting itself.** 253 memories,
+3,157 chunks, 16 recorded decisions. That number is the single most important
+fact about everything below, and the rest of this section is organised around
+being honest about it.
+
+```bash
+uv run memoryos report --full
+```
+
+One command, the current true state of the system, computed against the
+database rather than quoted from here.
+
+## What genuinely works
+
+Measured, on this corpus, with the command that produces the number.
+
+| Capability | Evidence |
+| --- | --- |
+| **Ingestion and versioning** | 253 current memories from 311 rows; content-addressed, two-tier change detection. `memoryos stats` |
+| **Replay** | Every derived table rebuilt from the log and compared byte for byte, into a shadow schema and in place. `memoryos verify-replay` |
+| **Retrieval** | recall@10 **0.643**, MRR **0.719**, nDCG@10 **0.599** over 52 judged queries, hybrid + cross-encoder. `memoryos evaluate` |
+| **Grounded answering** | Answers cite their sources or are withheld; ungrounded output exits non-zero. `memoryos ask` |
+| **Answer verification** | Every claim scored against what the trajectory retrieved, and an unsupported answer withheld. `memoryos agent ask --verify` |
+| **The graph projection** | Divergence from Postgres detected per node and edge type by hash, not by count. `memoryos graph verify` |
+| **Decision capture** | 16 decisions, 46 options, 16 outcomes, 37 assumptions, 25 of them evaluated. `memoryos decisions list` |
+| **Refusal under a bar** | Patterns, reflections, gaps and facets all decline below their evidence threshold, with the number they reached. |
+| **Operational honesty** | `doctor` distinguishes damage from an unexercised capability and says which. |
+
+The single most valuable thing this project produced is not on that list. It is
+that **M1.6.1 exists**: an 89% silent chunk-truncation rate that every test
+passed, found only because somebody measured. Most of the machinery here —
+the startup assertion, `doctor`, `eval-recall`, `verify-replay`, every baseline
+in `var/` — is there to make that class of defect loud the next time.
+
+## What is built and unexercised for lack of data
+
+**This is the honest half of the README and it is longer than the previous
+section.** Each of these is complete, tested, and reachable from the CLI, and
+each produces nothing on this corpus for a reason it states rather than hides.
+
+| Built | What it produces here | Why |
+| --- | --- | --- |
+| **Pattern discovery** (M5.3) | **0 patterns** | Needs three decisions sharing a belief. 35 of 37 assumptions are ungrouped — each belief was written once, in its own words, on its own decision. |
+| **Reflections** (M5.4) | **0 reflections** | Nothing to describe: it refuses to write prose about a pattern that does not exist. |
+| **Gap analysis** (M8.1) | **0 gaps, 4 runs out of 4** | 14 candidates weighed across three decisions; the closest reached 1 of the 2 supporting instances it needs. |
+| **The user model** (M8.0) | **0 derived facets across 5 derivable dimensions** | Nothing reaches 3 distinct observations. `goals` is asserted-only by design; `learning_style` has no deriver by design. |
+| **Model evolution** (M8.2) | **"cannot say" on every dimension** | A stability verdict needs 3 closed facets and 30 days of history. There are 0 and ~1. |
+| **Habits** (M8.0) | **structurally impossible** | 0 of 253 memories carry a source-declared date. Every timestamp is a filesystem mtime, which a checkout resets for the whole tree at once. |
+| **Workflows** (M8.0) | **structurally impossible** | Entity extraction has reached 12 of 253 memories (5%). A co-occurrence over that slice is a fact about the slice. |
+| **Graph-augmented retrieval** (M3.5) | **0 results contributed** | Same 5% extraction coverage. The expansion works; there is almost nothing extracted for it to expand into. |
+| **Typed relationships** (M3.3) | **0 relationships** | Extraction has not been run across the corpus. |
+| **Agent variance floor** (M7.3) | **unknown** | Three passes over eight questions costs more than the free tier allows in a day. Every future claim of the form "this improved trajectory quality" is currently uncheckable. |
+
+**None of this is a digital twin.** A model of a person derived from 16
+decisions over a fortnight is a model of a fortnight. The structure that would
+hold such a model — dimensions, evidence with both sides cited, supersession,
+withdrawal, dismissal that survives re-derivation, a stability measure that
+refuses a verdict on thin history — is built and tested. It has no data. Saying
+otherwise would be the one dishonest thing this project could still do.
+
+## What each phase measured
+
+Real numbers, and the ones that were disappointing are here too.
+
+| Phase | The measurement | The number |
+| --- | --- | --- |
+| **1 — Foundation** | Chunk truncation against the model's real window | **89% of chunks silently truncated**, every test green. Fixed in M1.6.1. |
+| **1 — Foundation** | Replay fidelity | Byte-identical, twice: shadow-schema and in-place. |
+| **2 — Retrieval** | Vector, then hybrid, then reranked, on one golden set | recall@10 0.783 → 0.863; MRR 0.731 → 0.762. Rerank and fusion both earned their place. |
+| **2 — Retrieval** | Run-to-run variance | **~0.012**, from floating-point ordering alone. The floor every later claim clears. |
+| **2 — Retrieval** | Recency and importance as ranking signals | Grid-searched, **measured as harmful, shipped at weight 0.0**. |
+| **3 — Graph** | Graph expansion's contribution to ranking | **Zero**, and shipped at weight zero rather than hidden. |
+| **3 — Graph** | Projection divergence | Detected per type by hash — a corrupted node name that no count would see. |
+| **4 — Time** | Date provenance across the corpus | **0 of 253 declared**; everything is a filesystem mtime. Named, not averaged over. |
+| **4 — Time** | Time-aware retrieval | Measured; no improvement this corpus could show. |
+| **5 — Decisions** | How much decision-shaped content the corpus holds | 16 decisions, and the section opens with that measurement rather than closing with it. |
+| **5 — Assumptions** | Which recorded beliefs held | 25 evaluated: **18 held, 6 failed, 1 partial**. |
+| **5 — Patterns** | Regularities over decisions | **0**, with the reason: no belief is shared by three decisions. |
+| **6 — Surfacing** | Dismissal rate of unprompted suggestions | **54% (7 of 13 shown)** — the wrong side of its own line. Cause found and fixed in M7.0. |
+| **6 — Events** | Whether a Postgres queue is fast enough | Measured rather than assumed; 134 events, none pending. |
+| **7 — Agent** | Hop limit firing | **Never once.** The loop stops too early, at a mean 1.4 hops on questions needing 4–5. |
+| **7 — Verification** | Claim support against retrieved text | 91% support; one answer correctly withheld — and **one fluent fabrication scored 100% supported**, because the instrument measures proximity, not entailment. |
+| **7 — Trajectory** | How the agent reasoned, over 8 questions | overall **0.630**, dependency **0.500**, support 0.787, **4 agent failures in 8**, 10,341 tokens and 34.6s per question against ~2,000 for single-shot. |
+| **8 — User model** | What five derivable dimensions can fill | **Zero facets.** The measurement is the deliverable. |
+| **8 — Gaps** | How often it correctly says nothing | **4 of 4.** |
+| **8 — Evolution** | Model churn and mean facet lifetime | **No verdict available** — and refusing one is the result. |
+
+### The number this milestone found
+
+Retrieval measured today scores **recall@10 0.643** against **0.773** for the
+M4.2 baseline recorded two days earlier — on the *same* 52 queries and the same
+answer key. Nothing in the retriever changed. What changed is the corpus: it
+grew by roughly a quarter as Phases 7 and 8 were written, and the new text is
+this README and the test suite.
+
+Inspect the worst query and the mechanism is visible. For *"why do we store two
+timestamps"* the top four results are `tests/slow/test_acceptance.py`,
+`tests/slow/test_replay_real.py` and `tests/slow/test_query_prefix.py` — files
+that contain the query string as a **literal**, because they are the tests that
+assert on it — plus a migration. The code that actually answers the question,
+`src/memoryos/domain/entities.py`, is at rank 9.
+
+**The evaluation harness poisoned the corpus it evaluates.** `eval_exclude`
+removes those files from scoring and the evaluator widens `k` to compensate, so
+the metric is not double-counting them — but the underlying ranking is still
+led by text *about* the query rather than answers to it, and no amount of
+excluding fixes that. This is the same class of defect as M1.6.1, found the same
+way, eight phases later: not by a test, by a number moving.
+
+## What I would build differently
+
+1. **Get the corpus first.** Six of the ten capabilities in the unexercised
+   table are waiting on data, not on code. One afternoon of grouping assumptions
+   by hand, or one connector that declares its own dates, would have been worth
+   more than any milestone in Phase 8. The order should have been: one real
+   multi-source corpus, then the machinery that reads it.
+2. **Drop the repository ports.** The Phase 1 retrospective already called them
+   unearned and the layering "about one-third real", and eight phases have not
+   changed that verdict. There is one implementation of each, they exist to
+   satisfy a diagram, and **43 of the 54 modules in `application/` import the
+   SQLAlchemy models directly** rather than go through them.
+3. **Don't ingest the repository into itself.** It was the fastest way to get a
+   corpus and it cost the evaluation its meaning: the tests, the README and the
+   golden set now all describe each other. A separate corpus would have kept the
+   measurement about retrieval.
+4. **Budget for the agent benchmark, or don't build it.** M7.3 produced five
+   metrics and could not afford three runs, so it has no variance floor and
+   therefore no way to tell an improvement from noise. A benchmark you cannot
+   afford to repeat is a number, not a measurement.
+5. **Write the evidence bar before the feature.** Everything that refuses well
+   here — patterns, gaps, facets, reflections, surfacing — refuses well because
+   the threshold was designed before the output was seen. The one place that
+   went the other way, M6.3's surfacing, is the one that shipped at a 54%
+   dismissal rate.
+
+For the full account, see [docs/RETROSPECTIVE.md](docs/RETROSPECTIVE.md).
 
 ## Status
 
-**Phase 1 complete**, plus M2.0a (the search interface), M2.0 (the evaluation harness),
-M2.1 (keyword search), M2.2 (hybrid retrieval), M2.3a (measurement reliability),
-M2.3b (ranking signals, measured and switched off), M2.4 (cross-encoder reranking),
-M2.5 (citations and explainability) and M2.6 (grounded answers). **Phase 2 complete.**
-**Phase 3 complete**: M3.0 (Neo4j and the graph schema), M3.1 (entity extraction),
-M3.2 (entity resolution), M3.3 (typed relationships), M3.4 (projection sync, rebuild and
-divergence detection) and M3.5 (graph-augmented retrieval, measured and shipped at weight
-zero). See [Graph](#graph) and [Graph-augmented retrieval](#graph-augmented-retrieval).
-**Phase 4 complete**: M4.0 (the temporal query layer), M4.1 (the timeline view),
-M4.2 (evolution and change detection) and M4.3 (time-aware retrieval, measured).
-See [Time](#time) and the [Phase 4 retrospective](#phase-4-retrospective).
-**Phase 5 begun**: M5.0 (the decision schema and capture) — what was decided,
-what else was considered, why, and what had to be true — M5.1 (outcome linking),
-which connects a decision to what happened afterwards and is the milestone where
-Phase 4's temporal layer pays for itself, M5.2 (assumption tracking), which
-evaluates which of those beliefs held, M5.3 (pattern discovery), which finds
-none and explains exactly why, and M5.4 (reflection generation), which turns a
-pattern into prose and refuses to write anything at all below its evidence bar.
-**Phase 5 complete.** See [Decisions](#decisions), which opens with the
-measurement of how little decision-shaped content this corpus actually holds,
-[Outcomes](#outcomes), [Assumptions](#assumptions), [Patterns](#patterns),
-[Reflections](#reflections) and the
-[Phase 5 retrospective](#phase-5-retrospective).
-**Phase 6 complete**: M6.0 (the event bus and triggers) inverts the direction —
-an event arrives and the system queues work nobody asked for — M6.1 (context
-assembly) puts every earlier phase behind that trigger and decides what fits,
-M6.2 (client integration) gets real events from a file watcher and a VS Code
-extension and surfaces the context where the work happens, and M6.3 (proactive
-surfacing) finally lets it speak first, which turns out to be a milestone about
-restraint. See [Events](#events), which measures whether a Postgres queue is fast
-enough to push through rather than guessing, [Context](#context), which is a
-budgeting problem wearing a retrieval problem's clothes, [Clients](#clients),
-[Surfacing](#surfacing) — whose headline number is a **54% dismissal rate**, the
-wrong side of the line it set for itself, and whose cause M7.0 then found and
-fixed — and the [Phase 6 retrospective](#phase-6-retrospective).
-**Phase 7 complete**: M7.3 (trajectory evaluation) scores how the agent reasoned
-rather than what it concluded — and its headline is a number it could **not**
-measure: three passes over eight questions costs more than a free tier allows in
-a day, so the variance floor is unknown and every future claim of the form "this
-improved trajectory quality" is currently uncheckable. Of what did run: four agent
-failures in eight, dependency 0.50 concentrated entirely on id-passing, and 10,341
-tokens per question against ~2,000 for single-shot. See
-[Trajectory evaluation](#trajectory-evaluation) and the
-[Phase 7 retrospective](#phase-7-retrospective).
-**Phase 8 continues**: M8.1 (gap analysis) answers "what am I missing?" from four
-absences grounded in the corpus rather than in a model's opinion — and on this
-data it answers by declining, four runs out of four, reporting how many candidates
-it weighed and that the closest reached one of the two instances it needs. See
-[Gap analysis](#gap-analysis).
-**Phase 8 begun**: M8.0 (the user model) builds the structure for a model of the
-person — seven dimensions, evidence, supersession, dismissal — and measures how
-much of it this corpus can fill. **None of it**: zero facets across five
-derivable dimensions, because nothing reaches three distinct observations, the
-corpus spans six days of filesystem mtimes, and entity extraction has covered
-4.7% of it. The output is a page of stated gaps with the number each one needs,
-which is the useful thing an empty model can be. See [The user model](#the-user-model).
-**Phase 7 begun**: M7.0 (agent tool scaffolding) puts every phase behind a JSON
-schema a model can call, one tool at a time. It is the clearest test of whether
-the layering earned its cost, and the answer is two extractions and thirty lines
-of citation plumbing. M7.1 (multi-hop planning) turns one call into several
-dependent ones under three termination conditions — and its headline number is
-that **the hop limit never fired once**: the loop stops too early rather than too
-late, at a mean of 1.4 hops over five questions that need four or five. M7.2
-(answer verification) measures every claim against what the trajectory actually
-retrieved and withholds an answer that rests on nothing — 91% support across
-M7.1's five answers, one correctly withheld — and its headline result is the
-failure it did **not** catch: a fluent fabrication about production incidents,
-scored 100% supported, because the instrument measures proximity to retrieved
-text and not entailment. See [Agent tools](#agent-tools),
-[Multi-hop planning](#multi-hop-planning) and
-[Answer verification](#answer-verification).
+Phases 1 through 8 complete. Every milestone's design notes, measurements and
+retrospective are in the sections below, in the order they were built.
+
+| Phase | Milestones | Section |
+| --- | --- | --- |
+| **1 — Foundation** | M1.0–M1.7, M2.0a | [Data model](#data-model), [Job queue](#job-queue), [Replay](#replay) |
+| **2 — Retrieval** | M2.0–M2.6 | [Search](#search), [Evaluation](#evaluation) |
+| **3 — Graph** | M3.0–M3.5 | [Graph](#graph), [Graph-augmented retrieval](#graph-augmented-retrieval) |
+| **4 — Time** | M4.0–M4.3 | [Time](#time), [Phase 4 retrospective](#phase-4-retrospective) |
+| **5 — Decisions** | M5.0–M5.4 | [Decisions](#decisions), [Patterns](#patterns), [Phase 5 retrospective](#phase-5-retrospective) |
+| **6 — Proactivity** | M6.0–M6.3 | [Events](#events), [Surfacing](#surfacing), [Phase 6 retrospective](#phase-6-retrospective) |
+| **7 — Agent** | M7.0–M7.3 | [Agent tools](#agent-tools), [Trajectory evaluation](#trajectory-evaluation), [Phase 7 retrospective](#phase-7-retrospective) |
+| **8 — The model of you** | M8.0–M8.2 | [The user model](#the-user-model), [Gap analysis](#gap-analysis), [Model evolution](#model-evolution) |
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -87,7 +171,6 @@ identical.
 Semantic and lexical retrieval, fused by reciprocal rank, rescored by a cross-encoder, and
 answered in prose that cites its sources or declines. What it retrieves is measured rather
 than assumed: see [Evaluation](#evaluation).
-
 ### What Phase 1 built
 
 | Milestone | Delivered                                                                     |
@@ -5699,6 +5782,137 @@ findings.
 * **No UI.** The command and the agent tool are the surfaces; a page that shows
   "nothing" almost always is a page nobody opens twice, and the honest place for
   this output is beside the question that prompted it.
+
+## Model evolution
+
+M8.2 makes the model able to stop believing something, and makes the stopping
+readable.
+
+```bash
+memoryos model diff --since 2026-08-01
+memoryos model timeline [--dimension strengths]
+memoryos model stability
+```
+
+### The half M8.0 could not express
+
+M8.0 recorded that a facet had been *replaced*: `superseded_by` points at the row
+that took over, and `model history` walks the chain. It had nowhere to put the
+other half of the same event — a facet whose evidence simply **went away**.
+
+A group of assumptions is regrouped by hand, a pattern is dismissed, three
+decisions become two, and the deriver that proposed a facet stops proposing it.
+There is no replacement statement, so `superseded_by` stays null, so the row
+stays live indefinitely asserting something with nothing behind it. The only
+options 0025 left were to delete it or keep it, and **deleting a claim the system
+used to make is what M1.1 spent a phase arguing against.**
+
+So migration 0026 makes supersession an event rather than a pointer:
+
+| Column | What it records | Why it did not exist before |
+| --- | --- | --- |
+| `superseded_at` | **when** it stopped | The replacement's `created_at` was the nearest stand-in, and there is no replacement for a withdrawal. Both `diff --since` and `stability` are unanswerable without it. |
+| `superseded_reason` | **why**, in the words the command prints | "Superseded" with no reason is M8.0's "insufficient evidence" with no number: it says something happened and nothing about what would change it. |
+
+`superseded_by` stays, stays nullable, and its nullability now means something
+specific: **superseded with a replacement, or superseded by the absence of its
+evidence.** The first is a revision, the second a withdrawal, and `model
+timeline` labels them differently.
+
+**"Live" moved from the pointer to the timestamp, in the two partial indexes
+rather than in a query.** Reading `superseded_by` to decide liveness is exactly
+how a withdrawn facet would go on being displayed as current, and the unique
+index is also what keeps re-derivation idempotent — so both properties are
+enforced in the same place or neither is.
+
+### Re-derivation retires; it does not delete
+
+`model derive` gained a second pass. Every live derived facet whose subject no
+longer has a candidate above the bar is retired, with a reason that distinguishes
+the two ways support disappears:
+
+* `support fell from 3 to 2, below the bar of 3 distinct observations` — the
+  evidence thinned, and by how much;
+* `the assumption_group_strong deriver no longer proposes this subject: the
+  evidence it rested on is not in the corpus any more` — the thing the facet was
+  about is not in the data at all.
+
+A single string for both would lose the more actionable half. `model derive` names
+every withdrawal rather than counting them, because retiring five claims the
+system used to make about somebody is the most consequential thing the command
+can do and a bare number would let it happen quietly.
+
+### Stability, and why it declines
+
+`model stability` reports, per dimension: how many facets have ever existed, how
+many are live, how many change events there have been, the mean lifetime over
+*closed* facets, and the mean age of the live ones — kept apart, because a live
+facet has not finished its lifetime and pooling the two would report a censored
+number as a completed one.
+
+Then a verdict, which needs **three closed facets and thirty days of history**
+before it is allowed to give one.
+
+```
+dimension             facets  live  changes  mean life  mean age
+----------------------------------------------------------------
+goals                      2     1        1       0.0d      0.1d
+habits                     0     0        0          —         —
+strengths                  0     0        0          —         —
+weaknesses                 1     0        1       0.0d         —
+learning_style             0     0        0          —         —
+decision_patterns          0     0        0          —         —
+workflows                  0     0        0          —         —
+
+verdicts
+  goals                cannot say: 0 days of history, under the 30 a rate needs
+  habits               no facets: nothing to measure
+  strengths            no facets: nothing to measure
+  weaknesses           cannot say: 0 days of history, under the 30 a rate needs
+  learning_style       no facets: nothing to measure
+  decision_patterns    no facets: nothing to measure
+  workflows            no facets: nothing to measure
+```
+
+The question the milestone asks is whether the model is **fitting noise** — a
+model where everything changes weekly — or has **stopped learning** — one where
+nothing ever changes. Both are real failures and they are opposite, so a working
+model lives in the space between them.
+
+**This model resembles neither, and the reason is that it has no facets.** The
+three rows with any history at all are asserted goals typed by hand within an
+hour of each other. A mean lifetime over one closed facet is that facet's
+lifetime with a table drawn around it, and printing `0.0d` beside a confident
+label would be the shape of a measurement with none of the substance. The bar is
+what stops it, and `stopped_learning` — the whole-model check — returns nothing
+rather than a false negative, because a corpus with no facets says nothing about
+whether the system has stopped learning.
+
+### Deviations and ambiguities
+
+* **A revision's replacement is not also reported as an addition.** A statement
+  that moved produces two rows, and listing both would make one event look like
+  two — with the added list carrying a sentence that is really the second half of
+  the supersession above it. The replacement is shown under the supersession.
+* **Confidence changes are derived from revisions rather than stored beside
+  them.** Every confidence change *is* a supersession, because a facet is never
+  updated in place, and a number without the statement that produced it is one
+  nobody can check.
+* **A confidence move is not reported when either end is an asserted facet.** A
+  stated goal carries null rather than 1.0 — it is a claim confidence does not
+  apply to — and subtracting from it would invent a movement.
+* **A facet can be superseded and later dismissed.** Both are change events for
+  `stability`; the earlier of the two ends its life.
+* **The 0026 backfill writes "superseded before 0026; the reason was not
+  recorded".** It is not a good reason and does not pretend to be one. Writing a
+  plausible reason — "statement revised" — would invent a record of an event
+  nobody observed, which is what the column exists to prevent.
+* **`alembic downgrade` resurrects withdrawn facets.** The old schema cannot
+  express "superseded with no replacement", so unwinding 0026 makes those rows
+  live again. Stated in the migration rather than discovered.
+* **No UI**, following M8.1. `superseded_at` and `superseded_reason` are on the
+  API's `FacetOut` regardless, because a client reading only `superseded_by`
+  would render a retired claim as the live one.
 
 ## Migrations
 
