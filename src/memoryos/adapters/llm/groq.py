@@ -22,17 +22,26 @@ not to have information the SDK is handing over.
 """
 
 import asyncio
+import json
 import re
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from memoryos.adapters.llm.errors import MissingApiKey, RateLimited
-from memoryos.application.ports import LanguageModel
+from memoryos.application.ports import (
+    LanguageModel,
+    ModelTurn,
+    ToolCall,
+    ToolExchange,
+)
 from memoryos.domain.jobs import PermanentError, TransientError
 
 if TYPE_CHECKING:  # pragma: no cover
     from groq import AsyncGroq
+
+    from memoryos.application.agent.tools import ToolSpec
 
 logger = structlog.get_logger(__name__)
 
@@ -131,6 +140,120 @@ class GroqLanguageModel(LanguageModel):
         )
         return text
 
+    async def converse(
+        self,
+        system: str,
+        user: str,
+        *,
+        tools: Sequence["ToolSpec"] = (),
+        exchanges: Sequence[ToolExchange] = (),
+        max_tokens: int = 1024,
+    ) -> ModelTurn:
+        """One turn, with tools offered and any completed calls replayed.
+
+        **Groq takes the tool schema exactly as generated.** Verified against the
+        live API during this milestone rather than trusted from a specification:
+        a pydantic `model_json_schema()` — `title`, `additionalProperties: false`,
+        `minimum`/`maximum` and all — is accepted unchanged, which is why nothing
+        here rewrites it. `gemini.py` has to, and says so.
+
+        The replay shape is the provider's, and it is the part that does not
+        travel: an assistant message carrying the `tool_calls`, then one message
+        per result with `role="tool"` and the matching `tool_call_id`. Sending
+        the result without the assistant message that requested it is rejected,
+        which is the mistake worth naming because the error says only that the
+        message order is wrong.
+        """
+        client = self._load()
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        for exchange in exchanges:
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": exchange.call.id,
+                            "type": "function",
+                            "function": {
+                                "name": exchange.call.name,
+                                "arguments": json.dumps(exchange.call.arguments),
+                            },
+                        }
+                    ],
+                }
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": exchange.call.id,
+                    "content": exchange.result,
+                }
+            )
+
+        payload: dict[str, Any] = {
+            "model": self._model_name,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.0,
+        }
+        if tools:
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": spec.name,
+                        "description": spec.description,
+                        "parameters": spec.parameters,
+                    },
+                }
+                for spec in tools
+            ]
+            # "auto" rather than "required": a question the corpus cannot help
+            # with should be answerable with a sentence saying so, and forcing a
+            # call would make the model pick the least bad tool instead.
+            payload["tool_choice"] = "auto"
+
+        try:
+            response = await asyncio.wait_for(
+                client.chat.completions.create(**payload), timeout=self._timeout
+            )
+        except TimeoutError as exc:
+            raise TransientError(
+                f"{self._model_name} did not respond within {self._timeout}s"
+            ) from exc
+        except Exception as exc:
+            raise _classify(exc) from exc
+
+        message = response.choices[0].message
+        calls = tuple(
+            ToolCall(
+                id=call.id,
+                name=call.function.name,
+                arguments=_arguments(call.function.arguments),
+            )
+            for call in (message.tool_calls or [])
+        )
+        text = (message.content or "").strip()
+        if not text and not calls:
+            reason = _finish_reason(response)
+            raise PermanentError(
+                f"{self._model_name} returned neither text nor a tool call"
+                + (f" ({reason})" if reason else "")
+            )
+
+        logger.info(
+            "llm.turn",
+            model=self._model_name,
+            tools_offered=len(tools),
+            tool_calls=len(calls),
+            answer_chars=len(text),
+        )
+        return ModelTurn(text=text, tool_calls=calls)
+
     def _load(self) -> "AsyncGroq":
         if self._client is None:
             from groq import AsyncGroq
@@ -143,6 +266,21 @@ class GroqLanguageModel(LanguageModel):
             # calls against a quota the free tier measures in tens per minute.
             self._client = AsyncGroq(api_key=self._api_key, max_retries=0)
         return self._client
+
+
+def _arguments(raw: str) -> dict[str, Any]:
+    """The model's arguments as a dict, or an empty one.
+
+    **Malformed JSON is not raised here**, and that is deliberate: the registry
+    validates arguments against the schema and hands back a correctable sentence,
+    so an empty dict reaches it as "you sent no arguments" — which is a message
+    the model can act on. Raising would abort the turn over the model's mistake.
+    """
+    try:
+        parsed = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _classify(exc: Exception) -> Exception:

@@ -31,7 +31,7 @@ from memoryos.adapters.db.engine import Database
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.extraction.llm import ExtractionStats
 from memoryos.adapters.graph.schema import SCHEMA_VERSION
-from memoryos.adapters.llm.errors import MissingApiKey
+from memoryos.adapters.llm.errors import MissingApiKey, RateLimited
 from memoryos.application import (
     assumption_groups,
     assumption_suggest,
@@ -48,6 +48,7 @@ from memoryos.application import (
     outcomes,
     patterns,
     reflections,
+    sources,
     surfacing,
     temporal,
 )
@@ -96,7 +97,7 @@ from memoryos.application.verify_citations import verify_citations
 from memoryos.application.watcher import WatchTree
 from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
-from memoryos.container import Container
+from memoryos.container import Container, ToolsUnsupported
 from memoryos.domain.backoff import wait_for
 from memoryos.domain.debounce import DEFAULT_WINDOW
 from memoryos.domain.entities import Source
@@ -1585,19 +1586,19 @@ async def run_gaps(settings: Settings, *, min_days: float, source: str | None) -
     container = Container.build(settings)
     sessions = container.database.session_factory
     try:
-        async with sessions() as session:
-            rows = (
-                await session.execute(
-                    select(models.Source.id, models.Source.name).order_by(
-                        models.Source.name
-                    )
-                )
-            ).all()
-        if source is not None:
-            rows = [row for row in rows if row[1] == source]
-            if not rows:
-                print(f"no source named {source!r}")
-                return 1
+        # The name-to-id lookup moved to `application/sources.py` in M7.0. It
+        # was written here and again in the timeline route, and a tool was about
+        # to be the third copy.
+        try:
+            wanted = await sources.resolve(sessions, source)
+        except sources.UnknownSource as exc:
+            print(str(exc))
+            return 1
+        rows = [
+            (row.id, row.name)
+            for row in await sources.listed(sessions)
+            if wanted is None or row.id == wanted
+        ]
 
         min_gap = timedelta(days=min_days)
         found = 0
@@ -3202,6 +3203,114 @@ async def run_surfacing_check(settings: Settings, *, focus: str) -> int:
 
 
 # --------------------------------------------------------------------------
+# Agent
+# --------------------------------------------------------------------------
+
+
+async def run_agent_ask(settings: Settings, *, question: str, explain: bool) -> int:
+    """One question, at most one tool call, one answer.
+
+    **Which tool it chose is printed by default**, because that is what M7.0 is
+    judged on. A question routed to the wrong tool is a description problem, and
+    an agent that answered without saying how is one nobody can debug.
+    """
+    container = Container.build(settings)
+    try:
+        try:
+            agent = container.agent()
+        except ToolsUnsupported as exc:
+            print(str(exc))
+            return 1
+        except MissingApiKey as exc:
+            print(str(exc))
+            return 1
+        try:
+            answer = await agent.ask(question)
+        except RateLimited as exc:
+            # The expected steady state on a free tier, not an exception — this
+            # project has said so since M2.6a. A traceback for it teaches the
+            # reader to ignore tracebacks.
+            wait = (
+                "" if exc.retry_after is None else f" Try again in {exc.retry_after:.0f}s."
+            )
+            print(f"The language model is rate limited.{wait}")
+            return 1
+        except (TransientError, PermanentError) as exc:
+            # One line, and the provider's own words. Every one of these is
+            # actionable — a dead model id, a missing quota, a network that is
+            # not there — and none of them is a bug in this system to be read
+            # off a stack.
+            print(f"The language model could not answer: {exc}")
+            return 1
+    finally:
+        await container.dispose()
+
+    chose = answer.tool or "no tool — answered directly"
+    print(f"tool: {chose}")
+    if answer.tool_arguments:
+        rendered = ", ".join(
+            f"{name}={value!r}" for name, value in sorted(answer.tool_arguments.items())
+        )
+        print(f"args: {rendered}")
+    print()
+    for line in textwrap.wrap(answer.answer, width=88) or [""]:
+        print(line)
+
+    if answer.truncated:
+        print(
+            "\nThe tool result was truncated, so this answer covers part of what "
+            "exists."
+        )
+
+    if answer.citations:
+        # Printed whether or not `--explain` was passed. The citations are the
+        # only thing standing between a fluent answer and an unfalsifiable one,
+        # and hiding them behind a flag is how they stop being read.
+        print(f"\nsources ({len(answer.citations)}):")
+        for citation in answer.citations[:10]:
+            print(f"  {citation.locator}")
+            if explain:
+                print(f"      {textwrap.shorten(citation.excerpt, width=76)}")
+        if len(answer.citations) > 10:
+            print(f"  … and {len(answer.citations) - 10} more")
+    elif answer.used_a_tool:
+        print("\nNo sources: the tool returned nothing citable.")
+
+    print(
+        f"\n{answer.model_calls} model call(s), {answer.duration_ms}ms"
+    )
+    return 0
+
+
+async def run_agent_tools(settings: Settings) -> int:
+    """What the model is offered, exactly as it reads it.
+
+    **The descriptions are the interface**, and the only way to review them is to
+    read them the way a model does: in order, in full, with nothing else on
+    screen. A tool that routes badly is a description that reads badly, and this
+    is where that is visible.
+    """
+    container = Container.build(settings)
+    try:
+        specs = container.tools().specs()
+    finally:
+        await container.dispose()
+
+    for spec in specs:
+        required = set(spec.parameters.get("required", []))
+        print(f"{spec.name}")
+        for line in textwrap.wrap(spec.description, width=84):
+            print(f"    {line}")
+        for name, schema in spec.parameters.get("properties", {}).items():
+            mark = "*" if name in required else " "
+            kind = schema.get("type", "any")
+            print(f"    {mark} {name} ({kind}): {schema.get('description', '')}")
+        print()
+    print(f"{len(specs)} tools. * marks a required argument.")
+    return 0
+
+
+# --------------------------------------------------------------------------
 # Reflections
 # --------------------------------------------------------------------------
 
@@ -4476,6 +4585,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     surfacing_check.add_argument("focus")
 
+    agent_parser = commands.add_parser(
+        "agent", help="ask a question and let the model choose one tool"
+    )
+    agent_commands = agent_parser.add_subparsers(dest="agent_command", required=True)
+    agent_ask = agent_commands.add_parser(
+        "ask", help="one question, at most one tool call, one answer"
+    )
+    agent_ask.add_argument("question")
+    agent_ask.add_argument(
+        "--explain",
+        action="store_true",
+        help="print the excerpt behind each citation as well as its locator",
+    )
+    agent_commands.add_parser(
+        "tools", help="the tools a model is offered, with their descriptions"
+    )
+
     reflect_parser = commands.add_parser(
         "reflect",
         help="describe a pattern in prose, with citations; refuses below the bar",
@@ -5080,6 +5206,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.events_command == "stats":
             return asyncio.run(run_events_stats(settings))
+
+    if args.command == "agent":
+        if args.agent_command == "ask":
+            return asyncio.run(
+                run_agent_ask(settings, question=args.question, explain=args.explain)
+            )
+        if args.agent_command == "tools":
+            return asyncio.run(run_agent_tools(settings))
 
     if args.command == "surfacing":
         if args.surfacing_command == "stats":

@@ -19,10 +19,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 
-from memoryos.adapters.db import models
-from memoryos.application import temporal
+from memoryos.application import sources, temporal
 from memoryos.container import Container
 from memoryos.domain.entities import Memory
 from memoryos.domain.values import Period
@@ -315,20 +313,18 @@ def _aware(moment: datetime) -> datetime:
 
 
 async def _resolve_source(container: Container, name: str | None) -> UUID | None:
-    if name is None:
-        return None
-    async with container.database.session_factory() as session:
-        found = (
-            await session.execute(select(models.Source.id).where(models.Source.name == name))
-        ).scalars().first()
-    if found is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no source named {name!r}")
-    return found
+    """A source name as an id, or 404.
+
+    The lookup itself moved to `application/sources.py` in M7.0: this route had
+    one copy, the CLI had another, and a third was about to be written for a
+    tool. What is left here is the only part that is HTTP's business, which is
+    turning a `LookupError` into a status code.
+    """
+    try:
+        return await sources.resolve(container.database.session_factory, name)
+    except sources.UnknownSource as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
 
 async def _source_names(container: Container) -> dict[UUID, str]:
-    async with container.database.session_factory() as session:
-        return {
-            row[0]: row[1]
-            for row in await session.execute(select(models.Source.id, models.Source.name))
-        }
+    return await sources.names(container.database.session_factory)
