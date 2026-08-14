@@ -58,14 +58,14 @@ each produces nothing on this corpus for a reason it states rather than hides.
 | **Reflections** (M5.4) | **0 reflections** | Nothing to describe: it refuses to write prose about a pattern that does not exist. |
 | **Gap analysis** (M8.1) | **0 gaps, 4 runs out of 4** | 14 candidates weighed across three decisions; the closest reached 1 of the 2 supporting instances it needs. |
 | **The user model** (M8.0) | **0 derived facets across 5 derivable dimensions** | Nothing reaches 3 distinct observations. `goals` is asserted-only by design; `learning_style` has no deriver by design. |
-| **Model evolution** (M8.2) | **"cannot say" on every dimension** | A stability verdict needs 3 closed facets and 30 days of history. There are 0 and ~1. |
+| **Model evolution** (M8.2) | **"no facets: nothing to measure" on all seven** | A stability verdict needs 3 closed facets and 30 days of history. There are 0 facets and 0 change events. |
 | **Habits** (M8.0) | **structurally impossible** | 0 of 282 memories carry a source-declared date. Every timestamp is a filesystem mtime, which a checkout resets for the whole tree at once. |
 | **Workflows** (M8.0) | **structurally impossible** | Entity extraction has reached 1 of 282 memories (0%). A co-occurrence over that slice is a fact about the slice. |
 | **Graph-augmented retrieval** (M3.5) | **0 results contributed, 0 of 52 queries reached** | Extraction covers 1 memory. The expansion works; there is nothing extracted for it to expand into. |
 | **Typed relationships** (M3.3) | **0 relationships** | Extraction has not been run across the corpus. |
-| **Agent variance floor** (M7.3) | **unknown** | Three passes over eight questions costs more than the free tier allows in a day. Every future claim of the form "this improved trajectory quality" is currently uncheckable. |
+| **Agent variance floor** (M7.3) | **unknown** | Three passes over eight questions costs more than the free tier allows in a day. On the final verification run *one* pass was refused too — 0 of 8 questions reached the provider. Every future claim of the form "this improved trajectory quality" is currently uncheckable. |
 
-**None of this is a digital twin.** A model of a person derived from 16
+**None of this is a digital twin.** A model of a person derived from 12
 decisions over a fortnight is a model of a fortnight. The structure that would
 hold such a model — dimensions, evidence with both sides cited, supersession,
 withdrawal, dismissal that survives re-derivation, a stability measure that
@@ -163,6 +163,11 @@ against replay, and left them unprotected against its own recommended
    the threshold was designed before the output was seen. The one place that
    went the other way, M6.3's surfacing, is the one that shipped at a 54%
    dismissal rate.
+6. **Give every user-authored table an export on the day you create it.**
+   `replay.py` already names which tables are irreplaceable. Only one of them
+   ever got an export, and the milestone that ran the project's own
+   `docker compose down -v` lost four decisions and the corpus's only assumption
+   group to the other ones.
 
 For the full account, see [docs/RETROSPECTIVE.md](docs/RETROSPECTIVE.md).
 
