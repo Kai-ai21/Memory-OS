@@ -39,7 +39,9 @@ Three conditions, all of them, because **each one fails on its own**:
 * **No new information** catches the loop that is technically progressing — new
   queries, new arguments, same results — which the hop limit only stops after it
   has spent the whole budget. Two consecutive stale hops, not one: a single
-  repeat is often a model re-reading something before pivoting.
+  repeat is often a model re-reading something before pivoting. What counts as
+  "already seen" is *which memories came back*, not the bytes of the rendering;
+  see `_signature`.
 * **The model saying it has enough** is the only one of the three that can stop
   at the *right* time rather than at a bound, because it is the only one that
   knows what the question needed. It is trusted, and only within the other two,
@@ -58,6 +60,7 @@ is run and the rest come back as a sentence saying to ask again, which costs a
 hop and is the correct price.
 """
 
+import asyncio
 import hashlib
 import time
 from collections.abc import Sequence
@@ -69,13 +72,14 @@ from typing import Any
 import structlog
 
 from memoryos.application.agent.compaction import Compacted, Counter, compact
-from memoryos.application.agent.tools import ToolRegistry, ToolResult, UnknownTool
+from memoryos.application.agent.tools import ToolRegistry, ToolResult, ToolSpec, UnknownTool
 from memoryos.application.ports import (
     ModelTurn,
     ToolCall,
     ToolCallingModel,
     ToolExchange,
 )
+from memoryos.domain.backoff import wait_for
 from memoryos.domain.citation import Citation
 from memoryos.domain.jobs import PermanentError, TransientError
 
@@ -93,6 +97,33 @@ DEFAULT_FINDING_BUDGET = 1200
 # re-reading a result before changing direction is normal — and three is a hop
 # spent proving something two already showed.
 STALE_LIMIT = 2
+
+# Attempts at one model call before the trajectory ends.
+#
+# **M7.1 said "rate limits are TransientError, so existing backoff applies" and
+# nothing here applied it.** That went unnoticed because the only limit either
+# provider hit during M7.1 was a *daily* one, where retrying is pointless and
+# ending the trajectory is right. A per-minute limit is the opposite case and it
+# is the common one: `openai/gpt-oss-20b` refused hop four of a four-hop run and
+# asked to be tried again in **285 milliseconds**, and the trajectory ended.
+#
+# Five rather than three, and that too was measured. A tokens-per-minute limit of
+# 8,000 against a ~4,000-token prompt is two calls a minute, so a six-hop
+# trajectory spends more of its life waiting than talking; at three attempts,
+# `openai/gpt-oss-120b` lost hop six after five good ones. Bounded by the ceiling
+# below, so the worst case is minutes of waiting rather than unbounded.
+RETRY_ATTEMPTS = 5
+
+# The longest advised wait worth sitting through inside one question.
+#
+# The distinction this draws is the whole point of retrying here at all. A
+# sliding token-per-minute window advises tenths of a second and a retry costs
+# nothing; a daily quota advises half an hour, `wait_for` caps that at two
+# minutes, and sleeping two minutes three times in a foreground command is
+# indistinguishable from a hang — while the four hops already completed sit
+# unread in a trajectory nobody can see yet. Above this, fail now and let the
+# caller see the partial work.
+RETRY_CEILING_SECONDS = 30.0
 
 
 class StopReason(StrEnum):
@@ -215,8 +246,15 @@ does not contain what a question assumes it does, and saying that is a better \
 answer than a fluent one.
 - Never invent a file name, a date or a quotation. If you name a source, it must \
 be one a tool result showed you.
-- Stop as soon as you can answer. Extra hops cost real money and do not make a \
-thin answer thicker.
+- In your final answer, mark every factual sentence with the hop it came from, \
+in brackets: "The lease expires after 30 seconds [2]." Use the hop numbers you \
+were given. A sentence you cannot attribute to a hop is one you should not write.
+- Before your first call, decide what the question DECOMPOSES into. "What have I \
+repeated" is not one lookup: it is find the cases, read what each assumed, then \
+check whether they are really the same thing. Take those steps.
+- Stop when you can answer, and not before. One search that returned things only \
+loosely related to the question is not an answer — it is the first hop. Extra \
+hops cost real money, and so does a confident paragraph about the wrong subject.
 - When a result says it was truncated, or when findings were dropped for space, \
 say that your answer covers only part of what exists.
 
@@ -227,9 +265,10 @@ _FINAL_TEMPLATE = """{question}
 {history}
 
 You have no more hops: {why}. Answer the question now from what you gathered \
-above, and nothing else. If what you gathered does not answer it, say exactly \
-that and say what is missing — an honest "the corpus does not contain this" is \
-correct and a confident synthesis of four weak results is not."""
+above, and nothing else, marking each factual sentence with the hop it came from \
+in brackets. If what you gathered does not answer it, say exactly that and say \
+what is missing — an honest "the corpus does not contain this" is correct and a \
+confident synthesis of four weak results is not."""
 
 _WHY = {
     StopReason.HOP_LIMIT: "you have used every hop you were given",
@@ -286,7 +325,8 @@ class MultiHopPlanner:
         specs = self._registry.specs()
 
         steps: list[Step] = []
-        seen: set[str] = set()
+        seen_memories: set[str] = set()
+        seen_digests: set[str] = set()
         stale = 0
         calls = 0
         prompt_tokens = 0
@@ -301,12 +341,11 @@ class MultiHopPlanner:
             )
             turn_started = time.monotonic()
             try:
-                turn = await self._model.converse(
+                turn = await self._converse(
                     instructions,
                     _user_message(question, history, hop=hop, limit=limit),
                     tools=specs,
                     exchanges=_exchanges(history),
-                    max_tokens=self._max_tokens,
                 )
             except (TransientError, PermanentError) as exc:
                 logger.warning("agent.model_failed", hop=hop, error=str(exc))
@@ -363,9 +402,13 @@ class MultiHopPlanner:
 
             call = turn.tool_calls[0]
             result = await self._call(call, extra=len(turn.tool_calls) - 1)
-            digest = _digest(result.content)
-            novel = digest not in seen
-            seen.add(digest)
+            memories, digest = _signature(result)
+            # A result that cited memories is new when any of them is new. One
+            # unseen memory among five seen ones is still a fact the model did
+            # not have, and calling that stale would stop a loop that is working.
+            novel = bool(memories - seen_memories) if memories else digest not in seen_digests
+            seen_memories |= memories
+            seen_digests.add(digest)
             steps.append(
                 Step(
                     thought=turn.text,
@@ -419,6 +462,41 @@ class MultiHopPlanner:
             error=None if answer is not None else "the final answer call failed",
         )
 
+    async def _converse(
+        self,
+        instructions: str,
+        user: str,
+        *,
+        tools: Sequence[ToolSpec] = (),
+        exchanges: Sequence[ToolExchange] = (),
+    ) -> ModelTurn:
+        """One model call, retried while the provider says to come back soon.
+
+        `wait_for` prefers the provider's own number over an estimate, which is
+        the whole reason this can distinguish the two kinds of 429 — see
+        `RETRY_CEILING_SECONDS`. `PermanentError` is not retried: the adapter has
+        already made that judgement and a second identical request will get the
+        same answer.
+        """
+        for attempt in range(RETRY_ATTEMPTS):
+            try:
+                return await self._model.converse(
+                    instructions,
+                    user,
+                    tools=tools,
+                    exchanges=exchanges,
+                    max_tokens=self._max_tokens,
+                )
+            except TransientError as exc:
+                delay = wait_for(exc, attempt)
+                if attempt == RETRY_ATTEMPTS - 1 or delay > RETRY_CEILING_SECONDS:
+                    raise
+                logger.info(
+                    "agent.retrying", attempt=attempt + 1, delay=round(delay, 2)
+                )
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
+
     async def _final(
         self,
         question: str,
@@ -436,14 +514,13 @@ class MultiHopPlanner:
             if part
         ) or "You gathered nothing."
         try:
-            turn = await self._model.converse(
+            turn = await self._converse(
                 instructions,
                 _FINAL_TEMPLATE.format(
                     question=question,
                     history=rendered,
                     why=_WHY.get(stop, "the loop has ended"),
                 ),
-                max_tokens=self._max_tokens,
             )
         except (TransientError, PermanentError) as exc:
             logger.warning("agent.final_failed", error=str(exc))
@@ -589,14 +666,27 @@ def _verbatim(history: Compacted) -> str:
     )
 
 
-def _digest(content: str) -> str:
-    """A content hash for the no-new-information rule.
+def _signature(result: ToolResult) -> tuple[frozenset[str], str]:
+    """What a step returned, in the terms the novelty rule should compare.
 
-    Whitespace-normalised, because two renderings of the same five memories that
-    differ by a line break are the same information and a raw hash would call
-    them different — which is exactly the loop this condition exists to catch.
+    **The memories, not the bytes.** M7.1 hashed the whitespace-normalised
+    rendering, and on this system that hash can essentially never repeat for the
+    tool it most needed to catch: `search_memories` prints `score 5.237`, and two
+    calls returning the identical five memories at fractionally different scores
+    produce different hashes. Measured on a real run — "repeated mistakes" then
+    "mistakes I have repeated" — both hops were recorded as new, and the rule
+    that exists to catch a reworded search watched one go past.
+
+    So the primary signature is the set of memory ids the result cited, which is
+    what "results already seen" means in any reading that is about information.
+
+    The digest survives as the fallback for results that cite nothing, and those
+    are not an edge case: "No silences of 30 days or more", "no recorded decision
+    matches", an argument correction. Two of those in a row is a loop, and with
+    no ids to compare it is the only thing left to compare.
     """
-    return hashlib.sha256(" ".join(content.split()).encode()).hexdigest()
+    memories = frozenset(str(citation.memory_id) for citation in result.citations)
+    return memories, hashlib.sha256(" ".join(result.content.split()).encode()).hexdigest()
 
 
 def _ms(started: float) -> int:

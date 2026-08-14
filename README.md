@@ -47,8 +47,15 @@ the layering earned its cost, and the answer is two extractions and thirty lines
 of citation plumbing. M7.1 (multi-hop planning) turns one call into several
 dependent ones under three termination conditions — and its headline number is
 that **the hop limit never fired once**: the loop stops too early rather than too
-late, at a mean of 1.4 hops over five questions that need four or five. See
-[Agent tools](#agent-tools) and [Multi-hop planning](#multi-hop-planning).
+late, at a mean of 1.4 hops over five questions that need four or five. M7.2
+(answer verification) measures every claim against what the trajectory actually
+retrieved and withholds an answer that rests on nothing — 91% support across
+M7.1's five answers, one correctly withheld — and its headline result is the
+failure it did **not** catch: a fluent fabrication about production incidents,
+scored 100% supported, because the instrument measures proximity to retrieved
+text and not entailment. See [Agent tools](#agent-tools),
+[Multi-hop planning](#multi-hop-planning) and
+[Answer verification](#answer-verification).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -4767,6 +4774,304 @@ That is the failure to name rather than hide, and it is not fixed by more hops.
 M7.2's verification layer is the next thing, and it will catch the unsupported
 generalisation; it will not catch the answer that is supported, cited, and about
 something else.
+
+## Answer verification
+
+M7.2 checks that every claim in a multi-hop answer traces to something the
+trajectory actually retrieved, and withholds the answer when too little of it
+does.
+
+```bash
+memoryos agent ask "what mistakes have I repeated" --verify
+uv run python scripts/calibrate_verification.py     # where the thresholds come from
+```
+
+**The check always runs.** `--verify` decides whether the per-claim breakdown is
+printed; it does not decide whether an ungrounded answer is withheld, because a
+guardrail a caller can decline to apply is a preference. `Container.agent()`
+returns a `VerifiedAgent` and there is no way to ask it for the bare planner.
+
+### Why the M2.6 check does not survive the move to a trajectory
+
+M2.6 numbered the passages, asked the model to cite the numbers, and treated an
+index outside the range as an unambiguous fabrication. That works when the
+context is one block. Here the evidence is spread over six results the model saw
+at different times, half of them compacted out of its window by the time it wrote
+a given sentence — and what comes back is fluent, correctly cited, and partly
+invented.
+
+So this checks the property M2.6 explicitly declined: not *did it cite something*
+but **does anything it retrieved bear on this sentence**.
+
+M2.6's reason for declining was that judging support needs a judge, the only
+available judge is another language model, and a model grading its own grounding
+is not evidence. That reasoning still holds, and this does not break it —
+**there is no model here.** Support is measured with the embedder the corpus was
+indexed with: a fixed function that knows nothing about the answer, cannot be
+persuaded, and returns the same number twice.
+
+**The limit that buys is stated up front, and the adversarial run below is what
+it looks like in practice: this measures proximity to retrieved text, not
+entailment.**
+
+### The thresholds were measured
+
+`scripts/calibrate_verification.py` replays real tool calls and scores three sets
+of claims against the passages that come back.
+
+| | range | median |
+| --- | --- | --- |
+| sentences real M7.1 runs wrote from those results | 0.631 - 0.835 | 0.670 |
+| claims true of this project, about material these searches did not fetch | 0.530 - 0.820 | 0.672 |
+| fluent claims about subjects the corpus has no record of | **0.525 - 0.596** | 0.559 |
+
+`DIRECT = 0.62` sits in the gap between the first band and the third: 0.024 above
+the highest invention, 0.011 below the lowest real claim. The margin is thin
+because bge-small-en-v1.5 compresses everything worth comparing into roughly
+0.5-0.85 — a property of the model, not of the corpus, and the reason the number
+lives beside the script that produced it rather than in a config file.
+
+**The middle row is the result worth reading.** It was constructed as a negative
+set and is not one: three searches over a single-project corpus return passages
+adjacent to most of it, so a claim about the chunker really is close to something
+that came back. What separates cleanly is *invention* — subjects with no record —
+and that is exactly what the adversarial questions are made of.
+
+`INFERRED = 0.58`, and the band between the two is thin enough that **`inferred`
+fired for none of the 22 calibration claims and none of the 23 real ones.**
+Widening it would mean moving `DIRECT` up into the supported band and flagging
+true sentences, which is the worse trade. The level is reported and currently
+inert; see the deviations.
+
+### Support across M7.1's five questions
+
+Re-verified by `scripts/verify_m71_answers.py`, which replays each trajectory's
+tool calls and checks the answer M7.1 actually produced. No model is called.
+
+| Question | Hops | Factual | Supported | Verdict |
+| --- | --- | --- | --- | --- |
+| what mistakes have I repeated | 1 | 6 | 83% | grounded |
+| which decisions did I later reverse | 3 | 12 | 100% | grounded |
+| what was I working on when chunking changed | 2 | 3 | 100% | grounded |
+| which parts have the most decisions attached | 0 | 1 | **0%** | **ungrounded** |
+| what did I abandon | 1 | 1 | 100% | grounded |
+| **total** | | **23** | **91%** | 4 grounded, 1 ungrounded |
+
+**21 direct, 0 inferred, 2 unsupported.**
+
+The `ungrounded` row is the zero-hop answer M7.1 measured, and withholding it is
+correct: nothing was retrieved, so nothing supports it. It is also the cheapest
+possible demonstration that the refusal works, because no fabrication was needed
+to trigger it.
+
+### One answer with its flagged claim
+
+`what mistakes have I repeated`, six factual claims, one flagged:
+
+```
+✓ 0.803  The repeated mistakes identified in your memories relate to the system
+         generating or re-showing incorrect or dismissed information.
+·        Specifically:
+✓ 0.706  The system was re-showing the same context, which was addressed by a
+         `SIMILARITY` threshold to prevent this.
+✓ 0.642  There was a need to stop the system from repeating and regenerating
+         claims that were dismissed as wrong.
+✓ 0.790  This was addressed by implementing `dismissed_at` with a paired reason.
+✓ 0.764  A specific instance of a repeated mistake was the system generating a
+         false claim that lines in a code diff had been reordered.
+✗ 0.609  This led to a fix in the prompt to prevent similar "fabrications."
+```
+
+The flagged sentence is **true** — the prompt fix is in the corpus — and it
+scored 0.609 against a 0.62 threshold. That is a false flag, and it is the shape
+false flags take here: a short consequence clause with few content words of its
+own, whose subject lives in the sentence before it.
+
+### The adversarial run
+
+Three questions the corpus cannot answer, at `--max-hops 4`.
+
+| Question | Hops | Stopped | Verdict | Support | Outcome |
+| --- | --- | --- | --- | --- | --- |
+| which of my architectural choices caused production incidents | 4 | `hop_limit` | **grounded** | 100% | **fabricated, and passed** |
+| what patterns do you see in my decision-making over the last three years | 1 | `confidence` | grounded | 100% | correct refusal, by the model |
+| how has my writing style changed over time | 4 | `hop_limit` | partial | 50% | correct refusal, one claim flagged |
+
+#### One of the three produced a confident unsupported answer, and verification passed it
+
+This is the defect the milestone exists to catch, so it is quoted in full:
+
+> The production incident was traced to an architectural decision that caused a
+> request to **fail permanently on the first attempt instead of being retried**
+> (the system was set to retry five times) — this lack of retry logic led to a
+> burst of dead letters during a routine rebuild [1].
+
+**There is no production. There are no incidents.** What hop 1 actually returned
+was a passage from this README, about M6.0's job handler:
+
+> …no longer exists. That fails **permanently on the first attempt** rather than
+> retrying five times, because a routine rebuild should not produce a burst of
+> dead letters.
+
+That sentence is a statement of *design intent* — a rebuild **should not** produce
+dead letters, so the handler does not retry. The answer inverts it into an
+*event*: a burst of dead letters that **did** happen, during an incident that was
+**traced** to a decision. Every noun phrase is lifted from the source. The verb
+tense, the causation and the incident are the model's.
+
+The check scored it **0.741 — direct, supported, grounded.** It is not a bug in
+the thresholds; the sentence genuinely is a close paraphrase of retrieved text.
+**Cosine similarity cannot distinguish "the design says X should not happen" from
+"X happened."** That needs entailment, entailment needs a judge, and the judge is
+the thing M2.6 ruled out and this milestone did not restore.
+
+The agent behaved reasonably throughout: four hops, `get_decisions` correctly
+returned *"No recorded decision matches 'production incident'"*, and the second
+sentence of the answer — *"The corpus does not contain any other recorded
+architectural choices linked to production incidents"* — is a correct statement of
+absence. It hedged the tail and fabricated the head, which is the hardest version
+of this failure to notice by eye.
+
+#### The other two behaved
+
+**Decision-making over three years** — one hop, `get_decisions`, then a refusal
+the model wrote itself: *"I'm unable to identify any long-term patterns in your
+decision-making because the corpus only contains a handful of recent decisions…
+No older decisions are available to examine."* That is the correct answer, it is
+the one M7.1's report predicted the corpus could not beat, and no verification was
+needed to reach it.
+
+**Writing style over time** — four hops, all of them looking for prose: a monthly
+timeline, then `note 2010`, `markdown note 2012`, `notes/`. Every search returned
+code. The answer says so and declines:
+
+> The available memories contain almost exclusively code files and only two short
+> notes from the entire period, and the subsequent searches return only
+> additional code snippets rather than longer prose or reflective writing.
+> **[unsupported]** Because there are no substantial textual notes or writings
+> spanning the years, the corpus does not provide enough material to assess how
+> your writing style has changed over time. [1][2][3][4]
+
+50% supported, `partial`, and the flag is on the right sentence for an
+interesting reason: it is a claim about the *trajectory* — what the searches
+returned — rather than about the corpus, and no retrieved passage says it. It is
+true, and this check has no way to know that, because the thing that would
+confirm it is the shape of the results rather than their content.
+
+#### The check and a careful reader disagree on the sentence that matters
+
+M7.1's report named exactly one sentence as fluent-but-unsupported, in the
+`reversed` answer:
+
+> The common theme among the "broke" assumptions is that they relate to the
+> completeness or effectiveness of data/processes.
+
+M7.2 scores it **0.633 — direct, supported.** Three assumptions from one decision
+generalised into a pattern; the words are all near the retrieved decision text and
+the inference over them is not checked by anything. The one claim a person
+identified as the problem is the one the instrument passes.
+
+### Direct versus inferred
+
+**21 of 21 supported claims across M7.1's five answers were `direct`. Zero were
+`inferred`.** On the surface that is the reassuring reading — the agent is
+paraphrasing what it retrieved rather than reasoning past it.
+
+It is not the honest one. The `inferred` band is 0.04 wide, and the calibration
+already showed the level firing for none of 22 claims. So a `direct_rate` of 100%
+here means *the instrument cannot currently distinguish the two*, and reading it
+as evidence that the agent does not over-reason would be reading a null result as
+a positive one. The one answer that demonstrably does over-reason — the
+"common theme" sentence above — was scored `direct` at 0.633.
+
+### Citation integrity
+
+Three checks, and the first is the only one detectable with certainty.
+
+A **hop the trajectory does not have** caps the verdict at `partial` however well
+the rest scores. This fires on real answers: asked "what mistakes have I
+repeated" on Gemini over a one-hop run, the answer cited `[1]`, `[2, 3]` and
+`[4]`. Only hop 1 existed. That run is also where the check's own first defect was
+found — integrity read `Claim.cited_step`, which M7.2 specifies as singular, so
+hop 3 in `[2, 3]` went unreported. It now reads every index.
+
+A **cited hop whose result was truncated** is reported rather than penalised: the
+model may be citing something it only partly saw, which is a reason to trust the
+sentence less, not to reject it.
+
+A **citation whose offsets no longer resolve** against the stored memory is
+reported by locator. This is M2.5's identity — `memory.content[start:end] ==
+chunk.content[prefix:]` — applied to the handful of spans one answer rests on, at
+the moment it is produced, rather than swept corpus-wide by `verify-citations`
+some time later.
+
+### Unsupported claims are flagged, never removed
+
+M2.6's rule, unchanged by there being six results instead of one: prose with a
+sentence quietly deleted from the middle reads as complete and is not. What *is*
+withheld is the whole answer, when the support rate falls below
+`MEMOS_AGENT_MIN_SUPPORT` (0.5).
+
+In the browser the mark is **in the paragraph** — underlined, labelled, at the
+same weight as the text around it. Not greyed, not collapsed, not behind a "show
+verification" toggle. The reason a person believes an ungrounded sentence is that
+it looks identical to the grounded ones beside it, so the mark has to be visible
+while they are reading it; a toggle would be opened once. Same argument the
+surfacing page makes about showing its refusals.
+
+### Deviations and ambiguities
+
+* **`Claim.cited_step` is kept singular as specified, and `cited_steps` was added
+  beside it.** Integrity has to read every index — the singular field
+  under-counted the one failure that must never be under-counted.
+* **The verdict thresholds are this milestone's choice**, since it specifies only
+  "ungrounded below a threshold": `grounded` at ≥80% support with no invalid
+  citations, `partial` above 50%, `ungrounded` below. Only the refusal threshold
+  is a setting; the two similarity thresholds are not, because moving one by hand
+  without re-running the calibration is worse than not having the knob.
+* **`inferred` is reported and currently never fires.** Named rather than removed:
+  the level is the right shape and the instrument is too blunt for it. A
+  cross-encoder — this project already runs one for reranking — would separate
+  these bands far better than a bi-encoder, and that is the obvious next thing.
+* **A statement of absence is connective** and needs no citation, because
+  requiring evidence for "the corpus does not contain this" would rate the honest
+  answer below the confident one. The escape hatch is deliberately narrow: an
+  absence must be declared in the opening clause, after a real answer containing
+  the quoted phrase `"…an edit, not a new finding"` matched ninety characters in
+  and was excused from being checked at all.
+* **`marked()` rebuilds the answer from its sentences**, so markdown line
+  structure is flattened in the marked string. `raw_answer` and
+  `verification.claims` both preserve it, and the browser renders per claim.
+* **Support is checked against every hop, not only the cited one.** A model that
+  wrote a true sentence and attributed it to the wrong hop has made a citation
+  mistake, not a fabrication, and the two are reported separately.
+* **The adversarial runs used `openai/gpt-oss-120b` at `--max-hops 4`.** Groq's
+  daily budget for `llama-3.3-70b-versatile` and Gemini's 20 requests/day were
+  both exhausted by M7.1 and the earlier M7.2 runs; those budgets are per model,
+  so a model with its own remaining quota is what the questions were run against.
+  It is a different model from M7.1's and the report says so rather than implying
+  continuity.
+
+### What this milestone establishes, and what it does not
+
+The mechanism works: claims are extracted, support is measured against real
+retrievals with a fixed instrument, unsupported sentences are marked in place on
+three surfaces, citations to hops that never happened are caught, and an answer
+that rests on nothing is withheld rather than shown. 91% support across M7.1's
+five answers, one correctly withheld.
+
+**And a confident fabrication about production incidents scored 100% supported.**
+The instrument measures whether a sentence is *near* retrieved text. The failure
+this phase most needs to catch is a sentence that is near retrieved text and says
+something else — a tense changed, a modal dropped, a design intent read as an
+event. Nothing here sees that, the module said so before the run, and the run
+produced it on the first question.
+
+That is not an argument for the check being worthless: it caught the zero-hop
+answer, it caught three fabricated hop citations, and it flags claims a reader
+should look at. It is an argument that a support rate is a floor and not a
+verdict, and that the next instrument has to be one that can read a sentence
+against a passage rather than measure the angle between them.
 
 ## Migrations
 

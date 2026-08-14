@@ -279,6 +279,88 @@ async def test_one_repeat_is_not_enough_to_stop() -> None:
     assert [step.novel for step in trajectory.steps] == [True, False, True, False]
 
 
+async def test_the_same_memories_at_different_scores_are_not_new_information() -> None:
+    """**The case M7.1's content hash could never catch.**
+
+    `search_memories` prints `score 5.237`. Two reworded queries that return the
+    identical five memories render differently by a few thousandths, so a hash of
+    the rendering says "new" every time — and the condition written to stop a
+    model rewording its way in circles watched exactly that go past on a live run.
+
+    Comparing the memories rather than the bytes is the whole fix.
+    """
+
+    class Rescoring:
+        """Same memories every call, one digit of score apart."""
+
+        arguments: type[BaseModel] = Args
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        @property
+        def spec(self) -> ToolSpec:
+            return spec_for(Args, name="search_memories", description="Find.")
+
+        async def call(self, **kwargs: Any) -> ToolResult:
+            self.calls += 1
+            return ToolResult(
+                content=f"[1] self::src/a.py (score {5.0 + self.calls / 1000:.3f})",
+                citations=[citation(1)],
+            )
+
+    trajectory = await planner(
+        ScriptedModel([wants(query="a"), wants(query="b"), wants(query="c")]),
+        Rescoring(),
+    ).run("go", max_hops=6)
+
+    assert trajectory.stopped_because is StopReason.NO_NEW_INFORMATION
+    assert [step.novel for step in trajectory.steps] == [True, False, False]
+
+
+async def test_one_unseen_memory_among_seen_ones_is_still_new() -> None:
+    """The other half, and the one that would be easy to break in fixing the
+    first: four results the model has read plus one it has not is a fact it did
+    not have, and stopping there would end a loop that is working."""
+
+    class Widening:
+        arguments: type[BaseModel] = Args
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        @property
+        def spec(self) -> ToolSpec:
+            return spec_for(Args, name="search_memories", description="Find.")
+
+        async def call(self, **kwargs: Any) -> ToolResult:
+            self.calls += 1
+            # Overlaps heavily with the previous call and adds exactly one.
+            return ToolResult(
+                content="overlapping results",
+                citations=[citation(number) for number in range(1, self.calls + 2)],
+            )
+
+    trajectory = await planner(
+        ScriptedModel([wants(query="a")]), Widening()
+    ).run("go", max_hops=3)
+
+    assert trajectory.stopped_because is StopReason.HOP_LIMIT
+    assert all(step.novel for step in trajectory.steps if step.tool)
+
+
+async def test_a_result_that_cites_nothing_falls_back_to_its_text() -> None:
+    """"No silences of 30 days or more" cites nothing and is not an edge case —
+    two of those in a row is a loop, and with no ids to compare the rendering is
+    the only thing left."""
+    trajectory = await planner(
+        ScriptedModel([wants(query="a"), wants(query="b"), wants(query="c")]),
+        RepeatingTool(),
+    ).run("go", max_hops=6)
+
+    assert trajectory.stopped_because is StopReason.NO_NEW_INFORMATION
+
+
 async def test_a_model_that_stops_on_its_own_is_recorded_as_having_done_so() -> None:
     """The third condition, and the only one that can stop at the right time.
 
@@ -515,3 +597,65 @@ def test_stop_reasons_are_counted_for_the_report() -> None:
     # Every reason present, including the zeroes: a distribution that omitted
     # the reasons that never fired would read as if they could not.
     assert set(counted) == {reason.value for reason in StopReason}
+
+
+async def test_a_sliding_window_rate_limit_is_waited_out_rather_than_fatal() -> None:
+    """**M7.1 claimed backoff applied here and nothing applied it.**
+
+    It went unnoticed because both providers' M7.1 failures were *daily* quotas,
+    where retrying is pointless. A per-minute window is the opposite and the more
+    common case: one model refused hop four and asked to be tried again in 285
+    milliseconds, and a four-hop trajectory ended over it.
+    """
+    from memoryos.adapters.llm.errors import RateLimited
+
+    class RefusesOnce(ScriptedModel):
+        def __init__(self, turns: list[ModelTurn]) -> None:
+            super().__init__(turns)
+            self.refusals = 0
+
+        async def converse(self, *args: Any, **kwargs: Any) -> ModelTurn:
+            if self.refusals == 0 and kwargs.get("tools"):
+                self.refusals += 1
+                raise RateLimited("tokens per minute", retry_after=0.01)
+            return await super().converse(*args, **kwargs)
+
+    model = RefusesOnce([wants(query="x"), answers("Because of the lease.")])
+
+    trajectory = await planner(model, CountingTool()).run("why", max_hops=4)
+
+    assert trajectory.stopped_because is StopReason.CONFIDENCE
+    assert trajectory.answer == "Because of the lease."
+    assert model.refusals == 1
+
+
+async def test_a_daily_quota_ends_the_trajectory_instead_of_hanging() -> None:
+    """The other half, and the reason the ceiling exists.
+
+    A provider asking for half an hour is describing a daily budget. Sleeping
+    through it three times inside one question is indistinguishable from a hang,
+    while the hops already completed sit unread in a trajectory nobody can see.
+    """
+    from memoryos.adapters.llm.errors import RateLimited
+
+    class OutOfBudget(ScriptedModel):
+        def __init__(self, turns: list[ModelTurn]) -> None:
+            super().__init__(turns)
+            self.calls = 0
+
+        async def converse(self, *args: Any, **kwargs: Any) -> ModelTurn:
+            self.calls += 1
+            if self.calls > 1:
+                raise RateLimited("tokens per day", retry_after=1894.0)
+            return await super().converse(*args, **kwargs)
+
+    model = OutOfBudget([wants(query="x")])
+
+    trajectory = await planner(model, CountingTool()).run("why", max_hops=6)
+
+    assert trajectory.stopped_because is StopReason.ERROR
+    assert trajectory.retry_after == 1894.0
+    # One hop survived, and it is the whole reason this returns rather than raises.
+    assert trajectory.hops == 1
+    # Two calls: the one that worked and the one that did not. No retries.
+    assert model.calls == 2

@@ -11,6 +11,12 @@ than a 500: a rate limit at hop five did not undo hops one to four, and hiding
 them behind a status code loses the only evidence of what the run had found. The
 error statuses below are for the failures that produce no trajectory at all —
 there is no model, or the configured one cannot call tools.
+
+**An ungrounded answer is withheld here too, and 200 is the right code for it.**
+The system answered — with a refusal, which is a legitimate answer and the one
+this phase most wants — and `verification.refused` says so. A 4xx would tell a
+client its request was wrong when what happened is that the corpus could not
+support a reply.
 """
 
 from typing import Annotated
@@ -20,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from memoryos.adapters.llm.errors import MissingApiKey
 from memoryos.api.routes.search import CitationOut, _citation_out
-from memoryos.application.agent.planner import Trajectory
+from memoryos.application.agent.verify import Claim, VerifiedAnswer
 from memoryos.container import Container, ToolsUnsupported
 
 router = APIRouter(tags=["agent"])
@@ -71,11 +77,51 @@ class CostOut(BaseModel):
     duration_ms: int
 
 
+class ClaimOut(BaseModel):
+    text: str
+    sentence_index: int
+    cited_step: int | None = None
+    # Every hop the sentence named. `cited_step` is the first of these, kept for
+    # the shape M7.2 specifies; integrity is checked against all of them.
+    cited_steps: list[int] = Field(default_factory=list)
+    supported: bool
+    support_excerpt: str | None = None
+    # direct | inferred | unsupported. A client rendering the answer needs the
+    # level and not only the boolean: an inferred claim is the model's own
+    # combination of two results and is worth showing differently.
+    support: str
+    similarity: float = 0.0
+    steps: list[int] = Field(default_factory=list)
+    # False for connective sentences — "In summary", "I could not find any" —
+    # which need no citation and must not be rendered as unsupported.
+    factual: bool = True
+    from_truncated: bool = False
+
+
+class VerificationOut(BaseModel):
+    support_rate: float
+    direct_rate: float
+    verdict: str
+    factual_claims: int
+    connective_claims: int
+    claims: list[ClaimOut] = Field(default_factory=list)
+    invalid_citations: list[int] = Field(default_factory=list)
+    truncated_citations: list[int] = Field(default_factory=list)
+    unresolved_citations: list[str] = Field(default_factory=list)
+    # True when an answer was drafted and withheld. The client shows the refusal
+    # in `answer`; `raw_answer` is null in that case, deliberately.
+    refused: bool = False
+
+
 class AgentAskOut(BaseModel):
     question: str
-    # Null only when the trajectory ended in `error`, in which case `error` says
-    # why and the steps say how far it got.
+    # **What the caller may show.** Already marked where sentences are
+    # unsupported, or already replaced by the refusal — never the raw draft.
     answer: str | None
+    # The unmarked text, and null when the answer was withheld. A client that
+    # wanted to render its own marking reads `verification.claims` instead.
+    raw_answer: str | None = None
+    verification: VerificationOut
     stopped_because: str
     hops: int
     steps: list[StepOut] = Field(default_factory=list)
@@ -100,13 +146,28 @@ async def ask(body: AgentAskIn, container: ContainerDep) -> AgentAskOut:
         raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc)) from exc
 
     hops = None if body.max_hops is None else max(1, min(body.max_hops, MAX_HOPS))
-    return _to_response(await agent.run(body.question, max_hops=hops))
+    return _to_response(await agent.ask(body.question, max_hops=hops))
 
 
-def _to_response(trajectory: Trajectory) -> AgentAskOut:
+def _to_response(verified: VerifiedAnswer) -> AgentAskOut:
+    trajectory = verified.trajectory
+    checked = verified.verification
     return AgentAskOut(
         question=trajectory.question,
-        answer=trajectory.answer,
+        answer=None if trajectory.answer is None else verified.answer,
+        raw_answer=None if verified.refused else trajectory.answer,
+        verification=VerificationOut(
+            support_rate=round(checked.support_rate, 4),
+            direct_rate=round(checked.direct_rate, 4),
+            verdict=checked.verdict,
+            factual_claims=checked.factual_claims,
+            connective_claims=checked.connective_claims,
+            claims=[_claim_out(claim) for claim in checked.claims],
+            invalid_citations=list(checked.invalid_citations),
+            truncated_citations=list(checked.truncated_citations),
+            unresolved_citations=list(checked.unresolved_citations),
+            refused=verified.refused,
+        ),
         stopped_because=trajectory.stopped_because.value,
         hops=trajectory.hops,
         steps=[
@@ -133,6 +194,22 @@ def _to_response(trajectory: Trajectory) -> AgentAskOut:
         truncated=trajectory.truncated,
         error=trajectory.error,
         retry_after=trajectory.retry_after,
+    )
+
+
+def _claim_out(claim: Claim) -> ClaimOut:
+    return ClaimOut(
+        text=claim.text,
+        sentence_index=claim.sentence_index,
+        cited_step=claim.cited_step,
+        cited_steps=list(claim.cited_steps),
+        supported=claim.supported,
+        support_excerpt=claim.support_excerpt,
+        support=claim.support.value,
+        similarity=claim.similarity,
+        steps=list(claim.steps),
+        factual=claim.factual,
+        from_truncated=claim.from_truncated,
     )
 
 

@@ -8,6 +8,7 @@
 import { NavLink, Route, Routes } from "react-router-dom";
 
 import { API_BASE } from "./api/client";
+import { AgentPage } from "./features/agent/AgentPage";
 import { CorpusPage } from "./features/corpus/CorpusPage";
 import { AssumptionsPage } from "./features/decisions/AssumptionsPage";
 import { DecisionForm } from "./features/decisions/DecisionForm";
@@ -31,6 +32,11 @@ export function App() {
           <span className="meta-label text-ink">memory os</span>
           <nav className="flex items-baseline gap-4">
             <Tab to="/">search</Tab>
+            {/* Beside search rather than under it. The two answer the same
+                question in different currencies — search returns passages you
+                judge, this returns a paragraph somebody else judged — and
+                burying the second is how a reader forgets there was a choice. */}
+            <Tab to="/ask">ask</Tab>
             <Tab to="/timeline">timeline</Tab>
             <Tab to="/decisions">decisions</Tab>
             <Tab to="/judgements">judgements</Tab>
@@ -52,6 +58,7 @@ export function App() {
       <main className="flex-1">
         <Routes>
           <Route path="/" element={<SearchPage />} />
+          <Route path="/ask" element={<AgentPage />} />
           <Route path="/timeline" element={<TimelinePage />} />
           <Route path="/memory/:id" element={<MemoryPage />} />
           {/* The two literal segments before the parameterised one. React Router

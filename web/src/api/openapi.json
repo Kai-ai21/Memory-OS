@@ -113,6 +113,17 @@
             "title": "Question",
             "type": "string"
           },
+          "raw_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Answer"
+          },
           "retry_after": {
             "anyOf": [
               {
@@ -139,11 +150,15 @@
             "default": false,
             "title": "Truncated",
             "type": "boolean"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/memoryos__api__routes__agent__VerificationOut"
           }
         },
         "required": [
           "question",
           "answer",
+          "verification",
           "stopped_because",
           "hops",
           "cost"
@@ -291,7 +306,7 @@
             "$ref": "#/components/schemas/AnswerTimingOut"
           },
           "verification": {
-            "$ref": "#/components/schemas/VerificationOut"
+            "$ref": "#/components/schemas/memoryos__api__routes__answer__VerificationOut"
           }
         },
         "required": [
@@ -1104,6 +1119,85 @@
           "version"
         ],
         "title": "CitationOut",
+        "type": "object"
+      },
+      "ClaimOut": {
+        "properties": {
+          "cited_step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cited Step"
+          },
+          "cited_steps": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Cited Steps",
+            "type": "array"
+          },
+          "factual": {
+            "default": true,
+            "title": "Factual",
+            "type": "boolean"
+          },
+          "from_truncated": {
+            "default": false,
+            "title": "From Truncated",
+            "type": "boolean"
+          },
+          "sentence_index": {
+            "title": "Sentence Index",
+            "type": "integer"
+          },
+          "similarity": {
+            "default": 0.0,
+            "title": "Similarity",
+            "type": "number"
+          },
+          "steps": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "support": {
+            "title": "Support",
+            "type": "string"
+          },
+          "support_excerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Support Excerpt"
+          },
+          "supported": {
+            "title": "Supported",
+            "type": "boolean"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "sentence_index",
+          "supported",
+          "support"
+        ],
+        "title": "ClaimOut",
         "type": "object"
       },
       "ContextCategory": {
@@ -4615,7 +4709,101 @@
         "title": "Verdict",
         "type": "string"
       },
-      "VerificationOut": {
+      "memoryos__api__routes__agent__VerificationOut": {
+        "properties": {
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimOut"
+            },
+            "title": "Claims",
+            "type": "array"
+          },
+          "connective_claims": {
+            "title": "Connective Claims",
+            "type": "integer"
+          },
+          "direct_rate": {
+            "title": "Direct Rate",
+            "type": "number"
+          },
+          "factual_claims": {
+            "title": "Factual Claims",
+            "type": "integer"
+          },
+          "invalid_citations": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Invalid Citations",
+            "type": "array"
+          },
+          "refused": {
+            "default": false,
+            "title": "Refused",
+            "type": "boolean"
+          },
+          "support_rate": {
+            "title": "Support Rate",
+            "type": "number"
+          },
+          "truncated_citations": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Truncated Citations",
+            "type": "array"
+          },
+          "unresolved_citations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unresolved Citations",
+            "type": "array"
+          },
+          "verdict": {
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "support_rate",
+          "direct_rate",
+          "verdict",
+          "factual_claims",
+          "connective_claims"
+        ],
+        "title": "VerificationOut",
+        "type": "object"
+      },
+      "memoryos__api__routes__answer__ContextOut": {
+        "properties": {
+          "dropped": {
+            "title": "Dropped",
+            "type": "integer"
+          },
+          "passages": {
+            "title": "Passages",
+            "type": "integer"
+          },
+          "token_budget": {
+            "title": "Token Budget",
+            "type": "integer"
+          },
+          "tokens_used": {
+            "title": "Tokens Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "passages",
+          "dropped",
+          "token_budget",
+          "tokens_used"
+        ],
+        "title": "ContextOut",
+        "type": "object"
+      },
+      "memoryos__api__routes__answer__VerificationOut": {
         "properties": {
           "citation_rate": {
             "title": "Citation Rate",
@@ -4669,34 +4857,6 @@
           "grounded"
         ],
         "title": "VerificationOut",
-        "type": "object"
-      },
-      "memoryos__api__routes__answer__ContextOut": {
-        "properties": {
-          "dropped": {
-            "title": "Dropped",
-            "type": "integer"
-          },
-          "passages": {
-            "title": "Passages",
-            "type": "integer"
-          },
-          "token_budget": {
-            "title": "Token Budget",
-            "type": "integer"
-          },
-          "tokens_used": {
-            "title": "Tokens Used",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "passages",
-          "dropped",
-          "token_budget",
-          "tokens_used"
-        ],
-        "title": "ContextOut",
         "type": "object"
       },
       "memoryos__api__routes__context__ContextOut": {

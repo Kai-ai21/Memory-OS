@@ -32,6 +32,7 @@ from memoryos.adapters.reranking.cross_encoder import CrossEncoderReranker
 from memoryos.application.agent.library import build_registry as build_tools
 from memoryos.application.agent.planner import MultiHopPlanner
 from memoryos.application.agent.tools import ToolRegistry
+from memoryos.application.agent.verify import VerifiedAgent
 from memoryos.application.answering import AnswerQuestion
 from memoryos.application.context_engine import (
     AssembleContext,
@@ -342,8 +343,14 @@ class Container:
             registry.register(tool)
         return registry
 
-    def agent(self) -> MultiHopPlanner:
-        """M7.1's loop, over a provider that can actually call tools.
+    def agent(self) -> VerifiedAgent:
+        """M7.1's loop with M7.2's guardrail attached, and no way past it.
+
+        **The verified agent is the only agent this container hands out.** A
+        caller cannot ask for the unverified planner, because the one thing an
+        ungrounded answer must not depend on is whoever is calling remembering to
+        check it — and the CLI, the API and anything after them all come through
+        here.
 
         The check is here rather than at the first failed call, because the
         failure it prevents is unreadable: a provider without tool support
@@ -351,17 +358,26 @@ class Container:
         response says a tool was never offered. Refusing at construction turns
         that into one sentence naming the setting to change.
 
-        The embedder doubles as the token counter, for the reason `answer` gives:
-        compaction sizes findings in the same unit the corpus was chunked in.
+        The embedder doubles as the token counter *and* as the support judge, for
+        the reason `answer` gives: compaction sizes findings in the same unit the
+        corpus was chunked in, and a claim is measured against retrieved text
+        with the same function that decided the text was retrievable.
         """
         model = self.language_model()
         if supports_tools(model):
-            return MultiHopPlanner(
+            planner = MultiHopPlanner(
                 model,
                 self.tools(),
                 self.embedder,
                 max_hops=self.settings.agent_max_hops,
                 finding_budget=self.settings.agent_finding_budget,
+                max_tokens=self.settings.agent_max_tokens,
+            )
+            return VerifiedAgent(
+                planner,
+                self.database.session_factory,
+                self.embedder,
+                min_support=self.settings.agent_min_support,
             )
         raise ToolsUnsupported(
             f"{model.model_id} cannot call tools, so the agent has nothing to "

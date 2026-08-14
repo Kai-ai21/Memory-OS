@@ -389,3 +389,70 @@ async def citations_for_memories(
     return await citations_for_chunks(
         session_factory, chunks, context_chars=context_chars
     )
+
+
+async def unresolved_locators(
+    session_factory: async_sessionmaker[AsyncSession],
+    citations: Sequence[Citation],
+) -> list[str]:
+    """The citations that no longer point at the text they claim to.
+
+    **M2.5's identity, applied to the exact spans an answer rests on.** The
+    property is the one `verify-citations` sweeps for corpus-wide:
+
+        memory.content[char_start:char_end] == chunk.content[prefix_chars:]
+
+    The difference is scope and timing. That command is a periodic sweep over
+    every current chunk; this checks the handful a particular answer cited, at
+    the moment the answer is produced, which is when it matters — an answer whose
+    provenance has drifted is one whose quotations point somewhere else, and no
+    amount of semantic support makes that acceptable.
+
+    A citation to a memory that has since been deleted, or to a chunk ordinal
+    that no longer exists, is unresolved rather than absent. Both are the corpus
+    having moved under the answer, and both are reported by locator so a reader
+    can see which claim lost its ground.
+    """
+    if not citations:
+        return []
+
+    wanted = {(citation.memory_id, citation.chunk_ordinal) for citation in citations}
+    stmt = (
+        select(
+            models.MemoryChunk.memory_id,
+            models.MemoryChunk.ordinal,
+            models.MemoryChunk.content,
+            models.MemoryChunk.char_start,
+            models.MemoryChunk.char_end,
+            models.MemoryChunk.prefix_chars,
+            models.Memory.content,
+        )
+        .join(models.Memory, models.Memory.id == models.MemoryChunk.memory_id)
+        .where(
+            models.MemoryChunk.memory_id.in_({memory_id for memory_id, _ in wanted}),
+            models.Memory.deleted_at.is_(None),
+        )
+    )
+    async with session_factory() as session:
+        rows = list(await session.execute(stmt))
+
+    holds: set[tuple[UUID, int]] = set()
+    for memory_id, ordinal, chunk_text, start, end, prefix, memory_text in rows:
+        if memory_text is None:
+            # No normalized text to check against. Not a failure — a memory can
+            # legitimately be un-normalized — and not a pass either, so the pair
+            # simply is not recorded as holding.
+            continue
+        if memory_text[start:end] == chunk_text[prefix:]:
+            holds.add((memory_id, ordinal))
+
+    unresolved = [
+        citation.locator
+        for citation in citations
+        if (citation.memory_id, citation.chunk_ordinal) not in holds
+    ]
+    if unresolved:
+        logger.warning(
+            "citations.unresolved", count=len(unresolved), checked=len(citations)
+        )
+    return sorted(set(unresolved))
