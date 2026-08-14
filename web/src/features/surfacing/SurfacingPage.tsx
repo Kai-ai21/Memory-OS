@@ -49,7 +49,13 @@ export function SurfacingPage() {
   const decisions = rows.data ?? [];
   const surfaced = decisions.filter((row) => row.surfaced);
   const dismissed = surfaced.filter((row) => row.verdict === "dismissed");
-  const noisy = surfaced.length > 0 && dismissed.length / surfaced.length > 0.5;
+  const dismissalRate =
+    surfaced.length === 0 ? null : dismissed.length / surfaced.length;
+  const noisy = dismissalRate !== null && dismissalRate > 0.5;
+  // Exactly half gets its own sentence rather than being rounded into one of
+  // its neighbours. It is the number the first real run produced, and both of
+  // the other two would have been a lie about it.
+  const evens = dismissalRate === 0.5;
 
   return (
     <div className="flex flex-col gap-5">
@@ -77,7 +83,9 @@ export function SurfacingPage() {
           dismissed
           {noisy
             ? " — above half, which means this is noise. A tool that interrupts with mediocre suggestions gets muted, and then its good ones are muted too."
-            : ". Below half, which is the bar this feature set itself. That is evidence it is not actively harmful, not that it is useful."}
+            : evens
+              ? " — exactly half. Not above the line and not below it: one interruption in two was worth having, and a coin flip is not a feature."
+              : ". Below half, which is the bar this feature set itself. That is evidence it is not actively harmful, not that it is useful."}
         </p>
       )}
 

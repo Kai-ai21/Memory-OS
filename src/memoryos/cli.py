@@ -3085,6 +3085,16 @@ async def run_surfacing_stats(settings: Settings) -> int:
                 "mediocre suggestions gets muted —\nafter which its good ones "
                 "are muted too."
             )
+        elif rate == 0.5:
+            # Its own branch rather than rounding into one of the others,
+            # because this is the number the first real run produced and both
+            # neighbouring sentences would have been a lie about it.
+            print(
+                "\n**Exactly half.** Not above the line and not below it: one in two "
+                "of these\ninterruptions was worth having. A coin flip is not a "
+                "feature, and the honest\nreading is that the bar is not yet "
+                "discriminating."
+            )
         else:
             print(
                 "\nBelow 50%, which is the bar this milestone set for itself. It is "

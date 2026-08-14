@@ -64,14 +64,18 @@ describe("the surfacing page", () => {
     expect(screen.getByText(/scored 0\.0164 against 0\.0295/)).toBeInTheDocument();
   });
 
-  it("calls a dismissal rate above half noise, in those words", async () => {
+  it("calls exactly half exactly half, rather than rounding it kindly", async () => {
     const dismissed = { ...SURFACED, id: "33333333-3333-7333-8333-333333333333", verdict: "dismissed" };
     stubFetch([{ match: "/surfacing", body: [SURFACED, dismissed] }]);
     renderWithProviders(<SurfacingPage />);
 
-    // One of two dismissed is exactly half, which is not above it.
+    // One of two dismissed is exactly half, which is neither above the line
+    // nor below it — and is the number the first real run produced, so it gets
+    // its own sentence rather than being rounded into a flattering one.
     expect(await screen.findByText(/1 of 2 surfaced/)).toBeInTheDocument();
     expect(screen.queryByText(/means this is noise/)).not.toBeInTheDocument();
+    expect(screen.getByText(/exactly half/)).toBeInTheDocument();
+    expect(screen.queryByText(/Below half/)).not.toBeInTheDocument();
   });
 
   it("says so when more than half of what it volunteered was refused", async () => {
