@@ -147,7 +147,14 @@ describe("where reflections are not", () => {
     const nav = screen.getByRole("navigation");
     expect(nav.textContent).not.toMatch(/reflection/i);
     // Every tab that does exist, named, so adding one here is a deliberate act
-    // rather than something a refactor does quietly.
-    expect(nav.textContent).toBe("searchtimelinedecisionsjudgementscorpus");
+    // rather than something a refactor does quietly. `surfacing` joins in M6.3
+    // and the two are not in tension: a reflection is a claim about somebody's
+    // judgement, and volunteering one is the failure M5.4 was built to avoid,
+    // while that page is a record of what the system has *already* interrupted
+    // them with. Hiding the place to say "that was noise" is how a dismissal
+    // rate stays flattering.
+    expect(nav.textContent).toBe(
+      "searchtimelinedecisionsjudgementscorpussurfacing",
+    );
   });
 });

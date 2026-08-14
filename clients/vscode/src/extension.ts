@@ -1,10 +1,16 @@
 /**
- * The editor half of M6.2: two features, and no third one.
+ * The editor half of Phase 6: three features now, and no fourth one.
  *
  * On the active editor changing, POST `file_focused` with the path relative to
- * the workspace. On the same change, ask for that file's context and render it
- * in a sidebar. That is all of it — no commands, no status bar item, no
- * notifications. M6.3 is where anything is allowed to interrupt.
+ * the workspace, and ask for that file's context to render in a sidebar. M6.3
+ * adds the third: anything the gate volunteered for this file appears at the top
+ * of that panel with two links that judge it.
+ *
+ * **Still no notifications, no modals, no status bar item and no badge.** M6.2
+ * said "M6.3 is where anything is allowed to interrupt", and what was allowed is
+ * a strip in a panel the reader already has open. A toast would be a second
+ * claim on attention for something already on screen, and the first one nobody
+ * wanted is the one that gets the extension uninstalled.
  *
  * **The relative path matters more than it looks.** It is the corpus's
  * `external_key`, so it is what M6.1's by-name source matches on — the only one
@@ -18,7 +24,11 @@
 
 import * as vscode from "vscode";
 
-import { MemoryOsClient, type ContextResult } from "./client";
+import {
+  MemoryOsClient,
+  type ContextResult,
+  type SurfacedItem,
+} from "./client";
 import { renderPanel } from "./panel";
 
 /**
@@ -40,6 +50,16 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     output,
     vscode.window.registerWebviewViewProvider("memoryos.context", provider),
+    // The two verdicts, as commands rather than as script inside the webview.
+    // The panel keeps `enableScripts: false` — its excerpts are arbitrary text
+    // from the reader's own corpus — and `command:` links are the mechanism VS
+    // Code provides for collecting a click without one.
+    vscode.commands.registerCommand("memoryos.dismiss", (id: string) =>
+      provider.rate(id, false),
+    ),
+    vscode.commands.registerCommand("memoryos.markUseful", (id: string) =>
+      provider.rate(id, true),
+    ),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       provider.focusOn(editor);
     }),
@@ -68,6 +88,7 @@ class ContextViewProvider implements vscode.WebviewViewProvider {
   private emitEvents: boolean;
   private focus: string | null = null;
   private result: ContextResult | null = null;
+  private surfaced: SurfacedItem[] = [];
   private settle?: ReturnType<typeof setTimeout>;
   /**
    * Which focus the in-flight request is for.
@@ -106,7 +127,31 @@ class ContextViewProvider implements vscode.WebviewViewProvider {
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
-    view.webview.options = { enableScripts: false };
+    // No scripts, and command URIs limited to the two this extension owns.
+    // `enableCommandUris: true` would allow any command in the editor to be
+    // invoked by a link in a page built from corpus text, which is a much
+    // larger surface than two verdicts are worth.
+    view.webview.options = {
+      enableScripts: false,
+      enableCommandUris: ["memoryos.dismiss", "memoryos.markUseful"],
+    };
+    this.render();
+  }
+
+  /**
+   * Record a verdict and drop the row.
+   *
+   * Removed from the panel whatever the server says, and the two cases differ
+   * only in the output channel. A verdict the API refused is still a reader
+   * saying "stop showing me this", and leaving the strip on screen to be
+   * technically accurate about a failed POST would be arguing with them.
+   */
+  async rate(id: string, useful: boolean): Promise<void> {
+    const recorded = await this.client.rate(id, useful);
+    this.output.appendLine(
+      `${useful ? "useful" : "dismissed"} ${id}${recorded ? "" : " (not recorded)"}`,
+    );
+    this.surfaced = this.surfaced.filter((item) => item.id !== id);
     this.render();
   }
 
@@ -117,6 +162,7 @@ class ContextViewProvider implements vscode.WebviewViewProvider {
     }
     this.focus = relative;
     this.result = null;
+    this.surfaced = [];
     this.render();
 
     if (this.settle) {
@@ -138,11 +184,17 @@ class ContextViewProvider implements vscode.WebviewViewProvider {
     }
 
     const result = await this.client.fetchContext(relative);
+    // After the context rather than beside it. The gate decides on a context
+    // that already exists, so asking first would reliably ask before there was
+    // anything to have decided about — and this is one request against an
+    // indexed table rather than something worth racing.
+    const surfaced = await this.client.fetchSurfaced(relative);
     if (this.inFlight !== relative || this.focus !== relative) {
       // Navigated away while this was in flight. Dropped rather than rendered.
       return;
     }
     this.result = result;
+    this.surfaced = surfaced;
     this.output.appendLine(
       `context ${relative}: ${result.ready ? `${result.items.length} items` : "building"} in ${result.elapsedMs}ms`,
     );
@@ -156,6 +208,7 @@ class ContextViewProvider implements vscode.WebviewViewProvider {
     this.view.webview.html = renderPanel(this.focus, this.result, {
       webUrl: this.webUrl,
       lastLatencyMs: this.result?.elapsedMs,
+      surfaced: this.surfaced,
     });
   }
 }

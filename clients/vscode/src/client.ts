@@ -40,6 +40,26 @@ export interface ContextResult {
   elapsedMs: number;
 }
 
+/**
+ * Something the system volunteered for this file, waiting to be judged.
+ *
+ * `explanation` comes from the server rather than being written here. Three
+ * clients render the gate's reasons — the CLI, the web UI and this — and three
+ * phrasings of one rule is three chances for one of them to describe behaviour
+ * that has changed.
+ */
+export interface SurfacedItem {
+  id: string;
+  focus: string;
+  reason: string;
+  explanation: string;
+  score: number;
+  threshold: number;
+  top_title: string | null;
+  item_count: number;
+  trigger_kind: string | null;
+}
+
 export interface ClientOptions {
   apiUrl: string;
   tokenBudget?: number;
@@ -174,6 +194,49 @@ export class MemoryOsClient {
   }
 
   /**
+   * What the gate volunteered for this focus and nobody has judged yet.
+   *
+   * **Returns an empty list for every failure, including a server too old to
+   * have the endpoint.** Silence is this feature's default and its correct
+   * behaviour, so there is no failure here that deserves to be visible: an
+   * error line saying "could not fetch what we were not going to show you" is
+   * noise about the absence of noise.
+   *
+   * Never polls. `fetchContext` waits for a build because a panel with nothing
+   * in it is a panel that looks broken; there is no equivalent here, because
+   * nothing surfacing is the overwhelmingly common and entirely correct case.
+   */
+  async fetchSurfaced(focus: string): Promise<SurfacedItem[]> {
+    const response = await this.send(
+      `/surfacing?focus=${encodeURIComponent(focus)}`,
+      { method: "GET" },
+    );
+    if (response.error !== undefined || !Array.isArray(response.body)) {
+      return [];
+    }
+    return response.body as SurfacedItem[];
+  }
+
+  /**
+   * Record a verdict. True when the server took it.
+   *
+   * The caller shows the result by removing the item rather than by announcing
+   * anything, so a failure here is a row that stays on screen — which is the
+   * honest outcome, because the verdict was not recorded.
+   */
+  async rate(id: string, useful: boolean): Promise<boolean> {
+    const verdict = useful ? "useful" : "dismiss";
+    const response = await this.send(`/surfacing/${id}/${verdict}`, {
+      method: "POST",
+    });
+    if (response.error !== undefined) {
+      this.log(`verdict not recorded: ${response.error}`);
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * One request, with every failure turned into a value.
    *
    * `AbortSignal.timeout` rather than a race with a timer, so a slow response
@@ -205,6 +268,13 @@ export class MemoryOsClient {
       }
 
       this.failures = 0;
+      // 204 has no body at all, and `response.json()` on an empty one throws a
+      // SyntaxError that would be reported as "the api returned something that
+      // is not json" — turning a successful dismissal into a failed one. The
+      // two verdict endpoints are the first here to answer 204.
+      if (response.status === 204) {
+        return { body: null };
+      }
       // A body that is not JSON is a proxy or a captive portal answering
       // instead of the API. Caught here rather than at the call site, because
       // every call site would have to catch it identically.

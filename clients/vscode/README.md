@@ -2,10 +2,33 @@
 
 Context for the file you are looking at, drawn from your own corpus.
 
-Two features and no third one: it posts a `file_focused` event when you change
-tabs, and it shows a sidebar panel with the context M6.1 assembled for that file.
-No commands, no status bar item, and **no notifications** — nothing here is
-allowed to interrupt you. Anything proactive is M6.3.
+Three features and no fourth one: it posts a `file_focused` event when you change
+tabs, it shows a sidebar panel with the context M6.1 assembled for that file, and
+— rarely — a strip at the top of that panel saying the system found something
+worth mentioning about the file, with two links that judge it.
+
+**There are still no notifications, no modals, no status bar item and no badge.**
+M6.2 said M6.3 was where something would finally be allowed to interrupt; what it
+was allowed to do is add a strip to a panel you already have open. A toast would
+be a second claim on your attention for something already on screen, and the
+first unwanted one is what gets an extension uninstalled.
+
+## What actually surfaces, and why it is almost never anything
+
+The gate is deliberately hard to clear. The best item has to be found by **two
+independent routes** — one route ranking something first can never be enough, at
+any rank — it must not be the file you already have open, and nothing similar can
+have been surfaced for that file recently. Something you dismissed stays quiet for
+a month, and a file whose context you dismiss repeatedly raises its own bar until
+it goes silent.
+
+So the normal state of this strip is absent. `memoryos surfacing log` lists every
+decision including the refusals, with the score each reached and the bar it did
+not, which is the answer to "why didn't it show me anything".
+
+The two links are `command:` URIs rather than script. The panel keeps
+`enableScripts: false` because its excerpts are arbitrary text from your own
+corpus, and command URIs are scoped to the two commands this extension owns.
 
 ## There is no authentication, and that is not an oversight
 

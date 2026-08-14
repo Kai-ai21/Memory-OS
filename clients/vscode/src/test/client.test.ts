@@ -260,3 +260,101 @@ describe("the panel says which state it is in", () => {
     );
   });
 });
+
+describe("what the panel volunteers", () => {
+  const surfaced = {
+    id: "9f1c2d3e-0000-7000-8000-000000000001",
+    focus: "src/a.py",
+    reason: "cleared",
+    explanation: "two independent routes agreed on something you do not already have open",
+    score: 0.0331,
+    threshold: 0.0295,
+    top_title: "self::src/b.py",
+    item_count: 9,
+    trigger_kind: "file_focused",
+  };
+  const options = { webUrl: "http://localhost:5173" };
+  const item = {
+    position: 1,
+    title: "self::src/a.py",
+    category: "code",
+    text: "def handler():",
+    tokens: 120,
+    sources: { retrieval: 3, temporal: 1 },
+    memory_id: "11111111-1111-7111-8111-111111111111",
+    decision_id: null,
+    external_key: "src/a.py",
+  };
+  const result = {
+    focus: "src/a.py",
+    ready: true,
+    items: [item],
+    tokensUsed: 120,
+    tokenBudget: 4000,
+    elapsedMs: 40,
+  };
+
+  it("renders nothing at all when nothing was surfaced", () => {
+    // The common case by a wide margin, and the feature working. A heading
+    // saying "nothing surfaced" would be the panel talking about its own
+    // silence, which is a way of not being silent.
+    const html = renderPanel("src/a.py", result, { ...options, surfaced: [] });
+
+    // The strip, not the stylesheet — `.surfaced` is a rule in every render.
+    assert.doesNotMatch(html, /<div class="surfaced">/);
+    assert.doesNotMatch(html, /command:/);
+  });
+
+  it("shows the gate's reason beside what it volunteered", () => {
+    const html = renderPanel("src/a.py", result, { ...options, surfaced: [surfaced] });
+
+    assert.match(html, /two independent routes agreed/);
+    assert.match(html, /self::src\/b\.py/);
+    // Both verdicts, as command links rather than script.
+    assert.match(html, /command:memoryos\.markUseful/);
+    assert.match(html, /command:memoryos\.dismiss/);
+  });
+
+  it("keeps the strip when the context itself is still building", () => {
+    // The two arrive by different routes and the gate decided on a context that
+    // was cached at the time. A surfacing that vanished while the panel
+    // reassembled would flicker on every tab change.
+    const html = renderPanel("src/a.py", null, { ...options, surfaced: [surfaced] });
+
+    assert.match(html, /Assembling/);
+    assert.match(html, /command:memoryos\.dismiss/);
+  });
+
+  it("treats every failure to fetch a surfacing as nothing surfaced", async () => {
+    // Silence is this feature's default and its correct behaviour, so no
+    // failure here deserves to be visible. An error line about not being able
+    // to fetch what was not going to be shown is noise about the absence of
+    // noise.
+    for (const fetchImpl of [
+      async () => {
+        throw new TypeError("fetch failed");
+      },
+      async () => jsonResponse({ detail: "nope" }, 500),
+      async () => new Response("<html>captive portal</html>", { status: 200 }),
+      async () => jsonResponse({ not: "an array" }),
+    ]) {
+      const client = clientWith(fetchImpl as typeof fetch);
+      assert.deepEqual(await client.fetchSurfaced("src/a.py"), []);
+    }
+  });
+
+  it("reads a 204 as the verdict being recorded", async () => {
+    // The verdict endpoints answer 204, which has no body — and `.json()` on an
+    // empty one throws. Reported as a failure, a successful dismissal would
+    // look like a lost one, and the reader would click it again.
+    const client = clientWith(async () => new Response(null, { status: 204 }));
+
+    assert.equal(await client.rate(surfaced.id, false), true);
+  });
+
+  it("reports a refused verdict as not recorded rather than throwing", async () => {
+    const client = clientWith(async () => jsonResponse({ detail: "already rated" }, 409));
+
+    assert.equal(await client.rate(surfaced.id, true), false);
+  });
+});

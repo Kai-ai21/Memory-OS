@@ -508,14 +508,24 @@ async def test_the_endpoint_stores_dispatches_and_reports_the_duplicate(
 
     assert first.status_code == 202
     assert first.json()["created"] is True
-    # One job per subscribed handler, and the default bus subscribes two: M6.0's
-    # log handler and M6.1's context handler, both of which take file focuses.
-    assert first.json()["jobs"] == 2
+    # One job per subscribed handler, and the default bus subscribes three:
+    # M6.0's log handler, M6.1's context handler and M6.3's surfacing gate, all
+    # of which take file focuses.
+    #
+    # A count rather than a set of names, deliberately: it fails when a handler
+    # is added, which is the moment to check that the addition was meant. Two of
+    # these three do nothing at all for a `file_focused` — precomputing context
+    # for every file glanced at is the failure M6.1 refused and M6.3 inherited —
+    # and the fact that they are dispatched anyway is what keeps that policy in
+    # one readable place instead of in a subscription list.
+    assert first.json()["jobs"] == 3
     # 200 rather than 202: nothing was accepted for processing the second time.
     assert second.status_code == 200
     assert second.json()["created"] is False
     assert second.json()["id"] == first.json()["id"]
-    assert await count_jobs(harness.sessions) == 2
+    # Still one job per handler and not two, which is the property under test:
+    # the second delivery produced no work at all.
+    assert await count_jobs(harness.sessions) == 3
 
 
 async def test_an_absent_occurred_at_becomes_received_at(client: AsyncClient) -> None:
