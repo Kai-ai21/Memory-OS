@@ -1282,6 +1282,8 @@ export interface components {
         ClaimOut: {
             /** Cited Step */
             cited_step?: number | null;
+            /** Cited Steps */
+            cited_steps?: number[];
             /**
              * Factual
              * @default true

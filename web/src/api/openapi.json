@@ -1134,6 +1134,13 @@
             ],
             "title": "Cited Step"
           },
+          "cited_steps": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Cited Steps",
+            "type": "array"
+          },
           "factual": {
             "default": true,
             "title": "Factual",

@@ -302,12 +302,14 @@ class VerificationResult:
         }
 
 
+# Surface-neutral on purpose: this string is printed by the CLI, returned by the
+# API and rendered in the browser, and a sentence telling a web page to pass
+# `--trace` is a sentence written for one caller and shipped to three.
 REFUSAL = (
     "I could not answer that from what I retrieved. The searches I ran did not "
     "return material that supports an answer to this question, and the answer I "
     "drafted rested mostly on claims nothing in the corpus backs — so it is not "
-    "worth showing. What was retrieved is in the trajectory; run with --trace to "
-    "see it."
+    "worth showing. What was retrieved is in the trajectory."
 )
 
 

@@ -3267,12 +3267,14 @@ async def run_agent_ask(
         print(line)
 
     if verified.refused:
-        # The withheld text is still in the trajectory and `--trace` shows it.
-        # Printing it here beside the refusal would defeat the refusal.
+        # The withheld text is still in the trajectory. Printing it here beside
+        # the refusal would defeat the refusal, so what is offered instead is the
+        # number that caused it and the flag that shows the hops.
         print(
             f"\n(An answer was drafted and withheld: only "
             f"{checked.support_rate:.0%} of its {checked.factual_claims} factual "
-            "claims traced to anything retrieved.)"
+            "claims traced to anything retrieved. Re-run with --trace for the "
+            "hops.)"
         )
 
     if trajectory.truncated:
