@@ -65,6 +65,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.application import decisions as decisions_app
 from memoryos.application import memories as memories_app
+from memoryos.application import missing as missing_app
 from memoryos.application import sources as sources_app
 from memoryos.application import temporal
 from memoryos.application.agent.tools import Tool, ToolResult, ToolSpec, spec_for
@@ -814,6 +815,108 @@ class GetMemoryTool:
         )
 
 
+
+# --------------------------------------------------------------------------
+# Phase 8 — what is absent
+# --------------------------------------------------------------------------
+
+
+class ReasoningGapsArgs(_Args):
+    about: str = Field(
+        default="",
+        description=(
+            "A decision, a decision's question, or a topic to analyse. Empty "
+            "looks across everything recorded."
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class FindGapsInReasoningTool:
+    """M8.1's gap analysis, as a tool the agent can call mid-trajectory.
+
+    **The only tool of the seven that reports something the corpus does not
+    contain**, which makes its description the one that most needs to say what it
+    cannot do. Left vague, a model reaches for it whenever a question sounds like
+    advice — and the answer to "what should I do about X" is not in this system
+    and never will be.
+
+    Its results are usually empty, and that is not a failure state to hide. A
+    model told "no gaps were found" reports an absence of findings; a model told
+    nothing invents a reason for the silence.
+    """
+
+    sessions: async_sessionmaker[AsyncSession]
+
+    arguments: type[BaseModel] = ReasoningGapsArgs
+
+    @property
+    def spec(self) -> ToolSpec:
+        return spec_for(
+            ReasoningGapsArgs,
+            name="find_gaps_in_reasoning",
+            description=(
+                "Find what is MISSING from a decision or a topic, judged only "
+                "against what this person has recorded before: an assumption "
+                "similar past decisions wrote down and this one did not, a "
+                "recorded pattern this resembles, work that stopped with no "
+                "decision saying why, or beliefs old enough to check that nobody "
+                "has checked. Use it for 'what am I missing', 'what did I not "
+                "consider', 'what should I have written down'. It cannot give "
+                "advice and does not know good practice — everything it returns "
+                "is drawn from this corpus and cites it. It answers 'nothing' "
+                "far more often than not, and that answer is real."
+            ),
+        )
+
+    async def call(self, **kwargs: Any) -> ToolResult:
+        args = ReasoningGapsArgs.model_validate(kwargs)
+        report = await missing_app.find_missing(self.sessions, about=args.about)
+        if not report.gaps:
+            # The silence, in the words the domain wrote for it. A model that
+            # received an empty string here would supply its own explanation.
+            return ToolResult(content=report.silence.render())
+
+        blocks: list[str] = []
+        cited: list[UUID] = []
+        for gap in report.gaps:
+            for item in gap.evidence:
+                if item.ref_id is None:
+                    continue
+                if item.kind == "memory":
+                    cited.append(item.ref_id)
+                elif item.kind == "decision":
+                    cited.extend(await _decision_evidence(self.sessions, item.ref_id))
+            sources = "; ".join(
+                f"{item.kind}: {_clip(item.label, 90)}" for item in gap.evidence[:4]
+            )
+            blocks.append(
+                f"GAP [{gap.kind.value}] confidence {gap.confidence:.2f}\n"
+                f"  {gap.statement}\n"
+                f"  {gap.supporting} supporting, {gap.contradicting} contradicting\n"
+                f"  Based on: {sources}\n"
+            )
+
+        # **The same rule `get_decisions` follows.** A gap is not a passage: it is
+        # a claim about an absence, and the citable thing is the corpus evidence
+        # under the decisions that make it sayable. Where there is none, the
+        # content says so rather than being quietly uncited.
+        citations = await citations_for_memories(self.sessions, cited)
+        if not citations:
+            blocks.append(
+                "Evidence: none of the decisions behind these gaps links to a "
+                "memory in the corpus.\n"
+            )
+        return ToolResult(content="\n".join(blocks), citations=citations)
+
+
+async def _decision_evidence(
+    sessions: async_sessionmaker[AsyncSession], decision_id: UUID
+) -> list[UUID]:
+    detail = await decisions_app.show(sessions, decision_id)
+    return [row.memory_id for row in detail.evidence if row.memory_id is not None]
+
+
 def _route(routes: dict[str, tuple[str, ...]], chunk_id: UUID) -> str:
     """The entity path that reached a chunk, or an honest shrug.
 
@@ -865,7 +968,7 @@ def build_registry(
     expand: ExpandThroughGraph,
     weights: FusionWeights,
 ) -> tuple[Tool, ...]:
-    """The six tools, in the order they are offered to the model.
+    """The seven tools, in the order they are offered to the model.
 
     Search first, deliberately. A model reaching for a tool on a vague question
     takes the first plausible one it reads, and search is the right default for
@@ -879,4 +982,9 @@ def build_registry(
         FindGapsTool(sessions=sessions),
         TraverseGraphTool(expand=expand, sessions=sessions),
         GetMemoryTool(sessions=sessions),
+        # Last, deliberately. It is the only tool that reports what is *not*
+        # there, it answers "nothing" most of the time, and a model scanning the
+        # list for a plausible first choice should reach the five that return
+        # things before it reaches the one that returns absences.
+        FindGapsInReasoningTool(sessions=sessions),
     )

@@ -45,6 +45,7 @@ from memoryos.application import (
     graph_projection,
     graph_sync,
     graph_verify,
+    missing,
     outcome_suggest,
     outcomes,
     patterns,
@@ -115,6 +116,7 @@ from memoryos.domain.events import Event, EventKind
 from memoryos.domain.fusion import DEFAULT_RRF_K
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobStatus, JobType, PermanentError, TransientError
+from memoryos.domain.missing import GapKind
 from memoryos.domain.patterns import (
     DEFAULT_MIN_SUPPORT,
     REFLECTION_MIN_CONFIDENCE,
@@ -2556,6 +2558,68 @@ async def run_patterns_discover(
                 reason = "emitted"
             print(f"\n  [{candidate.kind.value}] {candidate.statement}")
             print(f"    → {reason}")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# Gap analysis (M8.1)
+# --------------------------------------------------------------------------
+
+
+async def run_missing(settings: Settings, *, about: str, kind: str | None) -> int:
+    """What is absent, and — usually — why nothing can be said about it.
+
+    **The silence is printed, not implied.** A command that outputs nothing is
+    indistinguishable from one that is broken, and on a corpus this size silence
+    is the correct answer almost every time. So a run that emits no gaps says how
+    many candidates it considered and how far the best of them got, which is the
+    difference between "nothing found" and "nothing looked for".
+    """
+    wanted: GapKind | None = None
+    if kind is not None:
+        try:
+            wanted = GapKind(kind)
+        except ValueError:
+            allowed = ", ".join(member.value for member in GapKind)
+            print(f"{kind!r} is not a gap kind. Use one of: {allowed}")
+            return 2
+
+    container = Container.build(settings)
+    try:
+        report = await missing.find_missing(
+            container.database.session_factory, about=about, kind=wanted
+        )
+    finally:
+        await container.dispose()
+
+    if report.context:
+        print(f"about: {report.context}\n")
+
+    if not report.gaps:
+        print(report.silence.render())
+        return 0
+
+    for gap in report.gaps:
+        print(f"[{gap.kind.value}]  confidence {gap.confidence:.2f}")
+        for line in textwrap.wrap(gap.statement, width=84):
+            print(f"  {line}")
+        print(
+            f"  {gap.supporting} supporting, {gap.contradicting} contradicting"
+        )
+        # Always. A gap that cannot cite is not emitted, so a gap on screen
+        # without its evidence would mean the rule had stopped being enforced.
+        for item in gap.evidence[:6]:
+            print(f"    {item.kind}: {textwrap.shorten(item.label, width=70)}")
+        if len(gap.evidence) > 6:
+            print(f"    … and {len(gap.evidence) - 6} more")
+        print()
+
+    counts = ", ".join(
+        f"{name} {count}"
+        for name, count in missing.by_kind(report.gaps).items()
+        if count
+    )
+    print(f"{len(report.gaps)} gap(s): {counts}")
     return 0
 
 
@@ -5114,6 +5178,22 @@ def build_parser() -> argparse.ArgumentParser:
         "does not become the thing being measured",
     )
 
+    missing_parser = commands.add_parser(
+        "missing",
+        help="what is absent — grounded in your own history, or nothing at all",
+    )
+    missing_parser.add_argument(
+        "--about",
+        default="",
+        help="a decision id, a decision's question, or a topic. Omitted analyses "
+        "the whole corpus.",
+    )
+    missing_parser.add_argument(
+        "--kind",
+        default=None,
+        help="one of: " + ", ".join(member.value for member in GapKind),
+    )
+
     model_parser = commands.add_parser(
         "model", help="the user model: what the system believes about you, and why"
     )
@@ -5776,6 +5856,9 @@ def main(argv: list[str] | None = None) -> int:
                     pace=max(0.0, args.pace),
                 )
             )
+
+    if args.command == "missing":
+        return asyncio.run(run_missing(settings, about=args.about, kind=args.kind))
 
     if args.command == "model":
         if args.model_command == "derive":
