@@ -53,13 +53,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
 from memoryos.application.context_engine import (
+    FOCUS_SPECIFIC,
     AssembledContext,
+    ContextItem,
     ContextRequest,
     cache_key_for,
     corpus_fingerprint,
     read_cached,
 )
 from memoryos.domain.events import Event, EventKind
+from memoryos.domain.fusion import contribution
 from memoryos.domain.ids import new_id
 from memoryos.domain.surfacing import (
     DISMISSAL_WINDOW,
@@ -157,6 +160,30 @@ async def should_surface(
     )
 
 
+def focus_specific_score(item: ContextItem) -> float:
+    """The part of an item's fused score that is a claim about the focus.
+
+    **The threshold is meaningless without this, and for one milestone it was.**
+    M6.3 shipped comparing the whole fused score against a bar chosen so that no
+    single route could clear it — a structural guarantee that two independent
+    rankings had agreed. One of the rankings was global recency, which says the
+    same thing about every focus at a given moment, so "retrieval found it and it
+    is recent" read as agreement. On a repository somebody is working in daily
+    that is nearly every file, and it is why fourteen consecutive focuses scored
+    within ±10% of the bar.
+
+    So the score the gate compares is recomputed from the routes in
+    `FOCUS_SPECIFIC`, using the same term the fusion itself sums. Recency still
+    ranks items, still puts things in the context, and still cannot vote on
+    whether to interrupt anybody.
+    """
+    return sum(
+        contribution(rank)
+        for source, rank in item.sources.items()
+        if source in FOCUS_SPECIFIC
+    )
+
+
 def _top_item(context: AssembledContext) -> TopItem | None:
     """The best item that is not the file already open.
 
@@ -167,9 +194,10 @@ def _top_item(context: AssembledContext) -> TopItem | None:
     separately asking whether *anything* is novel would let a context be
     surfaced on the strength of an item nobody would be shown.
 
-    Ranked by fused relevance rather than by position. Position is MMR's output —
-    it has already traded relevance for coverage — and the question here is how
-    strong the evidence is, not how well the list reads.
+    Ranked by focus-specific score rather than by position or by the whole fused
+    score. Position is MMR's output — it has already traded relevance for
+    coverage — and the fused score includes a route that would have said the
+    same about any focus. See `focus_specific_score`.
     """
     candidates = [
         item
@@ -178,12 +206,14 @@ def _top_item(context: AssembledContext) -> TopItem | None:
     ]
     if not candidates:
         return None
-    best = max(candidates, key=lambda item: item.relevance)
+    best = max(candidates, key=focus_specific_score)
     return TopItem(
         key=best.key,
         title=best.title,
-        score=best.relevance,
-        routes=len(best.sources),
+        score=focus_specific_score(best),
+        # Counted the same way, so "found by 2 of 4 sources" in the CLI and the
+        # score in the log can never disagree about which routes were involved.
+        routes=len([source for source in best.sources if source in FOCUS_SPECIFIC]),
     )
 
 

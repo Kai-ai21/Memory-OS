@@ -39,8 +39,8 @@ restraint. See [Events](#events), which measures whether a Postgres queue is fas
 enough to push through rather than guessing, [Context](#context), which is a
 budgeting problem wearing a retrieval problem's clothes, [Clients](#clients),
 [Surfacing](#surfacing) — whose headline number is a **54% dismissal rate**, the
-wrong side of the line it set for itself — and the
-[Phase 6 retrospective](#phase-6-retrospective).
+wrong side of the line it set for itself, and whose cause M7.0 then found and
+fixed — and the [Phase 6 retrospective](#phase-6-retrospective).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -3987,6 +3987,43 @@ frequently means "retrieval mentioned it and it is recent" — and on a reposito
 somebody is actively working in, that is nearly everything. The structural
 threshold is real; the independence it assumes is not.
 
+### The correction, and what it says about all of the above
+
+**M7.0 split the temporal source in two and re-ran the same seven focuses. Every
+one of them now scores exactly `0.01639` — one route — and the gate is silent on
+all seven.**
+
+| focus | fused, as M6.3 scored it | focus-specific | routes |
+| --- | --- | --- | --- |
+| `cli.py` | 0.03252 | 0.01639 | 1 |
+| `application/events.py` | 0.03226 | 0.01639 | 1 |
+| `api/routes/surfacing.py` | 0.03178 | 0.01639 | 1 |
+| `application/context_engine.py` | 0.03154 | 0.01639 | 1 |
+| `application/replay.py` | 0.02973 | 0.01639 | 1 |
+| `adapters/db/models.py` | 0.02929 | 0.01639 | 1 |
+| `container.py` | 0.02901 | 0.01639 | 1 |
+
+That is a stronger claim than the paragraph above makes, and it is the honest
+one: recency was not *inflating* the agreement, it **was** the agreement. On
+every one of the twelve interruptions, the second route was the clock. The graph
+contributes nothing until entities are extracted, decisions rarely cite the file
+in front of you, and the by-name route can only ever find the focused file
+itself — which the gate excludes as something the reader already has open. That
+leaves retrieval, alone, for every candidate.
+
+So the 54% was not a bar in the wrong place. It was a bar being cleared by a
+route that should never have been able to clear it, and six of thirteen being
+useful is roughly what one retriever's top hit is worth on this corpus.
+
+**The corrected gate says nothing at all, and that is the correct output.** There
+is no second independent route here to agree with retrieval, and the remedy is to
+build one — entity extraction over this corpus, or the co-edit source the
+retrospective below proposes — rather than to lower the bar until something
+comes out. `memoryos surfacing check` on any of these seven now prints `stay
+quiet: below_threshold` with a score of exactly one route's best, which is a
+system saying "I have one opinion and one opinion is not enough to interrupt
+you".
+
 ### The feedback loop, working on real events
 
 The clearest thing in this run is not the rate. Twenty seconds after `cli.py`'s
@@ -4122,13 +4159,14 @@ from broken.
 
 ### What would make it genuinely useful rather than merely functional
 
-**A relevance signal that is about the focus.** The single change with the
+**A relevance signal that is about the focus.** ~~The single change with the
 largest effect is removing global recency from the fusion when the focus is a
-path, or splitting the temporal source into its two halves — "other versions of
-this file" is about the focus and "what changed lately" is not. Three routes that
-are genuinely independent of each other would make "two agreed" mean what the
-threshold assumes it means, and would spread the score distribution enough for a
-bar to sit somewhere meaningful.
+path, or splitting the temporal source into its two halves.~~ **Done in M7.0's
+Step 0**, and it did not spread the distribution — it collapsed it. Every focus
+now scores one route, because recency was the only second route there was. The
+finding stands with its sign reversed: the problem was never a bar in the wrong
+place, and what this corpus needs is a route that is genuinely about the focus
+and genuinely independent of retrieval. The next two paragraphs are that route.
 
 **Structural neighbours, not just semantic ones.** Every item the gate got right
 was a file's own test, and it found them through prose similarity plus recency —

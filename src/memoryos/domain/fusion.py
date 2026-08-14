@@ -50,6 +50,25 @@ from collections.abc import Sequence
 DEFAULT_RRF_K = 60
 
 
+def contribution(rank: int, *, k: int = DEFAULT_RRF_K) -> float:
+    """What one ranking adds to a fused score by placing an item at `rank`.
+
+    The single term of the sum below, exposed because two callers outside this
+    module need to reason about a *part* of a fused score rather than the whole
+    of it. M6.3's gate is the reason it exists: it asks whether the routes that
+    are actually about the focus agree, which means adding up the terms for some
+    rankings and not others.
+
+    Extracted rather than repeated. A second copy of `1 / (k + rank)` somewhere
+    else is a copy that stops matching the day `k` moves, and it would fail
+    silently — the gate would go on comparing against a threshold expressed in
+    units of a formula the fusion no longer uses.
+    """
+    if rank < 1:
+        raise ValueError(f"rank is 1-based, got {rank}")
+    return 1.0 / (k + rank)
+
+
 def reciprocal_rank_fusion(
     rankings: Sequence[Sequence[str]],
     *,
