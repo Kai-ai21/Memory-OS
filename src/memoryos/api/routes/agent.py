@@ -102,10 +102,6 @@ class VerificationOut(BaseModel):
     support_rate: float
     direct_rate: float
     verdict: str
-    # "cross-encoder" or "cosine". Which instrument scored support — a
-    # deployment with reranking off gets the weaker one, and two runs scored
-    # differently must not look identical on the wire.
-    judged_by: str = "cross-encoder"
     factual_claims: int
     connective_claims: int
     claims: list[ClaimOut] = Field(default_factory=list)
@@ -164,7 +160,6 @@ def _to_response(verified: VerifiedAnswer) -> AgentAskOut:
             support_rate=round(checked.support_rate, 4),
             direct_rate=round(checked.direct_rate, 4),
             verdict=checked.verdict,
-            judged_by=checked.judged_by,
             factual_claims=checked.factual_claims,
             connective_claims=checked.connective_claims,
             claims=[_claim_out(claim) for claim in checked.claims],

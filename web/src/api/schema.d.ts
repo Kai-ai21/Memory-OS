@@ -2810,11 +2810,6 @@ export interface components {
             /** Invalid Citations */
             invalid_citations?: number[];
             /**
-             * Judged By
-             * @default cross-encoder
-             */
-            judged_by: string;
-            /**
              * Refused
              * @default false
              */

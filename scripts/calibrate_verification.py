@@ -7,10 +7,23 @@ So they were measured here rather than picked, and this script is what re-measur
 them after either model changes, after the corpus grows, or whenever the flagged
 sentences in a real answer stop looking right.
 
-Both instruments are reported side by side, because M7.2 shipped with the
-bi-encoder alone and this is the evidence for replacing it: two sentences it
-passed are in the fourth and fifth sets below, and they are the two the milestone
-named as its own unresolved failures.
+**Both instruments are reported side by side, and the cross-encoder is the one
+that is not shipped.** M7.3 tried to replace cosine with it and measured the
+result rather than assuming it: on the claim sets below the swap looks excellent,
+and on real answers it is a disaster. The evidence for both halves is here so the
+next person does not repeat the experiment.
+
+The trap is that `ms-marco-MiniLM-L-6-v2` scores *query*-document relevance, and
+a claim is not a query. A verbatim quotation of a passage, scored against the
+passage containing it, comes back at **-0.59**. Real answers are full of
+quotations and list items; the claim sets below are paraphrases that happen to
+read like questions, which is why they flatter it. Replayed over M7.1's five real
+answers, support fell from 91% to 43% and the best answer in the set — a genuine
+three-hop chain — would have been withheld.
+
+So the numbers below are a warning rather than a recommendation, and the honest
+reading of the last set is narrower than it first appears: the cross-encoder
+catches those two sentences, and it catches thirteen true ones with them.
 
 **No model is called.** The tool results are produced by calling the tools, which
 is exactly what the agent does; the claims are written by hand into the three
@@ -51,17 +64,15 @@ import asyncio
 import statistics
 
 from memoryos.application.agent.planner import Step
-from memoryos.application.agent.verify import (
-    DIRECT,
-    INFERRED,
-    JUDGE_DIRECT,
-    JUDGE_INFERRED,
-    SHORTLIST,
-    _cosine,
-    _units,
-)
+from memoryos.application.agent.verify import DIRECT, INFERRED, _cosine, _units
 from memoryos.config import Settings
 from memoryos.container import Container
+
+# What the *rejected* cross-encoder experiment would have used. Kept here rather
+# than in `verify.py` because nothing ships them — see the module docstring.
+JUDGE_DIRECT = 4.0
+JUDGE_INFERRED = 0.0
+SHORTLIST = 12
 
 # The searches a real trajectory made, replayed without a model.
 CALLS: tuple[tuple[str, dict[str, object]], ...] = (

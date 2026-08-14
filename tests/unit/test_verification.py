@@ -27,7 +27,6 @@ from memoryos.application.agent.tools import ToolResult
 from memoryos.application.agent.verify import (
     DIRECT,
     REFUSAL,
-    SHORTLIST,
     Support,
     VerificationResult,
     presented,
@@ -455,76 +454,3 @@ def test_nothing_supported_is_reported_as_zero_direct_not_perfect() -> None:
         aligned(PASSAGE),
     )
     assert refusal.direct_rate == 1.0
-
-
-class ScriptedJudge:
-    """A cross-encoder stand-in: fixed scores by claim text.
-
-    The real one is `CrossEncoderReranker`, and loading it here would spend ten
-    seconds to assert something the model is not what is under test for. The
-    thresholds it is scored against are measured in
-    `scripts/calibrate_verification.py`, on the real model and the real corpus.
-    """
-
-    def __init__(self, scores: dict[str, float], default: float = -9.0) -> None:
-        self._scores = scores
-        self._default = default
-        self.pairs: list[tuple[str, int]] = []
-
-    def rerank(self, query: str, documents: Sequence[str]) -> list[float]:
-        self.pairs.append((query, len(documents)))
-        return [self._scores.get(query, self._default) for _ in documents]
-
-
-def test_the_judge_decides_and_cosine_only_shortlists() -> None:
-    """**The failure M7.2 shipped with, in miniature.**
-
-    A sentence built out of retrieved words is *near* the passage by cosine and
-    does not say what the passage says. Cosine passed the real instance at 0.741;
-    here the claim is maximally close by angle and the judge scores it below the
-    bar, and what the verdict follows is the judge.
-    """
-    claim = "The production incident was traced to a decision not to retry."
-    judge = ScriptedJudge({claim: 0.26})
-
-    result = verify(
-        trajectory(claim, step(PASSAGE)),
-        aligned(claim, PASSAGE),  # cosine 1.0 — as close as it gets
-        judge,
-    )
-
-    assert result.judged_by == "cross-encoder"
-    assert result.claims[0].support is Support.UNSUPPORTED
-    assert result.verdict == "ungrounded"
-    # Cosine still ran: it is what chose which passages the judge read.
-    assert judge.pairs == [(claim, 1)]
-
-
-def test_without_a_judge_the_weaker_check_runs_and_says_so() -> None:
-    """A deployment with reranking off still gets a check, and a reader comparing
-    two runs can see they were not scored the same way. Silence here would make
-    the weaker instrument indistinguishable from the stronger one."""
-    claim = "The lease expires after thirty seconds."
-
-    result = verify(trajectory(claim, step(PASSAGE)), aligned(claim, PASSAGE))
-
-    assert result.judged_by == "cosine"
-    assert result.claims[0].support is Support.DIRECT
-    assert result.as_dict()["judged_by"] == "cosine"
-
-
-def test_the_shortlist_is_bounded_however_many_passages_there_are() -> None:
-    """One forward pass per claim-passage pair, over a six-hop trajectory, would
-    put seconds between the answer and the screen. The bi-encoder is a good
-    enough filter to pick which twelve are worth reading properly."""
-    claim = "The lease expires after thirty seconds."
-    judge = ScriptedJudge({claim: 7.0})
-    many = [
-        step(f"{PASSAGE} Variation number {number} of the same passage text.")
-        for number in range(20)
-    ]
-
-    result = verify(trajectory(claim, *many), aligned(claim), judge)
-
-    assert judge.pairs and judge.pairs[0][1] == SHORTLIST
-    assert result.claims[0].support is Support.DIRECT
