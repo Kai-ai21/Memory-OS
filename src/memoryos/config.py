@@ -207,6 +207,13 @@ class Settings(BaseSettings):
     # are properties of a specific embedding model and moving one by hand
     # without re-running the calibration would be worse than not having the knob.
     agent_min_support: float = 0.5
+    # Tokens one agent turn may generate. M7.0 chose 700 for a two-sentence
+    # answer over one tool result; a final answer over six hops is longer than
+    # that, and a *reasoning* model spends this budget on thinking before it
+    # writes anything at all — `openai/gpt-oss-20b` returned neither text nor a
+    # tool call at 700, which the adapter correctly reports as an empty turn and
+    # which is really a budget that was never enough.
+    agent_max_tokens: int = 1400
     # Chunks per extraction request (M3.1). The free tier's binding constraint
     # is requests per day, not tokens per request, so batching is what decides
     # whether a corpus of this size can be extracted at all: 1,308 chunks one at

@@ -597,3 +597,65 @@ def test_stop_reasons_are_counted_for_the_report() -> None:
     # Every reason present, including the zeroes: a distribution that omitted
     # the reasons that never fired would read as if they could not.
     assert set(counted) == {reason.value for reason in StopReason}
+
+
+async def test_a_sliding_window_rate_limit_is_waited_out_rather_than_fatal() -> None:
+    """**M7.1 claimed backoff applied here and nothing applied it.**
+
+    It went unnoticed because both providers' M7.1 failures were *daily* quotas,
+    where retrying is pointless. A per-minute window is the opposite and the more
+    common case: one model refused hop four and asked to be tried again in 285
+    milliseconds, and a four-hop trajectory ended over it.
+    """
+    from memoryos.adapters.llm.errors import RateLimited
+
+    class RefusesOnce(ScriptedModel):
+        def __init__(self, turns: list[ModelTurn]) -> None:
+            super().__init__(turns)
+            self.refusals = 0
+
+        async def converse(self, *args: Any, **kwargs: Any) -> ModelTurn:
+            if self.refusals == 0 and kwargs.get("tools"):
+                self.refusals += 1
+                raise RateLimited("tokens per minute", retry_after=0.01)
+            return await super().converse(*args, **kwargs)
+
+    model = RefusesOnce([wants(query="x"), answers("Because of the lease.")])
+
+    trajectory = await planner(model, CountingTool()).run("why", max_hops=4)
+
+    assert trajectory.stopped_because is StopReason.CONFIDENCE
+    assert trajectory.answer == "Because of the lease."
+    assert model.refusals == 1
+
+
+async def test_a_daily_quota_ends_the_trajectory_instead_of_hanging() -> None:
+    """The other half, and the reason the ceiling exists.
+
+    A provider asking for half an hour is describing a daily budget. Sleeping
+    through it three times inside one question is indistinguishable from a hang,
+    while the hops already completed sit unread in a trajectory nobody can see.
+    """
+    from memoryos.adapters.llm.errors import RateLimited
+
+    class OutOfBudget(ScriptedModel):
+        def __init__(self, turns: list[ModelTurn]) -> None:
+            super().__init__(turns)
+            self.calls = 0
+
+        async def converse(self, *args: Any, **kwargs: Any) -> ModelTurn:
+            self.calls += 1
+            if self.calls > 1:
+                raise RateLimited("tokens per day", retry_after=1894.0)
+            return await super().converse(*args, **kwargs)
+
+    model = OutOfBudget([wants(query="x")])
+
+    trajectory = await planner(model, CountingTool()).run("why", max_hops=6)
+
+    assert trajectory.stopped_because is StopReason.ERROR
+    assert trajectory.retry_after == 1894.0
+    # One hop survived, and it is the whole reason this returns rather than raises.
+    assert trajectory.hops == 1
+    # Two calls: the one that worked and the one that did not. No retries.
+    assert model.calls == 2

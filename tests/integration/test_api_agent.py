@@ -211,3 +211,24 @@ async def test_an_ungrounded_answer_is_withheld_over_http_too(
     assert "production incidents" not in body["answer"]
     # And the trajectory is still there: the hops happened and are inspectable.
     assert body["hops"] == 1
+
+
+async def test_a_citation_that_does_not_resolve_is_reported(
+    client: AsyncClient, scripted_agent: None
+) -> None:
+    """**M2.5's identity, checked against the database at answer time.**
+
+    The scripted tool cites a memory id that was never ingested, which is the
+    same shape as the real failure this guards: a citation whose offsets no
+    longer match the stored text because the corpus moved under the answer.
+
+    Reported rather than fatal. A drifted citation does not make the prose wrong,
+    it makes the prose uncheckable — and the person reading it is the one who
+    should decide what that is worth.
+    """
+    response = await client.post("/agent/ask", json={"question": "anything"})
+
+    body = response.json()
+    assert body["verification"]["unresolved_citations"] == [
+        "self::src/hop_1.py#0 @0-10 (v1)"
+    ]

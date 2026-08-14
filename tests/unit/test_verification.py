@@ -398,3 +398,59 @@ def test_a_refusal_the_model_wrote_itself_is_returned_rather_than_replaced() -> 
 
     assert result.returnable
     assert presented(made, result) == answer
+
+
+def test_a_short_lead_in_ending_in_a_colon_is_not_a_claim() -> None:
+    """"Specifically:" is a hinge, not an assertion.
+
+    Found in a real answer, where it sat in the unsupported list beside an actual
+    fabrication. That is not a harmless miscount: the flagged list is read by a
+    person deciding what to distrust, and padding it with punctuation is how they
+    stop reading it.
+
+    Bounded by length, because a long sentence ending in a colon is a claim with
+    a list under it.
+    """
+    # On its own line, which is where it appeared: the splitter breaks on
+    # newlines and not on colons, so a lead-in is only ever its own fragment
+    # when the model put it on its own line — as models writing lists do.
+    supported = "The lease expires after thirty seconds."
+    answer = f"Specifically:\n{supported}"
+
+    result = verify(
+        trajectory(answer, step(PASSAGE)),
+        AngleEmbedder({supported: 0.0, PASSAGE: 0.0}),
+    )
+
+    assert result.factual_claims == 1
+    assert result.unsupported == []
+
+    # The long form asserts something and still has to earn it.
+    claimed = "The four assumptions that broke were all about coverage:"
+    long_form = verify(
+        trajectory(claimed, step(PASSAGE)),
+        AngleEmbedder({claimed: 2.0, PASSAGE: 0.0}),
+    )
+    assert long_form.factual_claims == 1
+    assert long_form.unsupported
+
+
+def test_nothing_supported_is_reported_as_zero_direct_not_perfect() -> None:
+    """"0% supported, 100% direct" reads as a perfect score on the worst possible
+    answer. `direct_rate` keeps 1.0 only for the genuinely empty case."""
+    invented = "The team changed its deployment process in March."
+
+    result = verify(
+        trajectory(invented, step(PASSAGE)),
+        AngleEmbedder({invented: 2.0, PASSAGE: 0.0}),
+    )
+
+    assert result.support_rate == 0.0
+    assert result.direct_rate == 0.0
+    # A pure refusal has no factual claims, and 1.0 there is the same convention
+    # `support_rate` uses for the same reason.
+    refusal = verify(
+        trajectory("The corpus does not contain that.", step(PASSAGE)),
+        aligned(PASSAGE),
+    )
+    assert refusal.direct_rate == 1.0

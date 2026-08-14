@@ -173,6 +173,9 @@ _ABSENCE = re.compile(
 # point of the sentence.
 ABSENCE_WINDOW = 60
 
+# Words a colon-terminated fragment may have and still be only a lead-in.
+LEAD_IN_WORDS = 6
+
 _HAS_LETTERS = re.compile(r"[A-Za-z]")
 
 # Markdown scaffolding a model puts around a list. Stripped before classifying,
@@ -366,7 +369,15 @@ def verify(
     # and is here for M2.6's reason: a refusal has nothing to support, and
     # scoring it zero would make the safest possible answer the worst-rated one.
     support_rate = 1.0 if total == 0 else len(supported) / total
-    direct_rate = 1.0 if not supported else direct_count / len(supported)
+    # Of the supported claims, how many one passage said outright. Undefined
+    # when nothing is supported — and reported as 0.0 rather than 1.0 there,
+    # because "0% supported, 100% direct" reads as a perfect score on the
+    # worst possible answer. 1.0 is kept only for the genuinely empty case, a
+    # refusal with no factual claims, where the same convention as
+    # `support_rate` applies for the same reason.
+    direct_rate = (
+        1.0 if total == 0 else (direct_count / len(supported) if supported else 0.0)
+    )
 
     result = VerificationResult(
         support_rate=support_rate,
@@ -650,6 +661,17 @@ def _is_factual(sentence: str) -> bool:
     bare = _ORNAMENT.sub("", sentence).strip()
     lowered = bare.lower()
     if lowered.startswith(_CONNECTIVE_PREFIXES):
+        return False
+    # A short fragment ending in a colon introduces the thing after it. "Here
+    # are the decisions:" is caught by the prefixes above; "Specifically:" is
+    # not, and it was flagged unsupported in a real answer — a one-word lead-in
+    # sitting in the unsupported list beside an actual fabrication, which
+    # devalues the list for the reader who has to scan it.
+    #
+    # Bounded by length, because a long sentence ending in a colon is a claim
+    # with a list under it: "The four assumptions that broke were:" asserts that
+    # four broke.
+    if bare.endswith(":") and len(bare.split()) <= LEAD_IN_WORDS:
         return False
     # A statement of absence is the behaviour this phase exists to encourage.
     # Requiring evidence for "the corpus does not contain this" would score the

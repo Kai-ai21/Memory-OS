@@ -371,6 +371,7 @@ class Container:
                 self.embedder,
                 max_hops=self.settings.agent_max_hops,
                 finding_budget=self.settings.agent_finding_budget,
+                max_tokens=self.settings.agent_max_tokens,
             )
             return VerifiedAgent(
                 planner,
