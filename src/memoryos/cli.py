@@ -52,6 +52,7 @@ from memoryos.application import (
     reflections,
     sources,
     surfacing,
+    system_report,
     temporal,
     user_model,
 )
@@ -3002,6 +3003,248 @@ def _dimension_or_exit(name: str | None) -> Dimension | None:
         raise SystemExit(f"{name!r} is not a dimension. Use one of: {allowed}") from None
 
 
+# --------------------------------------------------------------------------
+# The full system report (M8.2)
+# --------------------------------------------------------------------------
+
+
+async def run_report(
+    settings: Settings,
+    *,
+    full: bool,
+    golden_path: Path,
+    var_root: Path,
+    k: int,
+) -> int:
+    """Everything the system currently measures about itself, in one command.
+
+    **The artifact you show somebody**, and the reason it is one command rather
+    than nine is that a claim assembled by hand from nine scrollbacks is a claim
+    nobody re-checks. This runs from a clean checkout and produces the current
+    true state.
+
+    `--full` adds the graded retrieval evaluation against every recorded
+    baseline, which takes a minute of local compute and no API calls. Without it
+    the report is the cheap sections — counts, graph, decisions, model, doctor —
+    which is what a script watching for drift wants.
+
+    Exit code follows `doctor`: non-zero when something is actually wrong with
+    the corpus, never because a capability has no data. A report that failed on
+    an empty patterns table would be reporting the corpus's size as a defect.
+    """
+    container = Container.build(settings)
+    healthy = True
+    try:
+        sessions = container.database.session_factory
+        assessments = await user_model.assess(sessions)
+        stability = await user_model.stability(sessions)
+        corpus, decisions, behaviour, ran_at = await system_report.gather(
+            sessions, assessments=assessments, stability=stability
+        )
+
+        print("=" * 78)
+        print(f"memoryos — full system report   {_stamp(ran_at)}")
+        print("=" * 78)
+
+        # ---------------------------------------------------------------
+        print("\n## Corpus\n")
+        print(f"  sources                {corpus.sources}")
+        print(f"  memories               {corpus.memories} ({corpus.current_memories} current)")
+        print(f"  chunks                 {corpus.chunks}")
+        print(
+            f"  embedded               {corpus.embedded_chunks} "
+            f"({corpus.coverage:.1%} of chunks)"
+        )
+        print(f"  model                  {container.embedder.model_id}")
+        print(f"  chunker                {container.chunker.version}")
+        print(f"  entities               {corpus.entities}")
+        print(f"  entity mentions        {corpus.mentions}")
+        print(f"  relationships          {corpus.relationships}")
+        print(
+            f"  extraction coverage    {corpus.extracted_memories}/"
+            f"{corpus.current_memories} memories ({corpus.extraction_coverage:.0%})"
+        )
+        # The number three later sections cite as the reason they decline.
+        print(
+            f"  source-declared dates  {corpus.declared_dates}/{corpus.current_memories} "
+            "(the rest are filesystem mtimes)"
+        )
+
+        # ---------------------------------------------------------------
+        print("\n## Retrieval\n")
+        if not full:
+            print("  skipped: pass --full to run the graded evaluation")
+        elif not golden_path.exists():
+            print(f"  no golden set at {golden_path}")
+            print(f"  run: memoryos export-golden-set --output {golden_path}")
+        else:
+            golden = await load_golden_set(golden_path, sessions)
+            if not golden.queries:
+                print("  the golden set has no scoreable queries")
+            else:
+                run = await evaluate(
+                    golden,
+                    container.search(),
+                    sessions,
+                    k=k,
+                    now=datetime.now(UTC),
+                    mode=DEFAULT_SEARCH_MODE,
+                    rerank=settings.rerank_enabled,
+                )
+                print(
+                    f"  live run: {len(run.results)} queries, k={k}, "
+                    f"mode={run.mode.value}, rerank={settings.rerank_enabled}"
+                )
+                print()
+                for summary in run.summaries():
+                    print(
+                        f"    {summary.metric:<14} mean {summary.mean:.3f}   "
+                        f"p50 {summary.p50:.3f}   min {summary.minimum:.3f}"
+                    )
+                touched, introduced = run.graph_contribution
+                print(
+                    f"\n    graph reached {touched} queries and introduced "
+                    f"{introduced} results no other route found"
+                )
+                print("\n  against every recorded baseline:\n")
+                for name, what, payload in system_report.read_baselines(var_root):
+                    if payload is None:
+                        print(f"    {name:<28} MISSING — never recorded")
+                        continue
+                    comparison = compare_runs(payload, run)
+                    print(f"    {name}  ({what})")
+                    print(f"      recorded {payload.get('ran_at', '?')[:19]}, "
+                          f"{payload.get('queries', '?')} queries, "
+                          f"mode {payload.get('mode', 'vector')}")
+                    for metric, before, after in comparison.deltas:
+                        delta = round(after - before, 6) or 0.0
+                        print(
+                            f"      {metric:<14}{before:>8.3f}{after:>8.3f}{delta:>+9.3f}"
+                        )
+                    if comparison.deltas:
+                        print(
+                            f"      {len(comparison.regressions)} query(ies) lost MRR"
+                        )
+                    else:
+                        # Different `k`, or a baseline from before a metric
+                        # existed. Reported rather than shown as an empty table.
+                        print("      no comparable metrics (different k or schema)")
+                    print()
+
+        # ---------------------------------------------------------------
+        print("\n## Graph\n")
+        divergence = await graph_verify.verify(sessions, container.graph)
+        print(textwrap.indent(divergence.render(), "  "))
+        print(
+            "\n  identical: the projection matches Postgres"
+            if divergence.identical
+            else "\n  DIVERGED — run `memoryos graph rebuild`"
+        )
+        if not divergence.identical:
+            healthy = False
+
+        # ---------------------------------------------------------------
+        print("\n## Decisions and outcomes\n")
+        print(f"  decisions              {decisions.decisions}")
+        print(f"  options recorded       {decisions.options}")
+        print(f"  outcomes               {decisions.outcomes}")
+        for verdict, count in sorted(decisions.by_verdict.items()):
+            print(f"    {verdict:<20} {count}")
+        print(f"  assumptions            {decisions.assumptions}")
+        print(f"    evaluated            {decisions.evaluated_assumptions}")
+        for verdict, count in sorted(decisions.by_assumption_verdict.items()):
+            print(f"      {verdict:<18} {count}")
+        print(f"    grouped              {decisions.grouped_assumptions}")
+        print(f"  assumption groups      {decisions.groups}")
+        if decisions.assumptions and not decisions.groups:
+            # The single fact that explains why three of M8.1's four detectors
+            # and two of M8.0's five derivers can never fire here.
+            print(
+                "\n  every assumption is ungrouped, so no belief is shared by two "
+                "decisions —\n  which is why the pattern and gap detectors below "
+                "have nothing to compare."
+            )
+
+        # ---------------------------------------------------------------
+        print("\n## Patterns, reflections and the user model\n")
+        print(f"  patterns               {behaviour.patterns} live, "
+              f"{behaviour.dismissed_patterns} dismissed")
+        print(f"  reflections            {behaviour.reflections}")
+        print(f"  facets (live)          {behaviour.facets} "
+              f"({behaviour.derived_facets} derived, {behaviour.asserted_facets} stated)")
+        print(f"  facets withdrawn       {behaviour.withdrawn_facets}")
+        print(f"  facets dismissed       {behaviour.dismissed_facets}")
+        print("\n  by dimension:")
+        for assessment in behaviour.assessments:
+            print(f"    {assessment.dimension.value:<20} {assessment.render()}")
+        print("\n  stability:")
+        for entry in behaviour.stability:
+            print(f"    {entry.dimension.value:<20} {entry.verdict()}")
+
+        # ---------------------------------------------------------------
+        print("\n## Agent\n")
+        recorded = system_report.agent_baseline(var_root)
+        if recorded is None:
+            print(f"  no recorded agent run at {var_root / system_report.AGENT_BASELINE}")
+        else:
+            means = recorded.get("means", {})
+            cost = recorded.get("cost", {})
+            print(
+                f"  RECORDED run, not live: {recorded.get('questions')} questions, "
+                f"{recorded.get('agent_failures')} agent failures"
+            )
+            print(
+                "  Scoring these live costs one model call per question and several "
+                "minutes;\n  the numbers below are the run in "
+                f"{system_report.AGENT_BASELINE}, and are labelled\n  recorded because "
+                "a report that printed a stale file as current state is the drift\n"
+                "  this command exists to stop."
+            )
+            print()
+            for metric, value in sorted(means.items()):
+                print(f"    {metric:<22} {float(value):.3f}")
+            for metric, value in sorted(cost.items()):
+                print(f"    {metric:<22} {float(value):,.1f}")
+            failures = recorded.get("failures", {})
+            if failures:
+                print("\n    failure modes:")
+                for mode, count in sorted(failures.items()):
+                    print(f"      {mode:<20} {count}")
+
+        # ---------------------------------------------------------------
+        print("\n## Health\n")
+        doctor_report = await run_doctor(
+            sessions,
+            container.embedder,
+            graph=container.graph,
+            graph_schema_version=SCHEMA_VERSION,
+        )
+        for finding in doctor_report.findings:
+            if finding.advisory and finding.count:
+                mark = "note"
+            elif finding.healthy:
+                mark = "ok  "
+            else:
+                mark = "FAIL"
+            print(f"  [{mark}] {finding.check}: {finding.count}")
+            if mark != "ok  ":
+                print(f"          {finding.detail}")
+        if doctor_report.graph is not None:
+            print()
+            # `doctor`'s own renderer rather than a second one. Two functions
+            # printing the same object is the "two places that must agree with
+            # nothing checking" this repo has paid for twice.
+            print_graph_status(doctor_report.graph, settings.neo4j_uri)
+        print("\n  " + ("healthy" if doctor_report.healthy else "problems found"))
+        if not doctor_report.healthy:
+            healthy = False
+    finally:
+        await container.dispose()
+
+    print("\n" + "=" * 78)
+    return 0 if healthy else 1
+
+
 async def run_patterns_list(
     settings: Settings, *, kind: str | None, include_dismissed: bool
 ) -> int:
@@ -5502,6 +5745,25 @@ def build_parser() -> argparse.ArgumentParser:
         "doctor", help="check the corpus for silently-degrading conditions"
     )
 
+    report_parser = commands.add_parser(
+        "report", help="everything the system measures about itself, in one command"
+    )
+    report_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="also run the graded retrieval evaluation against every baseline",
+    )
+    report_parser.add_argument(
+        "--golden-set", type=Path, default=Path("var/golden-set.json")
+    )
+    report_parser.add_argument(
+        "--var-root",
+        type=Path,
+        default=Path("var"),
+        help="where the recorded baselines live",
+    )
+    report_parser.add_argument("-k", type=int, default=10)
+
     search = commands.add_parser("search", help="semantic search over memories")
     search.add_argument("query")
     search.add_argument("-k", type=int, default=10, help="how many memories to return")
@@ -6208,6 +6470,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "doctor":
         return asyncio.run(run_doctor_command(settings))
+
+    if args.command == "report":
+        return asyncio.run(
+            run_report(
+                settings,
+                full=args.full,
+                golden_path=args.golden_set,
+                var_root=args.var_root,
+                k=args.k,
+            )
+        )
 
     if args.command == "search":
         return asyncio.run(
