@@ -142,7 +142,7 @@ RUNS = (
 )
 
 
-async def main() -> None:
+async def main(judged: bool = True) -> None:
     container = Container.build(Settings())
     try:
         registry = container.tools()
@@ -160,10 +160,17 @@ async def main() -> None:
                 answer=run.answer,
                 stopped_because=StopReason.CONFIDENCE,
             )
-            checked = verify(trajectory, container.embedder)
+            checked = verify(
+                trajectory,
+                container.embedder,
+                container.reranker if judged else None,
+            )
             rows.append((run, checked))
 
-            print(f"\n=== {run.label} ({len(run.calls)} hop(s)) ===")
+            print(
+                f"\n=== {run.label} ({len(run.calls)} hop(s), "
+                f"judged by {checked.judged_by}) ==="
+            )
             print(
                 f"  verdict {checked.verdict}   support "
                 f"{checked.support_rate:.0%}   direct {checked.direct_rate:.0%}   "
@@ -210,4 +217,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+
+    # `--cosine` runs the M7.2 instrument, for comparing the two on the same
+    # answers. The default is what actually ships.
+    asyncio.run(main(judged="--cosine" not in sys.argv))

@@ -14,6 +14,7 @@ import textwrap
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -52,6 +53,12 @@ from memoryos.application import (
     surfacing,
     temporal,
 )
+
+# Imported as a module rather than by name: `compare` and `score` both already
+# mean something else in this file, and three functions fighting over two names
+# is how the wrong one gets called.
+from memoryos.application.agent import evaluate as trajectory_eval
+from memoryos.application.agent.evaluate import Report, TrajectoryScore
 from memoryos.application.agent.planner import Trajectory
 from memoryos.application.agent.verify import VerificationResult
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
@@ -3383,6 +3390,160 @@ def _print_trace(trajectory: Trajectory) -> None:
         print()
 
 
+async def run_agent_evaluate(
+    settings: Settings,
+    *,
+    golden_path: Path,
+    json_path: Path | None,
+    compare_path: Path | None,
+    repeat: int,
+    max_hops: int | None,
+) -> int:
+    """Every golden agent question, scored on how it reasoned.
+
+    **The cost columns are not optional and not a footnote.** An agent that
+    scores well at ninety seconds and forty thousand tokens a question is not
+    usable, and a report that put the metrics on screen and the price in a log
+    would be recommending it anyway.
+
+    `--repeat` runs the whole set N times and reports the spread. That number is
+    the floor every later claim about agent improvement has to clear, and it is
+    the one measurement here that cannot be inferred from a single run.
+    """
+    golden = trajectory_eval.load_golden(golden_path)
+    container = Container.build(settings)
+    reports: list[Report] = []
+    try:
+        try:
+            agent = container.agent()
+        except (ToolsUnsupported, MissingApiKey) as exc:
+            print(str(exc))
+            return 1
+
+        for attempt in range(1, repeat + 1):
+            if repeat > 1:
+                print(f"\n=== run {attempt} of {repeat} ===")
+            rows: list[TrajectoryScore] = []
+            for question in golden:
+                verified = await agent.ask(question.question, max_hops=max_hops)
+                row = trajectory_eval.score(
+                    verified.trajectory,
+                    question,
+                    support_rate=verified.verification.support_rate,
+                    verdict=verified.verification.verdict,
+                    refused=verified.refused,
+                )
+                rows.append(row)
+                _print_score(row)
+            reports.append(Report(scores=tuple(rows)))
+    finally:
+        await container.dispose()
+
+    for index, report in enumerate(reports, start=1):
+        _print_report(report, label=f"run {index}" if repeat > 1 else "totals")
+
+    if len(reports) > 1:
+        _print_variance(trajectory_eval.variance(reports))
+
+    if compare_path is not None:
+        _print_comparison(reports[0], json.loads(compare_path.read_text()))
+
+    if json_path is not None:
+        payload: dict[str, Any] = dict(reports[0].as_dict())
+        if len(reports) > 1:
+            payload["variance"] = trajectory_eval.variance(reports)
+            payload["runs"] = [report.as_dict() for report in reports]
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(payload, indent=2) + "\n")
+        print(f"\nwrote {json_path}")
+
+    # Non-zero only when the agent failed, never when the data is absent. A
+    # benchmark that exits 1 because the corpus lacks three years of history
+    # would be reporting a missing feature as a broken build.
+    return 1 if reports[0].agent_failures else 0
+
+
+def _print_score(row: TrajectoryScore) -> None:
+    marker = "ok " if row.failure.value == "none" else "!! "
+    print(
+        f"{marker}{row.question_id:24} {row.hops}/{row.min_hops} hops  "
+        f"gain {row.information_gain:.2f}  dep {row.dependency:.2f}  "
+        f"eff {row.efficiency:.2f}  term {row.termination:.2f}  "
+        f"support {row.support_rate:.0%}  {row.tokens:>6} tok  "
+        f"{row.duration_ms / 1000:5.1f}s  {row.failure.value}"
+    )
+    for hop in row.per_hop:
+        appropriate = {True: "✓", False: "✗", None: "·"}[hop.appropriate]
+        print(
+            f"      {hop.hop}. {hop.tool:18} intent {appropriate}  "
+            f"gain {hop.gain:.2f}  dep {hop.dependency:.1f}"
+            + (f"  ({hop.dependency_evidence})" if hop.dependency_evidence else "")
+        )
+    if row.facts_missing:
+        print(f"      missing facts: {', '.join(row.facts_missing)}")
+    if row.required_missing:
+        print(f"      never called: {', '.join(row.required_missing)}")
+    if row.forbidden_used:
+        print(f"      should not have called: {', '.join(row.forbidden_used)}")
+
+
+def _print_report(report: Report, *, label: str) -> None:
+    print(f"\n{label}: {len(report.scores)} question(s)")
+    for name in (
+        "information_gain",
+        "dependency",
+        "efficiency",
+        "termination",
+        "overall",
+        "support_rate",
+    ):
+        print(f"  {name:20} {report.mean_of(name):.3f}")
+    judgeable = sum(row.judgeable for row in report.scores)
+    print(
+        f"  {'tool_appropriateness':20} {report.mean_of('tool_appropriateness'):.3f}"
+        f"   (over {judgeable} narrated hop(s))"
+    )
+    print(
+        f"\n  cost: {report.mean_of('tokens'):.0f} tokens and "
+        f"{report.mean_of('duration_ms') / 1000:.1f}s per question, "
+        f"{sum(row.tokens for row in report.scores)} tokens total"
+    )
+    print("\n  failures:")
+    for name, count in report.failures.items():
+        if count:
+            print(f"    {name:20} {count}")
+    print(f"    {'agent failures':20} {report.agent_failures} of {len(report.scores)}")
+
+
+def _print_variance(spread: dict[str, dict[str, float]]) -> None:
+    """**The floor.** M2.3a's discipline, on a loop that is not deterministic."""
+    print("\nvariance across runs (the floor a future improvement must clear):")
+    for name, values in spread.items():
+        if name == "per_question_overall":
+            continue
+        print(
+            f"  {name:20} range {values['range']:.3f}   stdev {values['stdev']:.3f}"
+            f"   ({values['min']:.3f} - {values['max']:.3f})"
+        )
+    per_question = spread.get("per_question_overall", {})
+    if per_question:
+        print("\n  per question, overall score range:")
+        for question, value in sorted(
+            per_question.items(), key=lambda item: -float(item[1])
+        ):
+            print(f"    {question:24} {float(value):.3f}")
+
+
+def _print_comparison(report: Report, baseline: dict[str, Any]) -> None:
+    rows = trajectory_eval.compare(report, baseline)
+    if not rows:
+        print("\nthe baseline file carries no means to compare against")
+        return
+    print("\nagainst baseline:")
+    for name, was, now in rows:
+        print(f"  {name:20} {was:+.3f} -> {now:+.3f}   {now - was:+.3f}")
+
+
 async def run_agent_tools(settings: Settings) -> int:
     """What the model is offered, exactly as it reads it.
 
@@ -4718,6 +4879,30 @@ def build_parser() -> argparse.ArgumentParser:
     agent_commands.add_parser(
         "tools", help="the tools a model is offered, with their descriptions"
     )
+    agent_eval = agent_commands.add_parser(
+        "evaluate", help="score every golden agent question on how it reasoned"
+    )
+    agent_eval.add_argument(
+        "--golden",
+        type=Path,
+        default=Path("var/agent-golden.json"),
+        help="the answer key (default: var/agent-golden.json)",
+    )
+    agent_eval.add_argument("--json", dest="json_path", type=Path, default=None)
+    agent_eval.add_argument(
+        "--compare",
+        dest="compare_path",
+        type=Path,
+        default=None,
+        help="a baseline JSON to report the current run against",
+    )
+    agent_eval.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="run the whole set N times and report the variance floor",
+    )
+    agent_eval.add_argument("--max-hops", type=int, default=None)
 
     reflect_parser = commands.add_parser(
         "reflect",
@@ -5338,6 +5523,17 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.agent_command == "tools":
             return asyncio.run(run_agent_tools(settings))
+        if args.agent_command == "evaluate":
+            return asyncio.run(
+                run_agent_evaluate(
+                    settings,
+                    golden_path=args.golden,
+                    json_path=args.json_path,
+                    compare_path=args.compare_path,
+                    repeat=max(1, args.repeat),
+                    max_hops=args.max_hops,
+                )
+            )
 
     if args.command == "surfacing":
         if args.surfacing_command == "stats":

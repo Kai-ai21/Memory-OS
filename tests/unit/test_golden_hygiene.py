@@ -76,3 +76,55 @@ def test_no_prose_golden_query_appears_verbatim_in_a_tracked_file() -> None:
         + "\nEither rephrase the file to describe the query instead of quoting it, "
         "or add it to eval_exclude if holding the string is its purpose."
     )
+
+
+AGENT_GOLDEN = PROJECT_ROOT / "var" / "agent-golden.json"
+
+
+def test_no_agent_golden_question_appears_verbatim_in_a_tracked_file() -> None:
+    """**M2.1's rule, applied to M7.3's answer key.**
+
+    The corpus is this repository, so an agent question written into a tracked
+    file is a passage that matches itself — and the agent's first hop is a search
+    over exactly that corpus. Where retrieval contamination inflated a ranking,
+    this would hand the agent the answer key as its top hit and make a trajectory
+    look brilliant for reading the benchmark.
+
+    Every one of these is prose, so unlike the retrieval set there is no
+    `is_prose_query` exemption to make: none of them is a literal a file could
+    legitimately contain.
+
+    `var/` is skipped for the same reason it is skipped above — `var/**` is in
+    `eval_exclude`, and that exclusion is the entire licence for writing the
+    questions down anywhere at all.
+    """
+    if not AGENT_GOLDEN.exists():
+        pytest.skip("no agent golden set to check")
+
+    payload = json.loads(AGENT_GOLDEN.read_text())
+    questions = [entry["question"] for entry in payload["questions"]]
+    assert questions, "the agent golden set should contain questions"
+
+    exclude: list[str] = []
+    if GOLDEN_SET.exists():
+        exclude = json.loads(GOLDEN_SET.read_text()).get("eval_exclude") or []
+
+    found: dict[str, list[str]] = {}
+    for name in tracked_files():
+        if name.startswith("var/") or excluded_by(exclude, name) is not None:
+            continue
+        try:
+            text = (PROJECT_ROOT / name).read_text(errors="ignore")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for question in questions:
+            if question in text:
+                found.setdefault(question, []).append(name)
+
+    assert not found, (
+        "agent golden questions are quoted in tracked files, which makes those "
+        "files retrievable answers to the benchmark:\n"
+        + "\n".join(f"  {q!r} in {files}" for q, files in sorted(found.items()))
+        + "\nDescribe the question rather than quoting it — the README refers to "
+        "these by id for exactly this reason."
+    )
