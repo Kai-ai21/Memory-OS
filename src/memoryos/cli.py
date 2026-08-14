@@ -3398,6 +3398,7 @@ async def run_agent_evaluate(
     compare_path: Path | None,
     repeat: int,
     max_hops: int | None,
+    pace: float,
 ) -> int:
     """Every golden agent question, scored on how it reasoned.
 
@@ -3409,6 +3410,13 @@ async def run_agent_evaluate(
     `--repeat` runs the whole set N times and reports the spread. That number is
     the floor every later claim about agent improvement has to clear, and it is
     the one measurement here that cannot be inferred from a single run.
+
+    **`--pace` is not a politeness setting.** A free tier that allows 8,000 tokens
+    a minute against a question costing 5,000 is saturated by the second question,
+    and every one after it dies on a 429 the retry ceiling refuses to sit through.
+    Measured that way, half the set scores zero and the benchmark is reporting the
+    rate limit rather than the agent. Waiting between questions costs wall-clock
+    that is not the agent's and buys numbers that are about it.
     """
     golden = trajectory_eval.load_golden(golden_path)
     container = Container.build(settings)
@@ -3424,7 +3432,9 @@ async def run_agent_evaluate(
             if repeat > 1:
                 print(f"\n=== run {attempt} of {repeat} ===")
             rows: list[TrajectoryScore] = []
-            for question in golden:
+            for index, question in enumerate(golden):
+                if pace and index:
+                    await asyncio.sleep(pace)
                 verified = await agent.ask(question.question, max_hops=max_hops)
                 row = trajectory_eval.score(
                     verified.trajectory,
@@ -4903,6 +4913,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="run the whole set N times and report the variance floor",
     )
     agent_eval.add_argument("--max-hops", type=int, default=None)
+    agent_eval.add_argument(
+        "--pace",
+        type=float,
+        default=0.0,
+        help="seconds to wait between questions, so a per-minute token limit "
+        "does not become the thing being measured",
+    )
 
     reflect_parser = commands.add_parser(
         "reflect",
@@ -5532,6 +5549,7 @@ def main(argv: list[str] | None = None) -> int:
                     compare_path=args.compare_path,
                     repeat=max(1, args.repeat),
                     max_hops=args.max_hops,
+                    pace=max(0.0, args.pace),
                 )
             )
 

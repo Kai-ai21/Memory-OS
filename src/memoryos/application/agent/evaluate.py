@@ -146,6 +146,15 @@ class HopScore:
     # 1.0 an id from the previous result, 0.5 a phrase from it, 0.0 neither.
     dependency: float
     dependency_evidence: str = ""
+    # What the hop actually asked and what came back, in the exported JSON.
+    #
+    # **M7.3's deliverable is a person reading all eight trajectories**, and the
+    # metrics exist to direct that attention rather than replace it. A baseline
+    # file carrying five numbers per hop and none of the substance would make the
+    # reading impossible from the artefact, which is the only place it survives.
+    arguments: str = ""
+    thought: str = ""
+    result_head: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +186,9 @@ class TrajectoryScore:
     support_rate: float = 0.0
     verdict: str = ""
     refused: bool = False
+    # The answer as produced, before M7.2 marked or withheld it. Carried for the
+    # same reason the hops are: judging reasoning needs the conclusion it reached.
+    answer: str = ""
 
     @property
     def overall(self) -> float:
@@ -236,6 +248,14 @@ def score(
     )
     forbidden_used = tuple(name for name in golden.forbidden_tools if name in used)
 
+    # **A trajectory that produced no answer supports nothing.** `verify` returns
+    # a default `VerificationResult` for an empty answer — 1.0, because a refusal
+    # has no claims to support — and carrying that into a benchmark row would
+    # print `support 100%` beside a run the provider killed at hop two. Correct
+    # in its own module, wrong in this table.
+    if trajectory.answer is None:
+        support_rate = 0.0
+
     answer = (trajectory.answer or "").lower()
     found = tuple(fact for fact in golden.key_facts if _mentions(answer, fact))
     missing = tuple(fact for fact in golden.key_facts if fact not in found)
@@ -277,6 +297,7 @@ def score(
         support_rate=support_rate,
         verdict=verdict,
         refused=refused,
+        answer=trajectory.answer or "",
     )
 
 
@@ -313,6 +334,11 @@ def _hops(acted: Sequence[Step], question: str) -> list[HopScore]:
                 gain=gain,
                 dependency=dependency,
                 dependency_evidence=evidence,
+                arguments=", ".join(
+                    f"{name}={value!r}" for name, value in sorted(step.args.items())
+                ),
+                thought=_head(step.thought, 200),
+                result_head=_head(step.result.content, 400),
             )
         )
     return scored
@@ -484,6 +510,11 @@ def _classify(
     return Failure.NONE
 
 
+def _head(text: str, limit: int) -> str:
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
 def _mentions(answer: str, fact: str) -> bool:
     """Whether the answer contains a key fact.
 
@@ -622,14 +653,18 @@ def _row_dict(row: TrajectoryScore) -> dict[str, object]:
         "support_rate": round(row.support_rate, 4),
         "verdict": row.verdict,
         "refused": row.refused,
+        "answer": row.answer,
         "hops_detail": [
             {
                 "hop": hop.hop,
                 "tool": hop.tool,
+                "arguments": hop.arguments,
+                "thought": hop.thought,
                 "appropriate": hop.appropriate,
                 "gain": round(hop.gain, 4),
                 "dependency": hop.dependency,
                 "evidence": hop.dependency_evidence,
+                "result_head": hop.result_head,
             }
             for hop in row.per_hop
         ],
