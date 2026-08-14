@@ -12,9 +12,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 
-from memoryos.adapters.db import models
+from memoryos.application import memories as memories_app
 from memoryos.container import Container
 
 router = APIRouter(tags=["memories"])
@@ -103,61 +102,37 @@ class MemoryDetailOut(BaseModel):
 
 @router.get("/memories/{memory_id}", response_model=MemoryDetailOut)
 async def get_memory(memory_id: UUID, container: ContainerDep) -> MemoryDetailOut:
-    async with container.database.session_factory() as session:
-        row = (
-            await session.execute(
-                select(models.Memory, models.Source.name)
-                .join(models.Source, models.Source.id == models.Memory.source_id)
-                .where(models.Memory.id == memory_id)
-            )
-        ).one_or_none()
-        if row is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such memory")
-        memory, source_name = row
+    """One memory, its chunks and its versions.
 
-        chunks = list(
-            (
-                await session.execute(
-                    select(models.MemoryChunk)
-                    .where(models.MemoryChunk.memory_id == memory_id)
-                    # Ordinal order, always. The UI reads neighbours by ordinal to
-                    # widen a hit into its context, so an arbitrary order here
-                    # would silently show the wrong surrounding text.
-                    .order_by(models.MemoryChunk.ordinal)
-                )
-            ).scalars()
-        )
-
-        versions = list(
-            (
-                await session.execute(
-                    select(models.Memory)
-                    .where(
-                        models.Memory.source_id == memory.source_id,
-                        models.Memory.external_key == memory.external_key,
-                    )
-                    .order_by(models.Memory.version.desc())
-                )
-            ).scalars()
-        )
+    **The three queries this used to run now live in `application/memories.py`.**
+    M7.0 needed the same thing for a tool and found there was no use case to
+    call — the whole capability was in this function body, reachable only over
+    HTTP. Nothing about the response changed; the query moved down a layer and
+    this became what a route should be, which is a mapping from a domain type to
+    a wire type.
+    """
+    try:
+        detail = await memories_app.show(container.database.session_factory, memory_id)
+    except memories_app.UnknownMemory as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such memory") from exc
 
     return MemoryDetailOut(
-        id=memory.id,
-        source_id=memory.source_id,
-        source_name=source_name,
-        external_key=memory.external_key,
-        version=memory.version,
-        is_current=memory.is_current,
-        kind=memory.kind,
-        title=memory.title,
-        content=memory.content,
-        content_hash=memory.content_hash,
-        normalized_hash=memory.normalized_hash,
-        occurred_at=memory.occurred_at,
-        occurred_at_source=memory.occurred_at_source,
-        ingested_at=memory.ingested_at,
-        deleted_at=memory.deleted_at,
-        metadata=dict(memory.meta),
+        id=detail.id,
+        source_id=detail.source_id,
+        source_name=detail.source_name,
+        external_key=detail.external_key,
+        version=detail.version,
+        is_current=detail.is_current,
+        kind=detail.kind,
+        title=detail.title,
+        content=detail.content,
+        content_hash=detail.content_hash,
+        normalized_hash=detail.normalized_hash,
+        occurred_at=detail.occurred_at,
+        occurred_at_source=detail.occurred_at_source,
+        ingested_at=detail.ingested_at,
+        deleted_at=detail.deleted_at,
+        metadata=detail.metadata,
         chunks=[
             ChunkOut(
                 id=chunk.id,
@@ -170,10 +145,10 @@ async def get_memory(memory_id: UUID, container: ContainerDep) -> MemoryDetailOu
                 content_hash=chunk.content_hash,
                 embedding_model=chunk.embedding_model,
                 embedded_at=chunk.embedded_at,
-                metadata=dict(chunk.meta),
-                embedded=chunk.embedding is not None,
+                metadata=chunk.metadata,
+                embedded=chunk.embedded,
             )
-            for chunk in chunks
+            for chunk in detail.chunks
         ],
         versions=[
             VersionOut(
@@ -187,6 +162,6 @@ async def get_memory(memory_id: UUID, container: ContainerDep) -> MemoryDetailOu
                 ingested_at=version.ingested_at,
                 deleted_at=version.deleted_at,
             )
-            for version in versions
+            for version in detail.versions
         ],
     )

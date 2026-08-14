@@ -37,9 +37,9 @@ from memoryos.application.context_engine import (
 )
 from memoryos.domain.context import ContextCategory
 from memoryos.domain.events import Event, EventKind
+from memoryos.domain.fusion import contribution
 from memoryos.domain.ids import new_id
 from memoryos.domain.surfacing import (
-    SINGLE_ROUTE_BEST,
     SurfaceReason,
     threshold_for,
 )
@@ -48,19 +48,39 @@ pytestmark = pytest.mark.integration
 
 NOW = datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
 
-# Over the default bar of 1.8, and over the 2.4 one dismissal produces, and
-# under the 3.0 that two produce. Chosen to make the adaptation test able to
-# watch a fixed context stop clearing a moving bar.
-STRONG = 2.9 * SINGLE_ROUTE_BEST
-# What one route ranking something first scores, which is the most a
-# single-source item can ever reach.
-WEAK = SINGLE_ROUTE_BEST
+# The routes an item was found by, and where it ranked in each.
+#
+# **Strength is expressed as routes and ranks rather than as a score**, because
+# that is what the gate reads. It recomputes the score from the focus-specific
+# routes rather than trusting the fused number, so a fixture that set
+# `relevance` directly would be describing a field nothing consults — which is
+# exactly what these tests did until the recency split, and they went on passing
+# by arithmetic coincidence.
+Routes = tuple[tuple[ContextSource, int], ...]
+
+# Two focus-specific routes near the top: 1/61 + 1/62 = 1.98x one route's best.
+# Clears the default 1.8 bar and not the 2.4 one dismissal produces.
+STRONG: Routes = ((ContextSource.RETRIEVAL, 1), (ContextSource.TEMPORAL, 2))
+# One route in first place, which is the most a single-source item can score and
+# by construction can never clear the bar.
+WEAK: Routes = ((ContextSource.RETRIEVAL, 1),)
+# Three routes: 2.98x. Clears the default and the 2.4 after one dismissal, and
+# not the 3.0 after two — which is what lets the adaptation test watch one fixed
+# context stop clearing a moving bar.
+LADDER: Routes = (
+    (ContextSource.RETRIEVAL, 1),
+    (ContextSource.TEMPORAL, 1),
+    (ContextSource.GRAPH, 2),
+)
+# Two routes, one of which is the clock. Scores the same as `WEAK` to the gate
+# and the same as `STRONG` to anything reading the fused number.
+RECENT_ONLY: Routes = ((ContextSource.RETRIEVAL, 1), (ContextSource.RECENCY, 1))
 
 
 def context(
     focus: str,
     *,
-    score: float = STRONG,
+    routes: Routes = STRONG,
     keys: tuple[str, ...] = ("memory:a", "memory:b", "memory:c"),
 ) -> AssembledContext:
     """A context whose top item is not the focused file.
@@ -68,6 +88,10 @@ def context(
     `external_key` is set to something other than the focus on every item, so
     "the reader plausibly does not already have this open" is satisfied and the
     test is about the score. The one test that needs the opposite says so.
+
+    Only the first item carries `routes`; the rest are found by one route well
+    down it, so `max` has something to choose between and the item under test is
+    the one that decides.
     """
     return AssembledContext(
         focus=focus,
@@ -79,11 +103,14 @@ def context(
                 text="…",
                 tokens=10,
                 position=position,
-                sources={ContextSource.RETRIEVAL: position, ContextSource.TEMPORAL: 1},
-                # Only the top item's score is consulted, and it is the one that
-                # has to clear the bar; the rest descend so `max` has something
-                # to choose.
-                relevance=score / position,
+                sources=(
+                    dict(routes)
+                    if position == 1
+                    else {ContextSource.RETRIEVAL: 20 + position}
+                ),
+                # The fused score, which includes recency and is *not* what the
+                # gate compares. Kept honest anyway: it is what a panel renders.
+                relevance=sum(contribution(rank) for _, rank in routes) / position,
                 redundancy=0.0,
                 external_key=f"other/{key}.py",
             )
@@ -133,7 +160,7 @@ async def test_below_threshold_context_is_not_surfaced_and_says_why(
     not tell a gate that refused from a handler that never ran, and both look
     identical from outside: nothing happened.
     """
-    outcome = await surfacing.surface(sessions, context("a.py", score=WEAK))
+    outcome = await surfacing.surface(sessions, context("a.py", routes=WEAK))
 
     assert outcome.decision.surface is False
     assert outcome.decision.reason is SurfaceReason.BELOW_THRESHOLD
@@ -141,11 +168,48 @@ async def test_below_threshold_context_is_not_surfaced_and_says_why(
     (row,) = await rows(sessions)
     assert row.surfaced_at is None
     assert row.reason == SurfaceReason.BELOW_THRESHOLD.value
-    assert row.score == pytest.approx(WEAK)
+    assert row.score == pytest.approx(contribution(1))
     assert row.threshold == pytest.approx(threshold_for(dismissed=0, acted_on=0))
     # And the near miss is legible without re-running anything.
     assert row.score < row.threshold
     assert row.top_title is not None
+
+
+async def test_recency_cannot_manufacture_the_agreement_the_gate_requires(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    """**The defect M6.3 shipped and its own retrospective measured.**
+
+    The bar is set so that no item found by a single route can clear it, which is
+    a structural guarantee that two independent rankings agreed. One of the four
+    rankings was global recency — the same list whatever you ask — so an item
+    that retrieval found and that happened to be edited this week counted as two
+    routes agreeing. On a repository somebody works in daily that is nearly every
+    file, which is why fourteen consecutive focuses scored within ±10% of the
+    bar and why six of thirteen interruptions were worth having.
+
+    Retrieval plus recency is now worth exactly what retrieval alone is worth,
+    and the item still appears in the context. Recency ranks; it does not vote.
+    """
+    with_clock = await surfacing.surface(
+        sessions, context("a.py", routes=RECENT_ONLY), now=NOW
+    )
+
+    assert with_clock.decision.surface is False
+    assert with_clock.decision.reason is SurfaceReason.BELOW_THRESHOLD
+    assert with_clock.decision.score == pytest.approx(contribution(1))
+    assert with_clock.decision.top is not None
+    # One route, not two, even though two rankings proposed it.
+    assert with_clock.decision.top.routes == 1
+
+    # The same two ranks from two rankings that *are* about the focus do clear
+    # it, so what changed is which routes count rather than how high the bar is.
+    focus_specific = await surfacing.surface(
+        sessions,
+        context("b.py", routes=((ContextSource.RETRIEVAL, 1), (ContextSource.TEMPORAL, 1))),
+        now=NOW,
+    )
+    assert focus_specific.decision.surface is True
 
 
 async def test_a_context_of_only_the_focused_file_is_refused(
@@ -167,7 +231,7 @@ async def test_a_context_of_only_the_focused_file_is_refused(
             tokens=10,
             position=1,
             sources={ContextSource.RETRIEVAL: 1, ContextSource.TEMPORAL: 1},
-            relevance=STRONG * 10,
+            relevance=1.0,
             redundancy=0.0,
             external_key="src/app/search.py",
         )
@@ -240,17 +304,21 @@ async def test_dismissed_context_is_suppressed_for_far_longer(
     passed: five hours later an undismissed context would be offered again, and
     a dismissed one must not be. Thirty days later it is a new question.
     """
-    first = await surfacing.surface(sessions, context("a.py"), now=NOW)
+    # Three routes, so the context still clears the bar *after* the dismissal
+    # raises it. `decide` reports BELOW_THRESHOLD before suppression on purpose —
+    # a context that would not have been shown anyway was not suppressed — so a
+    # test about suppression has to keep the score above the moving bar.
+    first = await surfacing.surface(sessions, context("a.py", routes=LADDER), now=NOW)
     assert await surfacing.dismiss(sessions, first.id) is True
 
     past_the_repeat_window = await surfacing.surface(
-        sessions, context("a.py"), now=NOW + timedelta(hours=5)
+        sessions, context("a.py", routes=LADDER), now=NOW + timedelta(hours=5)
     )
     assert past_the_repeat_window.decision.surface is False
     assert past_the_repeat_window.decision.reason is SurfaceReason.DISMISSED
 
     still_quiet = await surfacing.surface(
-        sessions, context("a.py"), now=NOW + timedelta(days=20)
+        sessions, context("a.py", routes=LADDER), now=NOW + timedelta(days=20)
     )
     assert still_quiet.decision.reason is SurfaceReason.DISMISSED
 
@@ -270,7 +338,7 @@ async def test_a_verdict_cannot_be_overwritten(
 async def test_feedback_on_something_never_shown_is_refused(
     sessions: async_sessionmaker[AsyncSession],
 ) -> None:
-    refused = await surfacing.surface(sessions, context("a.py", score=WEAK))
+    refused = await surfacing.surface(sessions, context("a.py", routes=WEAK))
 
     assert await surfacing.dismiss(sessions, refused.id) is False
     assert await surfacing.dismiss(sessions, UUID(int=0)) is False
@@ -302,7 +370,7 @@ async def test_repeated_dismissals_raise_that_focuss_threshold(
         keys = (f"memory:{round_number}a", f"memory:{round_number}b")
         shown = await surfacing.surface(
             sessions,
-            context("noisy.py", keys=keys),
+            context("noisy.py", routes=LADDER, keys=keys),
             now=NOW + timedelta(days=round_number),
         )
         assert shown.decision.surface is True, f"round {round_number} should surface"
@@ -312,18 +380,20 @@ async def test_repeated_dismissals_raise_that_focuss_threshold(
 
     third = await surfacing.surface(
         sessions,
-        context("noisy.py", keys=("memory:xa", "memory:xb")),
+        context("noisy.py", routes=LADDER, keys=("memory:xa", "memory:xb")),
         now=NOW + timedelta(days=9),
     )
     assert third.decision.surface is False
     assert third.decision.reason is SurfaceReason.BELOW_THRESHOLD
     # Refused by the bar having moved, not by the score having changed.
-    assert third.decision.score == pytest.approx(STRONG)
+    assert third.decision.score == pytest.approx(
+        sum(contribution(rank) for _, rank in LADDER)
+    )
 
     # And the rest of the system is untouched.
     assert await surfacing.threshold_for_focus(sessions, "quiet.py") == start
     elsewhere = await surfacing.surface(
-        sessions, context("quiet.py"), now=NOW + timedelta(days=9)
+        sessions, context("quiet.py", routes=LADDER), now=NOW + timedelta(days=9)
     )
     assert elsewhere.decision.surface is True
 
@@ -452,7 +522,7 @@ async def test_suppression_is_counted_apart_from_refusal(
     """Otherwise "the windows are working" and "the bar is high" are one number."""
     await surfacing.surface(sessions, context("a.py"), now=NOW)
     await surfacing.surface(sessions, context("a.py"), now=NOW + timedelta(minutes=1))
-    await surfacing.surface(sessions, context("b.py", score=WEAK), now=NOW)
+    await surfacing.surface(sessions, context("b.py", routes=WEAK), now=NOW)
 
     report = await surfacing.stats(sessions)
 

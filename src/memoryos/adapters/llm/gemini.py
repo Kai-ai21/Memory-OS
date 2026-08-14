@@ -24,18 +24,27 @@ misconfigured deployment fails at startup instead of on a user's question.
 """
 
 import asyncio
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from memoryos.adapters.llm.errors import MissingApiKey
-from memoryos.application.ports import LanguageModel
+from memoryos.application.ports import (
+    LanguageModel,
+    ModelTurn,
+    ToolCall,
+    ToolExchange,
+)
 from memoryos.domain.jobs import PermanentError, TransientError
 
 __all__ = ["DEFAULT_MODEL", "GeminiLanguageModel", "MissingApiKey"]
 
 if TYPE_CHECKING:  # pragma: no cover
     from google import genai
+    from google.genai.types import GenerateContentConfigDict
+
+    from memoryos.application.agent.tools import ToolSpec
 
 logger = structlog.get_logger(__name__)
 
@@ -43,7 +52,16 @@ logger = structlog.get_logger(__name__)
 # answer. Flash rather than Pro deliberately: this task is extraction and
 # summary over supplied passages, not reasoning, and the guardrails do the work
 # a larger model would otherwise be asked to do on trust.
-DEFAULT_MODEL = "gemini-2.0-flash"
+#
+# **`gemini-2.0-flash` was retired and this was a dead default.** M7.0 went to
+# check whether this provider supports tool calling and got a 404 back saying
+# the model "is no longer available" — which nothing noticed, because the
+# configured provider is Groq and no test calls Gemini. Retrieval-only
+# deployments never touch it either. Bumped to the current Flash, and the
+# lesson is the one M2.6a already wrote down about Groq: a model id copied from
+# documentation is a plausible-looking string, and the only thing that tells you
+# it has expired is a real call.
+DEFAULT_MODEL = "gemini-2.5-flash"
 
 # Substrings that mark a provider error as worth retrying. Matched on the
 # message because the SDK raises a single exception type for most HTTP failures
@@ -131,6 +149,136 @@ class GeminiLanguageModel(LanguageModel):
         )
         return str(text)
 
+    async def converse(
+        self,
+        system: str,
+        user: str,
+        *,
+        tools: Sequence["ToolSpec"] = (),
+        exchanges: Sequence[ToolExchange] = (),
+        max_tokens: int = 1024,
+    ) -> ModelTurn:
+        """One turn, with tools offered and any completed calls replayed.
+
+        **Gemini rejects `additionalProperties`, and that is the whole schema
+        difference.** Measured against the live API rather than read from a
+        specification: the pydantic-generated schema is accepted with `title`,
+        `default`, `minimum` and `maximum` intact, and refused outright with a
+        400 — `Unknown name "additional_properties"` — while that one key is
+        present. So `_gemini_schema` strips exactly it, and nothing else. A
+        broader strip would be guessing, and would quietly drop the bounds and
+        descriptions the model routes on.
+
+        The replay shape differs too. Groq pairs a result to its call by
+        `tool_call_id`; Gemini has no such id and pairs by *function name*,
+        carried in a `functionResponse` part. Both facts live here rather than
+        in the loop, which is what M2.6 put a Protocol in front of these two for.
+        """
+        client = self._load()
+        contents: list[dict[str, Any]] = [
+            {"role": "user", "parts": [{"text": user}]}
+        ]
+        for exchange in exchanges:
+            contents.append(
+                {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "function_call": {
+                                "name": exchange.call.name,
+                                "args": exchange.call.arguments,
+                            }
+                        }
+                    ],
+                }
+            )
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "function_response": {
+                                "name": exchange.call.name,
+                                "response": {"result": exchange.result},
+                            }
+                        }
+                    ],
+                }
+            )
+
+        # A `GenerateContentConfigDict` rather than a bare dict, because the
+        # SDK's own type is what says whether a key is spelled right — and this
+        # config carries the tool declarations, which is the part that fails
+        # loudly at the API rather than quietly at the call site.
+        config: GenerateContentConfigDict = {
+            "system_instruction": system,
+            "max_output_tokens": max_tokens,
+            "temperature": 0.0,
+        }
+        if tools:
+            config["tools"] = [
+                {
+                    "function_declarations": [
+                        {
+                            "name": spec.name,
+                            "description": spec.description,
+                            "parameters": _gemini_schema(spec.parameters),
+                        }
+                        for spec in tools
+                    ]
+                }
+            ]
+
+        try:
+            response = await asyncio.wait_for(
+                client.aio.models.generate_content(
+                    model=self._model_name, contents=contents, config=config
+                ),
+                timeout=self._timeout,
+            )
+        except TimeoutError as exc:
+            raise TransientError(
+                f"{self._model_name} did not respond within {self._timeout}s"
+            ) from exc
+        except Exception as exc:
+            raise _classify(exc) from exc
+
+        calls: list[ToolCall] = []
+        texts: list[str] = []
+        for candidate in response.candidates or []:
+            for part in (candidate.content.parts if candidate.content else None) or []:
+                if part.function_call is not None and part.function_call.name:
+                    calls.append(
+                        ToolCall(
+                            # Gemini mints no call id. The name is what it pairs
+                            # a response by, so the name is what is carried —
+                            # and `ToolExchange` reads `call.id` nowhere in this
+                            # adapter for exactly that reason.
+                            id=part.function_call.id or part.function_call.name,
+                            name=part.function_call.name,
+                            arguments=dict(part.function_call.args or {}),
+                        )
+                    )
+                elif part.text:
+                    texts.append(part.text)
+
+        text = "".join(texts).strip()
+        if not text and not calls:
+            reason = _finish_reason(response)
+            raise PermanentError(
+                f"{self._model_name} returned neither text nor a tool call"
+                + (f" ({reason})" if reason else "")
+            )
+
+        logger.info(
+            "llm.turn",
+            model=self._model_name,
+            tools_offered=len(tools),
+            tool_calls=len(calls),
+            answer_chars=len(text),
+        )
+        return ModelTurn(text=text, tool_calls=tuple(calls))
+
     def _load(self) -> "genai.Client":
         if self._client is None:
             from google import genai
@@ -164,3 +312,37 @@ def _finish_reason(response: Any) -> str | None:
         if reason is not None:
             return str(reason)
     return None
+
+
+# The one JSON Schema key Gemini refuses, measured rather than assumed.
+#
+# `additionalProperties: false` is what a pydantic model configured
+# `extra="forbid"` emits, and it is the key that makes an argument the tool did
+# not declare an error rather than something silently dropped. Gemini answers a
+# 400 — `Unknown name "additional_properties"` — for its presence alone, while
+# accepting `title`, `default`, `minimum` and `maximum` without complaint. Groq
+# accepts all of them.
+#
+# So the strict schema stays strict everywhere it is validated, and one key is
+# removed on the way to one provider. The alternative — weakening the schema at
+# the source — would trade a real guarantee on the way in for a provider's
+# parser on the way out.
+_UNSUPPORTED_SCHEMA_KEYS = frozenset({"additionalProperties"})
+
+
+def _gemini_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """The spec's JSON Schema with the keys this provider refuses removed."""
+    cleaned = {
+        key: value for key, value in schema.items() if key not in _UNSUPPORTED_SCHEMA_KEYS
+    }
+    properties = cleaned.get("properties")
+    if isinstance(properties, dict):
+        cleaned["properties"] = {
+            name: (
+                {k: v for k, v in spec.items() if k not in _UNSUPPORTED_SCHEMA_KEYS}
+                if isinstance(spec, dict)
+                else spec
+            )
+            for name, spec in properties.items()
+        }
+    return cleaned

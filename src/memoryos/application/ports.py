@@ -12,7 +12,7 @@ whose only job is to not be named SQLAlchemy.
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, TypeGuard
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -29,6 +29,13 @@ from memoryos.domain.values import (
     SourceKind,
     TimeProvenance,
 )
+
+if TYPE_CHECKING:  # pragma: no cover
+    # Type-only, and deliberately so. `ToolSpec` lives with the tools because it
+    # is theirs; importing it at runtime here would make this module — which
+    # every adapter imports — depend on the agent package, and a deployment that
+    # only ingests should not load it.
+    from memoryos.application.agent.tools import ToolSpec
 
 
 class SourceRepository(Protocol):
@@ -575,6 +582,46 @@ class VectorStore(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class ToolCall:
+    """A model asking for one tool to be run.
+
+    `id` is the provider's own handle for this call and is carried unchanged.
+    Groq requires it back on the tool result so the two can be paired; Gemini
+    pairs by function name instead and ignores it. Carrying the provider's
+    string rather than minting one is what lets the adapter satisfy either.
+    """
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ToolExchange:
+    """A call that has been run, and what it returned, for the next turn."""
+
+    call: ToolCall
+    result: str
+
+
+@dataclass(frozen=True, slots=True)
+class ModelTurn:
+    """What one turn produced: prose, tool calls, or both.
+
+    Both is legal and providers do it — a model may narrate before calling —
+    which is why this is not a union. A caller that treated text and calls as
+    exclusive would silently drop half of a turn that had both.
+    """
+
+    text: str = ""
+    tool_calls: tuple[ToolCall, ...] = ()
+
+    @property
+    def wants_tools(self) -> bool:
+        return bool(self.tool_calls)
+
+
 class LanguageModel(Protocol):
     """Generates prose. The only component here that can invent something.
 
@@ -610,6 +657,74 @@ class LanguageModel(Protocol):
         and an empty string presented as an answer is worse than a failure.
         """
         ...
+
+
+class ToolCallingModel(Protocol):
+    """A model that can be given tools and asked to choose one.
+
+    **A separate protocol rather than two more methods on `LanguageModel`**, and
+    the reason is not tidiness. Tool calling is a capability a provider either
+    has or does not — Step 5 of M7.0 exists because that has to be checked
+    rather than assumed — so it belongs in a type a caller can require. Widening
+    the base port instead would have made every existing implementation and every
+    test fake abstract overnight, which is a compiler telling you the same thing.
+
+    It is also the one place this system's providers genuinely differ. `complete`
+    is two strings in and one string out on both. Here, Groq wants the tool
+    result as a message with a `tool_call_id` and Gemini wants a function-response
+    part paired by name; Groq accepts a strict JSON Schema and Gemini rejects
+    `additionalProperties` outright. All of that lives in the adapters, which is
+    what M2.6 put a Protocol here for.
+
+    Structural, so an adapter satisfies it by having the method. Nothing declares
+    it as a base class, and `supports_tools` is how a container asks whether the
+    configured provider does.
+    """
+
+    @property
+    def model_id(self) -> str: ...
+
+    async def converse(
+        self,
+        system: str,
+        user: str,
+        *,
+        tools: "Sequence[ToolSpec]" = (),
+        exchanges: "Sequence[ToolExchange]" = (),
+        max_tokens: int = 1024,
+    ) -> ModelTurn:
+        """One turn that may call a tool instead of answering.
+
+        **Not a replacement for `complete`.** That one promises prose or an
+        exception, and M2.6's grounding checks are written against the promise;
+        a turn that legitimately returns no text — because it called a tool —
+        cannot keep it.
+
+        `exchanges` is what makes a second turn possible: a completed call and
+        what it returned, replayed so the model can answer from the result. A
+        sequence rather than a single exchange because M7.1 needs several, and a
+        signature that must change for the next milestone is one that gets
+        changed under pressure.
+
+        Same failure taxonomy as `complete`. A turn with neither text nor a tool
+        call is a `PermanentError`: there is nothing to retry towards.
+        """
+        ...
+
+
+def supports_tools(model: object) -> TypeGuard[ToolCallingModel]:
+    """Whether this provider can be given tools.
+
+    A function rather than a flag on the model, so it is answered by what the
+    object *has* rather than by what it claims — a provider that grew tool
+    support becomes usable here by implementing the method, with nothing to
+    remember to set.
+
+    A `TypeGuard` rather than a `bool`, so the check that makes it safe is the
+    same check the type checker reads. Returning a plain bool would leave every
+    caller casting afterwards, and a cast is an assertion nobody verifies.
+    """
+    return callable(getattr(model, "converse", None))
 
 
 class Reranker(Protocol):

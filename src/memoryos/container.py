@@ -29,6 +29,9 @@ from memoryos.adapters.llm.groq import GroqLanguageModel
 from memoryos.adapters.parsers.registry import ParserRegistry
 from memoryos.adapters.parsers.registry import build_default_registry as build_parser_registry
 from memoryos.adapters.reranking.cross_encoder import CrossEncoderReranker
+from memoryos.application.agent.library import build_registry as build_tools
+from memoryos.application.agent.loop import SingleCallAgent
+from memoryos.application.agent.tools import ToolRegistry
 from memoryos.application.answering import AnswerQuestion
 from memoryos.application.context_engine import (
     AssembleContext,
@@ -48,7 +51,12 @@ from memoryos.application.graph_sync import SyncGraph
 from memoryos.application.jobs.handlers import build_default_registry
 from memoryos.application.jobs.registry import HandlerRegistry
 from memoryos.application.normalize import NormalizeMemory
-from memoryos.application.ports import Chunker, Embedder, LanguageModel
+from memoryos.application.ports import (
+    Chunker,
+    Embedder,
+    LanguageModel,
+    supports_tools,
+)
 from memoryos.application.relationships import ExtractRelationships
 from memoryos.application.replay import ReplayCorpus
 from memoryos.application.resolution import DEFAULT_THRESHOLD, ResolveEntities
@@ -315,6 +323,43 @@ class Container:
     def language_model(self) -> LanguageModel:
         return build_language_model(self.settings)
 
+    def tools(self) -> ToolRegistry:
+        """The six tools, registered in the order the model reads them.
+
+        Built here rather than in the agent, so the tools are wired from the same
+        object graph everything else is: `search_memories` is the same
+        `SearchMemories` the CLI and the API call, with the same weights and the
+        same reranker. A tool that constructed its own would be a second
+        configuration nobody knew existed until the two disagreed.
+        """
+        registry = ToolRegistry()
+        for tool in build_tools(
+            sessions=self.database.session_factory,
+            search=self.search(),
+            expand=self.graph_expansion(),
+            weights=self.weights(),
+        ):
+            registry.register(tool)
+        return registry
+
+    def agent(self) -> SingleCallAgent:
+        """M7.0's loop, over a provider that can actually call tools.
+
+        The check is here rather than at the first failed call, because the
+        failure it prevents is unreadable: a provider without tool support
+        answers the question from its training data, fluently, and nothing in the
+        response says a tool was never offered. Refusing at construction turns
+        that into one sentence naming the setting to change.
+        """
+        model = self.language_model()
+        if supports_tools(model):
+            return SingleCallAgent(model, self.tools())
+        raise ToolsUnsupported(
+            f"{model.model_id} cannot call tools, so the agent has nothing to "
+            "drive. Set MEMOS_LLM_PROVIDER to a provider whose adapter "
+            "implements `converse` — groq and gemini both do."
+        )
+
     def weights(self) -> FusionWeights:
         """Fusion weights from settings, so `MEMOS_WEIGHT_*` reaches every caller."""
         return FusionWeights(
@@ -403,6 +448,15 @@ def build_language_model(settings: Settings) -> LanguageModel:
             settings.gemini_api_key, model_name=settings.llm_model
         )
     return GroqLanguageModel(settings.groq_api_key, model_name=settings.groq_model)
+
+
+class ToolsUnsupported(RuntimeError):
+    """The configured provider cannot be given tools.
+
+    Its own type rather than a `ValueError`, so a caller can tell "this
+    deployment has no agent" from "this question was malformed" — the first is a
+    setting and the second is a bug.
+    """
 
 
 class WindowMisalignment(RuntimeError):

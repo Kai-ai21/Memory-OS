@@ -100,12 +100,50 @@ class ContextSource(StrEnum):
     Carried per item rather than summed, because `--explain` has to answer
     "which source proposed this" and the answer is frequently more than one —
     that being the point of fusing them.
+
+    **`TEMPORAL` and `RECENCY` were one source until M6.3 measured what that
+    cost.** Phase 4 contributes two different things — the focused item found by
+    its name, and whatever changed lately — and M6.1 returned them as one
+    concatenated ranking called `temporal`. They are not one signal. The first is
+    *about the focus*; the second is about the calendar and would return the same
+    list whatever you asked. Fusing them under one name made every file edited
+    this week appear in every context at a high temporal rank, and M6.3's gate —
+    which requires two independent routes to agree before it interrupts anybody —
+    read "retrieval mentioned it and it is recent" as agreement. On a repository
+    somebody is working in daily that is nearly everything, which is why the
+    scores of fourteen consecutive focuses landed within ±10% of each other.
+
+    Splitting them changes no item in any context. It changes what the fused
+    score *means*, and it lets a caller ask about the routes that are actually
+    about the focus. See `FOCUS_SPECIFIC` below.
     """
 
     RETRIEVAL = auto()
     GRAPH = auto()
     TEMPORAL = auto()
+    RECENCY = auto()
     DECISIONS = auto()
+
+
+# The sources whose ranking is a claim about *this focus*.
+#
+# `RECENCY` is deliberately outside it. "What changed lately" is a real and
+# useful contribution to a context — a person looking at a file usually is in
+# the middle of the week that produced it — but it is not evidence that this
+# item is related to what they are looking at, because it would have said the
+# same thing about any other focus at the same moment.
+#
+# Declared here, beside the enum, rather than in the one module that reads it.
+# The next source added has to be placed on one side of the line, and a set
+# literal in a caller is a decision nobody sees when they add a sixth.
+FOCUS_SPECIFIC: frozenset[ContextSource] = frozenset(
+    {
+        ContextSource.RETRIEVAL,
+        ContextSource.GRAPH,
+        ContextSource.TEMPORAL,
+        ContextSource.DECISIONS,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +300,22 @@ async def corpus_fingerprint(sessions: async_sessionmaker[AsyncSession]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
+# What shape a cached payload is in.
+#
+# **The fingerprint covers the corpus and this covers the code.** A cached
+# context is invalidated when the material it was built from changes; nothing
+# invalidated it when the *meaning of its contents* changed, and M6.3's split of
+# `temporal` into two sources is exactly that — a payload written before it
+# labels a recency hit `temporal`, and the gate that reads those labels would
+# count it as evidence about the focus. Rows written by two different builds
+# cannot be told apart otherwise, because a hash of the focus and the corpus is
+# identical across a deploy.
+#
+# Bumped whenever the payload's fields or their meaning change. Cheap: every key
+# changes, and the cost is one re-assembly per focus.
+CONTEXT_SCHEMA_VERSION = 2
+
+
 def cache_key_for(request: ContextRequest, fingerprint: str) -> str:
     """The identity of one assembled context.
 
@@ -271,8 +325,9 @@ def cache_key_for(request: ContextRequest, fingerprint: str) -> str:
     asked second.
     """
     raw = (
-        f"{request.focus}\x00{request.token_budget}\x00{request.max_items}"
-        f"\x00{request.lambda_}\x00{request.category_share}\x00{fingerprint}"
+        f"v{CONTEXT_SCHEMA_VERSION}\x00{request.focus}\x00{request.token_budget}"
+        f"\x00{request.max_items}\x00{request.lambda_}"
+        f"\x00{request.category_share}\x00{fingerprint}"
     )
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -431,19 +486,26 @@ class AssembleContext:
             SourceReport(ContextSource.GRAPH, len(graph_ids), _ms(graph_started))
         )
 
-        # (3) Phase 4: other versions of the focused item first, then recent
-        # activity. Versions before recency because a version of the thing you
-        # are looking at is about the focus, while recent activity is only
-        # *plausibly* about it.
+        # (3) Phase 4, as two rankings rather than one. The focused item by name
+        # is about the focus; what changed lately is not, and fusing them under
+        # one name let recency manufacture the agreement M6.3's gate depends on.
+        # See `ContextSource`.
         temporal_started = time.monotonic()
-        temporal_ids = await self._temporal(request.focus, limit=self._per_source)
-        rankings[ContextSource.TEMPORAL] = [f"memory:{item}" for item in temporal_ids]
-        for memory_id in temporal_ids:
+        named_ids = await self._by_name(request.focus, limit=self._per_source)
+        rankings[ContextSource.TEMPORAL] = [f"memory:{item}" for item in named_ids]
+        for memory_id in named_ids:
             memory_ids.setdefault(memory_id, None)
         reports.append(
-            SourceReport(
-                ContextSource.TEMPORAL, len(temporal_ids), _ms(temporal_started)
-            )
+            SourceReport(ContextSource.TEMPORAL, len(named_ids), _ms(temporal_started))
+        )
+
+        recency_started = time.monotonic()
+        recent_ids = await self._recent(limit=self._per_source)
+        rankings[ContextSource.RECENCY] = [f"memory:{item}" for item in recent_ids]
+        for memory_id in recent_ids:
+            memory_ids.setdefault(memory_id, None)
+        reports.append(
+            SourceReport(ContextSource.RECENCY, len(recent_ids), _ms(recency_started))
         )
 
         # (4) Phase 5: decisions whose evidence cites anything the other sources
@@ -564,13 +626,17 @@ class AssembleContext:
     # Sources
     # ----------------------------------------------------------------------
 
-    async def _temporal(self, focus: str, *, limit: int) -> list[UUID]:
-        """The focused item itself, then recent activity.
+    async def _by_name(self, focus: str, *, limit: int) -> list[UUID]:
+        """The focused item itself, found by its key rather than its content.
 
-        The by-name half only fires when the focus looks like something in the
-        corpus — an `external_key` suffix match. A focus of "chunking strategy"
-        names no file, so this contributes recency alone, which is the honest
-        outcome rather than a miss.
+        Half of what M6.1 called the temporal source, and now its own ranking.
+        The other half is `_recent`, and the reason they are separate is in
+        `ContextSource`: one is about the focus and one is about the clock.
+
+        Fires only when the focus looks like something in the corpus — an
+        `external_key` suffix match. A focus of "chunking strategy" names no
+        file, so this contributes nothing, which is the honest outcome rather
+        than a miss.
 
         **Current versions only, and superseded ones are excluded rather than
         ranked below.** The milestone asks for "versions of the focused item" and
@@ -592,28 +658,44 @@ class AssembleContext:
         rank for the focused file is not a retrieval failure, it is a path being
         a poor embedding.
         """
+        if not focus:
+            return []
         async with self._sessions() as session:
-            versions: list[UUID] = []
-            if focus:
-                versions = list(
-                    (
-                        await session.execute(
-                            sql_select(models.Memory.id)
-                            .where(
-                                models.Memory.external_key.like(
-                                    f"%{_like_literal(focus)}", escape="\\"
-                                ),
-                                models.Memory.is_current.is_(True),
-                                models.Memory.deleted_at.is_(None),
-                            )
-                            .limit(limit)
+            return list(
+                (
+                    await session.execute(
+                        sql_select(models.Memory.id)
+                        .where(
+                            models.Memory.external_key.like(
+                                f"%{_like_literal(focus)}", escape="\\"
+                            ),
+                            models.Memory.is_current.is_(True),
+                            models.Memory.deleted_at.is_(None),
                         )
+                        .limit(limit)
                     )
-                    .scalars()
-                    .all()
                 )
+                .scalars()
+                .all()
+            )
 
-            recent = list(
+    async def _recent(self, *, limit: int) -> list[UUID]:
+        """What changed lately, which is not a claim about the focus at all.
+
+        **It takes no focus argument, and that is the whole point of the split.**
+        This ranking is identical for every question asked at the same moment. It
+        earns its place in a context — somebody looking at a file is usually in
+        the middle of the week that produced it, and M6.1 measured it finding
+        things retrieval missed — but it is not evidence that any of it is
+        *related* to the focus, and for two milestones it was fused under a name
+        that implied it was.
+
+        Superseded versions stay excluded here for the reason `_by_name` gives:
+        M1.4 deletes their chunks, so MMR cannot measure an old version's
+        redundancy and systematically promotes it over the live text.
+        """
+        async with self._sessions() as session:
+            return list(
                 (
                     await session.execute(
                         sql_select(models.Memory.id)
@@ -628,12 +710,6 @@ class AssembleContext:
                 .scalars()
                 .all()
             )
-
-        ordered: list[UUID] = []
-        for memory_id in [*versions, *recent]:
-            if memory_id not in ordered:
-                ordered.append(memory_id)
-        return ordered[:limit]
 
     async def _decisions(
         self, ranked: dict[UUID, int], *, limit: int

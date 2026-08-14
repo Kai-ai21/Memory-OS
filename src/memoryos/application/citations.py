@@ -14,6 +14,7 @@ memories. Comparing them is the mistake this module exists to not make.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 import structlog
@@ -222,3 +223,169 @@ async def _memory_content(
     )
     async with session_factory() as session:
         return {row[0]: (row[1], row[2]) for row in await session.execute(stmt)}
+
+
+# --------------------------------------------------------------------------
+# Citations for things that are not search hits
+# --------------------------------------------------------------------------
+#
+# **Everything above builds a citation from a `MemoryHit`, because until M7.0
+# only search produced one.** Phase 7 makes every phase callable, and four of
+# the six tools return something retrieval never touched: a graph neighbourhood,
+# a range of dates, a silence, a decision. Each still has to be attributable —
+# a tool result a model can read but not attribute is how the no-fabrication
+# guardrail dies quietly — so the two functions below build the same `Citation`
+# from a chunk or from a memory id.
+#
+# They do not widen the citation type or invent offsets for things that have
+# none. A citation names a span of a version of a memory and `verify-citations`
+# asserts that span still resolves; anything that cannot honestly produce one
+# gets no citation and says so in its content instead.
+
+
+@dataclass(frozen=True, slots=True)
+class _Parent:
+    source_name: str
+    external_key: str
+    version: int
+    occurred_at: datetime | None
+    content: str | None
+
+
+async def _parents(
+    session_factory: async_sessionmaker[AsyncSession], memory_ids: Sequence[UUID]
+) -> dict[UUID, _Parent]:
+    """Everything a citation needs about the memory a chunk belongs to."""
+    if not memory_ids:
+        return {}
+    stmt = (
+        select(
+            models.Memory.id,
+            models.Source.name,
+            models.Memory.external_key,
+            models.Memory.version,
+            models.Memory.occurred_at,
+            models.Memory.content,
+        )
+        .join(models.Source, models.Source.id == models.Memory.source_id)
+        .where(models.Memory.id.in_(list(memory_ids)))
+    )
+    async with session_factory() as session:
+        rows = await session.execute(stmt)
+    return {
+        row[0]: _Parent(
+            source_name=row[1],
+            external_key=row[2],
+            version=row[3],
+            occurred_at=row[4],
+            content=row[5],
+        )
+        for row in rows
+    }
+
+
+async def citations_for_chunks(
+    session_factory: async_sessionmaker[AsyncSession],
+    chunks: Sequence[ScoredChunk],
+    *,
+    context_chars: int = DEFAULT_CONTEXT_CHARS,
+) -> list[Citation]:
+    """Citations for chunks that arrived by some route other than search.
+
+    The graph expansion returns `ScoredChunk`s and no hit, and a memory read by
+    id has chunk rows and no hit either. Both have the six fields a citation is
+    made of; what they lack is the parent's name and version, which is one
+    query.
+    """
+    parents = await _parents(session_factory, [chunk.memory_id for chunk in chunks])
+    citations: list[Citation] = []
+    for chunk in chunks:
+        parent = parents.get(chunk.memory_id)
+        if parent is None:
+            # The memory was deleted between the ranking and this query. Skipped
+            # rather than cited with a placeholder: an unresolvable citation is
+            # worse than a missing one, because it looks checkable.
+            continue
+        excerpt = chunk.text[chunk.prefix_chars :]
+        definition = chunk.metadata.get("definition")
+        citations.append(
+            Citation(
+                memory_id=chunk.memory_id,
+                source_name=parent.source_name,
+                external_key=parent.external_key,
+                chunk_ordinal=chunk.ordinal,
+                char_start=chunk.char_start,
+                char_end=chunk.char_end,
+                prefix_chars=chunk.prefix_chars,
+                excerpt=excerpt,
+                definition=definition if isinstance(definition, str) else None,
+                occurred_at=parent.occurred_at,
+                version=parent.version,
+                context=(
+                    None
+                    if parent.content is None
+                    else build_excerpt(
+                        parent.content,
+                        chunk.char_start,
+                        chunk.char_end,
+                        context_chars=context_chars,
+                    )
+                ),
+            )
+        )
+    return citations
+
+
+async def citations_for_memories(
+    session_factory: async_sessionmaker[AsyncSession],
+    memory_ids: Sequence[UUID],
+    *,
+    context_chars: int = DEFAULT_CONTEXT_CHARS,
+) -> list[Citation]:
+    """One citation per memory, pointing at its opening span.
+
+    **For results that are about memories rather than about passages** — a
+    timeline bucket, a gap, the evidence under a decision. There is no matched
+    span in any of those, so the first chunk is cited: it is a real span of a
+    real version, it resolves, and it is where a reader opening the file would
+    land. Citing the whole memory is not an option the type allows, and
+    inventing `char_start=0, char_end=len(content)` would be a citation that
+    passes `verify-citations` while pointing at everything.
+
+    A memory with no chunks — not yet normalized — yields no citation. That is
+    the honest answer rather than a citation to text that has not been split.
+    """
+    ordered = list(dict.fromkeys(memory_ids))
+    if not ordered:
+        return []
+    stmt = (
+        select(models.MemoryChunk)
+        .where(
+            models.MemoryChunk.memory_id.in_(ordered),
+            models.MemoryChunk.ordinal == 0,
+        )
+    )
+    async with session_factory() as session:
+        rows = list((await session.execute(stmt)).scalars())
+
+    by_memory = {row.memory_id: row for row in rows}
+    chunks = [
+        ScoredChunk(
+            chunk_id=row.id,
+            memory_id=row.memory_id,
+            ordinal=row.ordinal,
+            text=row.content,
+            # A citation carries no score and this one has no ranking behind it.
+            # Zero rather than a number that would imply one.
+            score=0.0,
+            char_start=row.char_start,
+            char_end=row.char_end,
+            prefix_chars=row.prefix_chars,
+            metadata=dict(row.meta),
+        )
+        for memory_id in ordered
+        if (row := by_memory.get(memory_id)) is not None
+    ]
+    return await citations_for_chunks(
+        session_factory, chunks, context_chars=context_chars
+    )

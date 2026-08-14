@@ -39,8 +39,12 @@ restraint. See [Events](#events), which measures whether a Postgres queue is fas
 enough to push through rather than guessing, [Context](#context), which is a
 budgeting problem wearing a retrieval problem's clothes, [Clients](#clients),
 [Surfacing](#surfacing) — whose headline number is a **54% dismissal rate**, the
-wrong side of the line it set for itself — and the
-[Phase 6 retrospective](#phase-6-retrospective).
+wrong side of the line it set for itself, and whose cause M7.0 then found and
+fixed — and the [Phase 6 retrospective](#phase-6-retrospective).
+**Phase 7 begun**: M7.0 (agent tool scaffolding) puts every phase behind a JSON
+schema a model can call, one tool at a time. It is the clearest test of whether
+the layering earned its cost, and the answer is two extractions and thirty lines
+of citation plumbing. See [Agent tools](#agent-tools).
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -3987,6 +3991,43 @@ frequently means "retrieval mentioned it and it is recent" — and on a reposito
 somebody is actively working in, that is nearly everything. The structural
 threshold is real; the independence it assumes is not.
 
+### The correction, and what it says about all of the above
+
+**M7.0 split the temporal source in two and re-ran the same seven focuses. Every
+one of them now scores exactly `0.01639` — one route — and the gate is silent on
+all seven.**
+
+| focus | fused, as M6.3 scored it | focus-specific | routes |
+| --- | --- | --- | --- |
+| `cli.py` | 0.03252 | 0.01639 | 1 |
+| `application/events.py` | 0.03226 | 0.01639 | 1 |
+| `api/routes/surfacing.py` | 0.03178 | 0.01639 | 1 |
+| `application/context_engine.py` | 0.03154 | 0.01639 | 1 |
+| `application/replay.py` | 0.02973 | 0.01639 | 1 |
+| `adapters/db/models.py` | 0.02929 | 0.01639 | 1 |
+| `container.py` | 0.02901 | 0.01639 | 1 |
+
+That is a stronger claim than the paragraph above makes, and it is the honest
+one: recency was not *inflating* the agreement, it **was** the agreement. On
+every one of the twelve interruptions, the second route was the clock. The graph
+contributes nothing until entities are extracted, decisions rarely cite the file
+in front of you, and the by-name route can only ever find the focused file
+itself — which the gate excludes as something the reader already has open. That
+leaves retrieval, alone, for every candidate.
+
+So the 54% was not a bar in the wrong place. It was a bar being cleared by a
+route that should never have been able to clear it, and six of thirteen being
+useful is roughly what one retriever's top hit is worth on this corpus.
+
+**The corrected gate says nothing at all, and that is the correct output.** There
+is no second independent route here to agree with retrieval, and the remedy is to
+build one — entity extraction over this corpus, or the co-edit source the
+retrospective below proposes — rather than to lower the bar until something
+comes out. `memoryos surfacing check` on any of these seven now prints `stay
+quiet: below_threshold` with a score of exactly one route's best, which is a
+system saying "I have one opinion and one opinion is not enough to interrupt
+you".
+
 ### The feedback loop, working on real events
 
 The clearest thing in this run is not the rate. Twenty seconds after `cli.py`'s
@@ -4122,13 +4163,14 @@ from broken.
 
 ### What would make it genuinely useful rather than merely functional
 
-**A relevance signal that is about the focus.** The single change with the
+**A relevance signal that is about the focus.** ~~The single change with the
 largest effect is removing global recency from the fusion when the focus is a
-path, or splitting the temporal source into its two halves — "other versions of
-this file" is about the focus and "what changed lately" is not. Three routes that
-are genuinely independent of each other would make "two agreed" mean what the
-threshold assumes it means, and would spread the score distribution enough for a
-bar to sit somewhere meaningful.
+path, or splitting the temporal source into its two halves.~~ **Done in M7.0's
+Step 0**, and it did not spread the distribution — it collapsed it. Every focus
+now scores one route, because recency was the only second route there was. The
+finding stands with its sign reversed: the problem was never a bar in the wrong
+place, and what this corpus needs is a route that is genuinely about the focus
+and genuinely independent of retrieval. The next two paragraphs are that route.
 
 **Structural neighbours, not just semantic ones.** Every item the gate got right
 was a file's own test, and it found them through prose similarity plus recency —
@@ -4155,6 +4197,262 @@ more than the keystroke it saves" — and at 54% it is not close. Everything thi
 phase built is still the right foundation for that, because the expensive parts —
 assembly, the budget, the cache, the fingerprint — serve both directions. Only the
 gate is push-specific, and it is 300 lines.
+
+## Agent tools
+
+M7.0 exposes every phase as a tool a model can call. **One tool call at a time —
+no planning, no chaining** — which is enough to answer the only question this
+milestone asks: did six phases of layering make this cheap?
+
+```bash
+memoryos agent tools                                  # what the model reads
+memoryos agent ask "what does the job queue claim query do"
+memoryos agent ask "why did we choose pgvector" --explain
+```
+
+| Tool | Wraps | Phase |
+| --- | --- | --- |
+| `search_memories` | `SearchMemories` + `explain_hits` | 2 |
+| `get_decisions` | `list_decisions` + `show` | 5 |
+| `query_timeline` | `activity_by_period` + `memories_in_range` | 4 |
+| `find_gaps` | `find_gaps` | 4 |
+| `traverse_graph` | `ExpandThroughGraph` | 3 |
+| `get_memory` | `memories.show` | 1 |
+
+### How much new logic this needed
+
+**Two extractions, one shared citation builder, and no new behaviour anywhere.**
+That is the layering's payoff, measured — and the two extractions are more
+interesting than the zero would have been, because both were the same defect:
+
+**`get_memory` had no use case.** The memory-with-chunks-and-versions query lived
+in the body of `GET /memories/{id}`, three statements deep in a route handler,
+reachable from nothing that was not HTTP. It is now `application/memories.py`,
+the route maps its result to the wire type, and the endpoint's output did not
+change by a byte.
+
+**Source name to source id had three copies.** Every Phase 4 use case takes a
+`source_id`; every caller has a name. The translation was written once in the
+timeline route, once inline in the CLI's gaps command, and this milestone would
+have made three. It is now `application/sources.py`, and both older callers use
+it.
+
+Neither is new behaviour and both are exactly what the milestone said to report:
+a capability written for a transport rather than for the domain is invisible
+until a second transport wants it. Six phases produced two, which is the number
+worth knowing.
+
+The third piece is genuinely new and is thirty lines. Until now a `Citation`
+could only be built from a search hit, because search was the only thing that
+produced one; four of the six tools return things retrieval never touched.
+`citations_for_chunks` and `citations_for_memories` build the same M2.5 citation
+from a graph chunk or a memory id. No widening of the type, no invented offsets.
+
+Everything else is declaration. Each tool is a frozen dataclass holding the use
+case it wraps, an arguments model, a description, and the rendering that turns a
+domain object into text a model can read.
+
+### Arguments are declared once
+
+`ToolSpec.parameters` is a JSON Schema, and it is generated rather than written:
+
+```python
+class SearchArgs(_Args):                 # extra="forbid"
+    query: str = Field(description="What to look for, in natural language…")
+    limit: int = Field(default=5, description="How many memories, at most 5…")
+```
+
+The same model produces the schema the provider reads *and* validates the
+arguments that come back, so the two cannot disagree — a hand-written schema
+beside a hand-written validator is two descriptions of one contract, and the
+failure is a tool that advertises a parameter it then rejects. It also means the
+error a model gets is pydantic's, which is already correctable prose:
+
+```
+The arguments for search_memories were not valid: limit: Input should be a valid
+integer, unable to parse string as an integer. Call it again with corrected
+arguments.
+```
+
+Validation happens in the **registry**, before the tool is touched, so all six
+`call` methods can assume their arguments are the shape they declared. An unknown
+tool name is a `PermanentError` — retrying cannot make a tool appear — and bad
+arguments are a `ToolResult` rather than an exception, because that is the
+model's mistake to fix and a raise would abort the turn over it.
+
+### Every result carries citations, including the ones that are not passages
+
+**A tool result the model can read but not attribute is how the no-fabrication
+guardrail dies quietly in Phase 7.** Every check M2.6 built operates on an
+answer's citations, so an uncited claim passes them by not being covered.
+
+`Citation` is chunk-shaped: a span of a specific version, with offsets
+`verify-citations` asserts still resolve. Two of the six tools return facts that
+have no span, and neither gets a fabricated one:
+
+* **A decision** is a row somebody wrote — no chunk, no offsets, no place in the
+  corpus. The tool cites the corpus **evidence** linked to it, and where a
+  decision has none, the content says `Evidence: none linked in the corpus`
+  rather than being quietly uncited.
+* **A gap** is an absence. It cites the two memories that bound it, which is
+  precisely the provenance of "the silence ran from here to here".
+
+### Caps, and a bound that had to come out of the schema
+
+Five memories, twenty graph nodes, twelve buckets, five decisions. Each tool caps
+its own output and sets `truncated`, and the content says so in words as well —
+the model reads the content, not the field.
+
+The bounds are **described rather than declared**, and that was forced by a real
+400 from Groq. Asked for ten results against a schema whose `limit` is capped at
+two:
+
+```
+400 tool_use_failed: tool call validation failed: parameters for tool
+search_memories did not match schema: errors: [`/limit`: must be <= 2 but found 10]
+```
+
+Groq validates the model's generated arguments against the declared schema on its
+own side and fails **the entire request** when they miss — so a `"maximum"` turns
+"the model asked for ten" into a dead turn rather than into something
+correctable, because there is no result left to correct from. The same question
+with the bound stated in the *description* instead comes back as a normal call
+asking for ten, which the tool then clamps.
+
+So the cap is the tool's, enforced by clamping: ask for fifty, get five, and be
+told the result was truncated — which is what the milestone specifies caps to do
+anyway.
+
+### Provider compatibility, verified with real calls
+
+`converse` is a **separate protocol** from `LanguageModel` rather than two more
+methods on it. Tool calling is a capability a provider either has or does not, so
+it belongs in a type a caller can require — and widening the base port would have
+made every existing implementation and every test fake abstract overnight, which
+is a compiler saying the same thing.
+
+| | Groq `llama-3.3-70b-versatile` | Gemini `gemini-2.5-flash` |
+| --- | --- | --- |
+| tool calling | **yes**, `finish_reason: tool_calls` | **yes**, `function_call` parts |
+| pydantic schema, unchanged | accepted | **400** |
+| `additionalProperties` | accepted | rejected — the only key it refuses |
+| `title`, `default`, `minimum`, `maximum` | accepted | accepted |
+| result paired to its call by | `tool_call_id` | function **name** |
+| validates the model's arguments server-side | **yes** — 400s the request | no |
+
+Every row was measured by sending one. The one that matters is
+`additionalProperties`: it is what a strict schema emits, it is what makes a
+hallucinated argument an error rather than a silently dropped value, and Gemini
+answers `Unknown name "additional_properties"` for its presence alone.
+`_gemini_schema` strips exactly that key and nothing else — a broader strip would
+be guessing, and would drop the descriptions and bounds the model routes on.
+
+**A retired model was found by going to look.** `gemini-2.0-flash` — this
+project's configured default since M2.6 — answers `404: this model is no longer
+available`. Nothing noticed, because the configured provider is Groq and no test
+calls Gemini. The default is now `gemini-2.5-flash`, and the lesson is the one
+M2.6a already wrote down about Groq: a model id from documentation is a
+plausible-looking string, and only a real call tells you it has expired.
+
+### The loop
+
+One question, at most one tool call, one answer. Two model calls, no state
+between questions, and if the model asks for two tools the first runs and the
+rest are logged as ignored — "the model wanted three" being the measurement M7.1
+starts from.
+
+### Routing: six questions, six tools
+
+One question per tool, run against the real corpus. **Six of six routed
+correctly, first attempt, with no description changed afterwards.**
+
+| Question | Chose | |
+| --- | --- | --- |
+| what does the job queue claim query do | `search_memories` | ✓ |
+| why did we choose pgvector | `get_decisions` | ✓ |
+| what was I working on in August 2026 | `query_timeline` | ✓ |
+| was there a stretch where I stopped working on this project | `find_gaps` | ✓ |
+| what else in the corpus is connected to memory `<id>` | `traverse_graph` | ✓ |
+| show me the whole contents of memory `<id>` | `get_memory` | ✓ |
+
+Two of the six carry a memory id in the question, because the two tools that need
+one say so and a single-call milestone has no way to obtain one first. That
+constraint is M7.0's, not the model's.
+
+The descriptions that did the work are the comparative sentences — "prefer it
+over `traverse_graph` when you have a topic rather than a specific memory", "it
+cannot find anything: without an id already in hand, use `search_memories`". A
+test pins that the two memory-finding tools name each other, so a later tidy-up
+cannot quietly remove the only thing that distinguishes them.
+
+### The one real failure, and it was not routing
+
+Asked **"what was I working on in August"** — no year — the model routed to
+`query_timeline` correctly and then asked for August **2023**. The tool answered
+honestly that nothing is dated then, and the model said "I have no record".
+Correct behaviour at every step, producing a useless answer.
+
+The cause is that **nothing told it what "now" is**. A temporal tool with no
+clock cannot resolve a relative date, and the model fell back to its training
+prior. The fix is one line — today's date in the system prompt — and it belongs
+there rather than in a tool description, because the date is a fact about the
+conversation and six copies of it is six places to go stale. With the year
+supplied, the same question routes and answers correctly.
+
+### What a tool result actually looks like
+
+`search_memories("how does a worker claim a job and hold a lease", limit=2)`:
+
+```
+2 memories (the best ones; there were more) for 'how does a worker claim…':
+
+[1] self::src/memoryos/application/worker.py (code, 2026-08-10, score 5.237)
+    …@dataclass(slots=True, frozen=True) class WorkerConfig: # How long a claim
+    is good for without a heartbeat. Long enough to survive a slow handler,
+    short enough that a dead worker's jobs come back promptly. lease:
+    timedelta = timedelta(seconds=30)…
+
+[2] self::tests/integration/test_job_queue.py (code, 2026-08-08, score 4.343)
+    …test_a_fenced_out_worker_cannot_complete_a_job… Worker A claims. Worker B
+    takes the job over — what reclaim_expired plus a second claim amounts to.
+    A's late completion must not land.…
+
+truncated: True     citations: 13
+  self::src/memoryos/application/worker.py#0 @0-1186 (v1)
+  self::src/memoryos/application/worker.py#2 @1534-2952 (v1)   definition: WorkerConfig
+  self::src/memoryos/application/worker.py#8 @10230-11308 (v1)  definition: Worker
+```
+
+The excerpt is M2.5's — the matched span widened to a readable window, with the
+overlap head its predecessor lent it removed — and `definition` is what the
+chunker recorded, which is the difference between "somewhere in worker.py" and a
+reference somebody can open.
+
+### Free tiers are the binding constraint on this milestone's evidence
+
+Both providers' free tiers were exhausted during this milestone. Groq's daily
+token cap (100,000/day) went first, mid-run; Gemini allows **20 requests a day**
+for `gemini-2.5-flash`, and one question is two of them.
+
+So what was verified live, and on which provider, is worth being exact about:
+
+| | Groq | Gemini |
+| --- | --- | --- |
+| calls tools at all | **yes**, direct API call | **yes**, direct API call |
+| accepts the generated schema | **yes**, direct API call | rejects one key, direct API call |
+| rejects out-of-bound arguments | **yes**, exact error above | not tested |
+| the whole `agent ask` loop | **no — daily cap** | **yes**, nine questions |
+
+The Groq *replay* — the assistant message carrying `tool_calls`, then a
+`role="tool"` message with the matching id — is therefore pinned by unit tests
+against the SDK's own response shape rather than by a live round trip. That is
+weaker evidence than a real call and it is named as such; it is also the evidence
+that keeps working after the daily budget is gone, which during this milestone it
+repeatedly was.
+
+This bounds what M7.1 can measure: a multi-hop agent is four to six model calls
+per question, which is three questions a day on one of these tiers and about ten
+on the other.
 
 ## Migrations
 
