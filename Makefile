@@ -116,7 +116,7 @@ phase1-check:
 # `memoryos extract-entities` on its own, when the quota is there.
 restore: phase1-check
 	@printf "\n=== the four tables no rebuild reproduces ===\n"
-	uv run python scripts/restore_judgements.py
+	uv run python scripts/restore_judgements.py var/golden-set.json
 	uv run python scripts/seed_decisions.py
 	uv run python scripts/seed_outcomes.py
 	uv run python scripts/evaluate_assumptions.py

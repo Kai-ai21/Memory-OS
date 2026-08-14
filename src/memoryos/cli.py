@@ -4290,7 +4290,27 @@ def _print_comparison(report: Report, baseline: dict[str, Any]) -> None:
     if not rows:
         print("\nthe baseline file carries no means to compare against")
         return
+    if not report.scorable:
+        # **Not measured is not measured as zero**, which is the rule this whole
+        # project is arranged around and the one place the agent report still
+        # broke it. A run where the provider answered nothing has means of 0.000
+        # by construction, and subtracting a real baseline from them prints a
+        # -0.630 regression that is a quota report wearing a benchmark's
+        # clothes. The warning above says the means are incomparable; printing
+        # the comparison anyway said otherwise louder.
+        print(
+            f"\nno comparison: 0 of {len(report.scores)} questions reached the "
+            "provider, so there is nothing to compare the baseline against.\n"
+            "  A delta here would be the difference between a benchmark and a "
+            "rate limit."
+        )
+        return
     print("\nagainst baseline:")
+    if report.scorable < len(report.scores):
+        print(
+            f"  NOTE: {report.scorable} of {len(report.scores)} questions reached "
+            "the provider; these deltas are over a partial run."
+        )
     for name, was, now in rows:
         print(f"  {name:20} {was:+.3f} -> {now:+.3f}   {now - was:+.3f}")
 

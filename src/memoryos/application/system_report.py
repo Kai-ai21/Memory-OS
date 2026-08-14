@@ -16,11 +16,15 @@ than in a footnote:
 * **The retrieval baselines.** `var/baseline*.json` are recorded runs. The
   current run is live and the deltas are against those files, which is what a
   baseline is for.
-* **The agent trajectory scores**, when no API key is configured. Scoring eight
-  questions costs eight live model calls and several minutes, and a report that
-  silently printed a two-day-old file as the current state would be exactly the
-  drift this command exists to stop. With a key it runs; without one it prints
-  the recorded run, its date, and the fact that it is recorded.
+* **The agent trajectory scores.** These are always the recorded run in
+  `var/baseline-agent.json`, never a live one, and the page says so in those
+  words with the date beside them. Scoring the eight golden questions costs a
+  live model call each against a free tier that M7.3 already measured as unable
+  to serve three passes in a day, so running them inside a report somebody might
+  call twice is not a cost this command is allowed to impose. Printing a
+  recorded file *as though it were current* is the drift this command exists to
+  stop; printing it labelled is the honest alternative. Run `memoryos agent
+  evaluate` for a fresh one.
 
 Everything else — corpus counts, graph divergence, decisions, patterns, facets,
 model stability, doctor — is computed against the database at the moment the

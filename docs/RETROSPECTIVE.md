@@ -1,7 +1,7 @@
 # Full-project retrospective
 
 Eight phases, forty-four milestones, one corpus: this repository ingesting
-itself. 253 memories, 3,157 chunks, 16 recorded decisions, 37 assumptions.
+itself. 282 memories, 3,833 chunks, 12 reproducible decisions, 37 assumptions.
 
 Every phase wrote its own retrospective as it closed and those are in the
 [README](../README.md), beside the code they judge. This one asks the questions
@@ -30,7 +30,7 @@ one decision in the project where the cost was paid early and the alternative
 was not "pay later" but "never".
 
 It also produced the project's most-cited number. `occurred_at_source` is why
-the corpus can say **0 of 253 memories carry a source-declared date** instead of
+the corpus can say **0 of 282 memories carry a source-declared date** instead of
 quietly rendering a timeline of `git checkout` as a timeline of work. Three later
 capabilities decline for that reason and cite that column when they do.
 
@@ -84,7 +84,7 @@ Not wrong, but the shape of a project building capability ahead of demand.
 
 **Neo4j.** The graph projection has never improved a retrieval score — `graph
 reached 0 queries and introduced 0 results` on the current corpus, because entity
-extraction has covered 5% of it. What it *did* earn is `graph verify`: divergence
+extraction has covered one memory out of 282. What it *did* earn is `graph verify`: divergence
 detection per node and edge type **by hash rather than by count**, which catches a
 corrupted node name that no count would see. The projection's value in this
 project turned out to be as a second system that must agree with the first, and
@@ -178,6 +178,28 @@ same. This is the same defect as printing a facet at 0.2 confidence instead of
 declining — the project had already written the rule and then broke it in a
 neighbouring module.
 
+### M8.2 — a rate limit rendered as a -0.630 regression
+
+`agent evaluate --compare` on the final verification run: all eight questions
+died on Groq's daily token cap, 98,285 of 100,000 used. The report classified
+them correctly — `provider_failed 8`, `agent failures 0 of 8` — and warned that
+*"only 0 of 8 questions reached the provider. The means above are not comparable
+with a complete run."*
+
+Then it printed the comparison anyway: `overall +0.630 -> +0.000  -0.630`.
+
+**The same defect as M7.3's `tool_appropriateness`, in the same file, found the
+same afternoon.** Means of zero by construction, subtracted from a real
+baseline, rendered identically to a catastrophic regression — directly beneath
+the sentence saying they were incomparable, which is the quieter of the two.
+Fixed: with nothing scorable the comparison is refused with the count and the
+reason, and a partial run gets a note saying how partial.
+
+**What it taught:** the rule needs enforcing at every *rendering* site, not once
+per concept. This project wrote "not measured is not measured as zero" into
+`Report.overall`, into `Assessment.render`, into `Stability.verdict` — and then
+printed a delta from an empty run three functions away.
+
 ### M8.1 — the number that explains three detectors
 
 Not a bug, a diagnosis found by measuring silence. Gap analysis produced zero
@@ -192,9 +214,9 @@ fire is an hour of grouping assumptions by hand — not more milestones.
 ### M8.2 — retrieval decayed 0.13 recall@10 in two days
 
 The finding of this milestone, and the reason it is last. The same 52 golden
-queries against the same answer key scored **recall@10 0.643** today against
-**0.773** for the baseline recorded two days earlier. Nothing in the retriever
-changed.
+queries against the same answer key scored **recall@10 0.627** from a clean
+checkout against **0.773** for the baseline recorded two days earlier. Nothing in
+the retriever changed.
 
 The mechanism is visible in the worst query. For *"why do we store two
 timestamps"* the top four results are `tests/slow/test_acceptance.py`,
@@ -209,6 +231,59 @@ scoring and the evaluator widens `k` to compensate, so the metric is not
 double-counting — but the ranking is still led by text *about* the query rather
 than answers to it, and exclusion cannot fix that. It is M1.6.1's class of defect
 found M1.6.1's way, eight phases later: not by a test, by a number moving.
+
+### M8.2 — `phase1-check` could not finish on a machine with an API key
+
+The verification recipe ends with `worker --drain`, and embedding enqueues a
+Phase 3 entity extraction per memory. With an LLM key configured that is one
+live model call per file — 282 of them, against a free tier that serves a few a
+minute. Running it from a destroyed volume reached **259 pending extractions
+with one job eight minutes into its first attempt**, and a check about
+*ingestion* was going to sit there for hours on work Phase 1 does not own.
+
+Every test passed throughout. The suite never runs `make phase1-check`, and the
+machines that had run it before either had no key or already had the extractions
+done.
+
+**What it taught:** a shared queue makes every check a check of every phase. The
+fix is `worker --only`, filtering in the candidate select rather than after the
+claim — a filter applied afterwards would take each declined job, release it,
+and burn an attempt on work nothing was wrong with, dead-lettering the queue in a
+few passes. More generally: **the verification recipe is code, and code nobody
+runs end to end is code that does not work.** This one had rotted quietly the
+moment an API key entered the picture.
+
+### M8.2 — `docker compose down -v` destroyed four decisions permanently
+
+The sharpest finding in the project, and it was found by doing what every
+milestone's verification section says to do.
+
+`scripts/restore_judgements.py` opens by naming this exact conflict for
+`query_judgements`: *"the project's own verification recipe opens with `docker
+compose down -v`… every clean-slate check destroys the only copy of work that
+took a person an afternoon."* It solves it with an export.
+
+**Nobody applied the same reasoning to `decisions`.** The pre-wipe database held
+16 decisions, 46 options, 16 outcomes and one assumption group. The seed scripts
+reproduce **12 decisions, 37 options and 12 outcomes, and zero groups** — the
+other four decisions were recorded interactively through `memoryos decide`, the
+group was made by hand through `assumptions group`, and there is no export
+command for either. They are gone, and every earlier milestone's numbers that
+cite 16 decisions now describe a state no clean checkout can reach.
+
+The loss is worse than four rows. That single assumption group was the *only*
+group in the corpus — the "2 of 37 grouped" that M8.1 measured — and without it
+the `strengths` and `weaknesses` derivers have nothing at all to read, not merely
+too little.
+
+**What it taught:** an export is not a nice-to-have for user-authored data, it is
+the definition of user-authored. `replay.py` has a `USER_AUTHORED` set naming
+exactly which tables a rebuild must never truncate — the project knew precisely
+which data was irreplaceable and protected it against *replay* while leaving it
+unprotected against its own recommended `down -v`. The right shape is obvious in
+hindsight and was obvious in the file that named the problem: every table in
+`USER_AUTHORED` needs an export and a restore, and `make restore` should run all
+of them. Judgements had one. Decisions should have had one.
 
 ---
 
@@ -252,7 +327,7 @@ not follow.
 | --- | --- |
 | **1 — Foundation** | **Worth it, twice over.** Bitemporality and replay could not have been retrofitted. M1.6.1 alone justified the measurement discipline. |
 | **2 — Retrieval** | **Worth it.** The golden set and the resolution floor are the instruments every later phase is judged on. The two negative results are as valuable as the positive ones. |
-| **3 — Graph** | **Half worth it.** `graph verify` earned its place; graph-augmented retrieval contributed zero and always would have on a corpus with 5% extraction coverage. **Would cut M3.5 and keep M3.4.** |
+| **3 — Graph** | **Half worth it.** `graph verify` earned its place; graph-augmented retrieval contributed zero and always would have on a corpus whose extraction coverage is a rounding error. **Would cut M3.5 and keep M3.4.** |
 | **4 — Time** | **Worth it.** Query work over a schema Phase 1 got right, plus the provenance measurement that three later phases cite. |
 | **5 — Decisions** | **Worth it as apparatus, not as findings.** Zero patterns, zero reflections, and each printed why. The schema is the part that transfers. |
 | **6 — Proactivity** | **Worth it for one number.** The 54% dismissal rate is the most useful thing Phase 6 produced, and it was a failure. Would keep the surfacing log and cut the VS Code extension. |

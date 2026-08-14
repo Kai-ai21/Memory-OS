@@ -9,17 +9,20 @@ plans several dependent retrievals and verifies every claim it makes against
 what it actually retrieved. Everything derived can be thrown away and rebuilt
 from the log, and the rebuild is proved identical rather than assumed.
 
-**Eight phases, one corpus: this repository, ingesting itself.** 253 memories,
-3,157 chunks, 16 recorded decisions. That number is the single most important
-fact about everything below, and the rest of this section is organised around
-being honest about it.
+**Eight phases, one corpus: this repository, ingesting itself.** 282 memories,
+3,833 chunks, 12 recorded decisions. That last number is the single most
+important fact about everything below, and the rest of this section is organised
+around being honest about it.
 
 ```bash
+make full-check        # from a destroyed volume, and it is the only claim here
 uv run memoryos report --full
 ```
 
-One command, the current true state of the system, computed against the
-database rather than quoted from here.
+Every number on this page is what those two commands print. `make full-check`
+destroys the Docker volume, ingests, embeds, replays, proves the rebuild
+identical, restores the four tables no rebuild can reproduce, and then runs every
+check. It takes about forty minutes on a laptop.
 
 ## What genuinely works
 
@@ -27,13 +30,13 @@ Measured, on this corpus, with the command that produces the number.
 
 | Capability | Evidence |
 | --- | --- |
-| **Ingestion and versioning** | 253 current memories from 311 rows; content-addressed, two-tier change detection. `memoryos stats` |
+| **Ingestion and versioning** | 282 memories, all current, content-addressed, two-tier change detection. `memoryos stats` |
 | **Replay** | Every derived table rebuilt from the log and compared byte for byte, into a shadow schema and in place. `memoryos verify-replay` |
-| **Retrieval** | recall@10 **0.643**, MRR **0.719**, nDCG@10 **0.599** over 52 judged queries, hybrid + cross-encoder. `memoryos evaluate` |
+| **Retrieval** | recall@10 **0.627**, MRR **0.727**, nDCG@10 **0.584** over 52 judged queries, hybrid + cross-encoder. `memoryos evaluate` |
 | **Grounded answering** | Answers cite their sources or are withheld; ungrounded output exits non-zero. `memoryos ask` |
 | **Answer verification** | Every claim scored against what the trajectory retrieved, and an unsupported answer withheld. `memoryos agent ask --verify` |
 | **The graph projection** | Divergence from Postgres detected per node and edge type by hash, not by count. `memoryos graph verify` |
-| **Decision capture** | 16 decisions, 46 options, 16 outcomes, 37 assumptions, 25 of them evaluated. `memoryos decisions list` |
+| **Decision capture** | 12 decisions, 37 options, 12 outcomes, 37 assumptions, 25 of them evaluated. `memoryos decisions list` |
 | **Refusal under a bar** | Patterns, reflections, gaps and facets all decline below their evidence threshold, with the number they reached. |
 | **Operational honesty** | `doctor` distinguishes damage from an unexercised capability and says which. |
 
@@ -51,14 +54,14 @@ each produces nothing on this corpus for a reason it states rather than hides.
 
 | Built | What it produces here | Why |
 | --- | --- | --- |
-| **Pattern discovery** (M5.3) | **0 patterns** | Needs three decisions sharing a belief. 35 of 37 assumptions are ungrouped — each belief was written once, in its own words, on its own decision. |
+| **Pattern discovery** (M5.3) | **0 patterns** | Needs three decisions sharing a belief. **All 37 assumptions are ungrouped** — each belief was written once, in its own words, on its own decision. |
 | **Reflections** (M5.4) | **0 reflections** | Nothing to describe: it refuses to write prose about a pattern that does not exist. |
 | **Gap analysis** (M8.1) | **0 gaps, 4 runs out of 4** | 14 candidates weighed across three decisions; the closest reached 1 of the 2 supporting instances it needs. |
 | **The user model** (M8.0) | **0 derived facets across 5 derivable dimensions** | Nothing reaches 3 distinct observations. `goals` is asserted-only by design; `learning_style` has no deriver by design. |
 | **Model evolution** (M8.2) | **"cannot say" on every dimension** | A stability verdict needs 3 closed facets and 30 days of history. There are 0 and ~1. |
-| **Habits** (M8.0) | **structurally impossible** | 0 of 253 memories carry a source-declared date. Every timestamp is a filesystem mtime, which a checkout resets for the whole tree at once. |
-| **Workflows** (M8.0) | **structurally impossible** | Entity extraction has reached 12 of 253 memories (5%). A co-occurrence over that slice is a fact about the slice. |
-| **Graph-augmented retrieval** (M3.5) | **0 results contributed** | Same 5% extraction coverage. The expansion works; there is almost nothing extracted for it to expand into. |
+| **Habits** (M8.0) | **structurally impossible** | 0 of 282 memories carry a source-declared date. Every timestamp is a filesystem mtime, which a checkout resets for the whole tree at once. |
+| **Workflows** (M8.0) | **structurally impossible** | Entity extraction has reached 1 of 282 memories (0%). A co-occurrence over that slice is a fact about the slice. |
+| **Graph-augmented retrieval** (M3.5) | **0 results contributed, 0 of 52 queries reached** | Extraction covers 1 memory. The expansion works; there is nothing extracted for it to expand into. |
 | **Typed relationships** (M3.3) | **0 relationships** | Extraction has not been run across the corpus. |
 | **Agent variance floor** (M7.3) | **unknown** | Three passes over eight questions costs more than the free tier allows in a day. Every future claim of the form "this improved trajectory quality" is currently uncheckable. |
 
@@ -82,10 +85,10 @@ Real numbers, and the ones that were disappointing are here too.
 | **2 — Retrieval** | Recency and importance as ranking signals | Grid-searched, **measured as harmful, shipped at weight 0.0**. |
 | **3 — Graph** | Graph expansion's contribution to ranking | **Zero**, and shipped at weight zero rather than hidden. |
 | **3 — Graph** | Projection divergence | Detected per type by hash — a corrupted node name that no count would see. |
-| **4 — Time** | Date provenance across the corpus | **0 of 253 declared**; everything is a filesystem mtime. Named, not averaged over. |
+| **4 — Time** | Date provenance across the corpus | **0 of 282 declared**; everything is a filesystem mtime. Named, not averaged over. |
 | **4 — Time** | Time-aware retrieval | Measured; no improvement this corpus could show. |
-| **5 — Decisions** | How much decision-shaped content the corpus holds | 16 decisions, and the section opens with that measurement rather than closing with it. |
-| **5 — Assumptions** | Which recorded beliefs held | 25 evaluated: **18 held, 6 failed, 1 partial**. |
+| **5 — Decisions** | How much decision-shaped content the corpus holds | 12 decisions, and the section opens with that measurement rather than closing with it. |
+| **5 — Assumptions** | Which recorded beliefs held | 25 evaluated: **18 held, 6 failed, 1 partial**; 12 left alone because nothing tested them. |
 | **5 — Patterns** | Regularities over decisions | **0**, with the reason: no belief is shared by three decisions. |
 | **6 — Surfacing** | Dismissal rate of unprompted suggestions | **54% (7 of 13 shown)** — the wrong side of its own line. Cause found and fixed in M7.0. |
 | **6 — Events** | Whether a Postgres queue is fast enough | Measured rather than assumed; 134 events, none pending. |
@@ -94,15 +97,16 @@ Real numbers, and the ones that were disappointing are here too.
 | **7 — Trajectory** | How the agent reasoned, over 8 questions | overall **0.630**, dependency **0.500**, support 0.787, **4 agent failures in 8**, 10,341 tokens and 34.6s per question against ~2,000 for single-shot. |
 | **8 — User model** | What five derivable dimensions can fill | **Zero facets.** The measurement is the deliverable. |
 | **8 — Gaps** | How often it correctly says nothing | **4 of 4.** |
-| **8 — Evolution** | Model churn and mean facet lifetime | **No verdict available** — and refusing one is the result. |
+| **8 — Evolution** | Model churn and mean facet lifetime | **No verdict on any dimension** — and refusing one is the result. |
 
-### The number this milestone found
+### The two numbers this milestone found
 
-Retrieval measured today scores **recall@10 0.643** against **0.773** for the
-M4.2 baseline recorded two days earlier — on the *same* 52 queries and the same
-answer key. Nothing in the retriever changed. What changed is the corpus: it
-grew by roughly a quarter as Phases 7 and 8 were written, and the new text is
-this README and the test suite.
+**Retrieval has decayed as the corpus grew.** Measured from a clean checkout,
+recall@10 is **0.627** against **0.773** for the M4.2 baseline recorded two days
+earlier — the *same* 52 queries, the same answer key, and nothing in the
+retriever changed. What changed is the corpus: 282 memories and 3,833 chunks
+where the baseline saw fewer, and the new text is this README and the test
+suite.
 
 Inspect the worst query and the mechanism is visible. For *"why do we store two
 timestamps"* the top four results are `tests/slow/test_acceptance.py`,
@@ -117,6 +121,22 @@ the metric is not double-counting them — but the underlying ranking is still
 led by text *about* the query rather than answers to it, and no amount of
 excluding fixes that. This is the same class of defect as M1.6.1, found the same
 way, eight phases later: not by a test, by a number moving.
+
+**And `docker compose down -v` destroyed four decisions permanently.** The
+pre-wipe database held 16 decisions, 46 options, 16 outcomes and one assumption
+group. The seed scripts reproduce 12, 37, 12 and **zero groups** — the rest were
+entered interactively through `memoryos decide` and `assumptions group`, and no
+export command exists for either.
+
+`scripts/restore_judgements.py` names this exact conflict in its own docstring,
+for `query_judgements`, and solves it with an export. Nobody applied the same
+reasoning to `decisions`. The number to notice is the group: it was the only one
+in the corpus, so `strengths` and `weaknesses` now have *nothing* to read rather
+than too little, and every earlier milestone's "16 decisions" describes a state
+no clean checkout can reach. `replay.py` has a `USER_AUTHORED` set naming
+precisely which tables are irreplaceable — the project knew, protected them
+against replay, and left them unprotected against its own recommended
+`down -v`.
 
 ## What I would build differently
 
@@ -5853,40 +5873,59 @@ number as a completed one.
 Then a verdict, which needs **three closed facets and thirty days of history**
 before it is allowed to give one.
 
+From a clean checkout, after `make full-check`:
+
 ```
 dimension             facets  live  changes  mean life  mean age
 ----------------------------------------------------------------
-goals                      2     1        1       0.0d      0.1d
+goals                      0     0        0          —         —
 habits                     0     0        0          —         —
 strengths                  0     0        0          —         —
-weaknesses                 1     0        1       0.0d         —
+weaknesses                 0     0        0          —         —
 learning_style             0     0        0          —         —
 decision_patterns          0     0        0          —         —
 workflows                  0     0        0          —         —
 
 verdicts
-  goals                cannot say: 0 days of history, under the 30 a rate needs
+  goals                no facets: nothing to measure
   habits               no facets: nothing to measure
   strengths            no facets: nothing to measure
-  weaknesses           cannot say: 0 days of history, under the 30 a rate needs
+  weaknesses           no facets: nothing to measure
   learning_style       no facets: nothing to measure
   decision_patterns    no facets: nothing to measure
   workflows            no facets: nothing to measure
+
+The model holds no facets at all, so there is no churn to measure and neither
+failure mode applies. What this measures is not the model's stability but the
+corpus's size — see `model derive`.
 ```
+
+`model timeline` prints `no model events: nothing has ever been written to the
+model`, and `model diff --since` prints `the model did not change in this
+window`. Three commands, three different sentences, none of them a blank page —
+because "nothing changed" and "there is nothing" are different facts and a
+reader needs to know which one they are looking at.
 
 The question the milestone asks is whether the model is **fitting noise** — a
 model where everything changes weekly — or has **stopped learning** — one where
 nothing ever changes. Both are real failures and they are opposite, so a working
 model lives in the space between them.
 
-**This model resembles neither, and the reason is that it has no facets.** The
-three rows with any history at all are asserted goals typed by hand within an
-hour of each other. A mean lifetime over one closed facet is that facet's
-lifetime with a table drawn around it, and printing `0.0d` beside a confident
-label would be the shape of a measurement with none of the substance. The bar is
-what stops it, and `stopped_learning` — the whole-model check — returns nothing
-rather than a false negative, because a corpus with no facets says nothing about
-whether the system has stopped learning.
+**This model resembles neither, and the reason is that it has no facets.** A
+mean lifetime over one closed facet is that facet's lifetime with a table drawn
+around it, and printing `0.0d` beside a confident label would be the shape of a
+measurement with none of the substance. The bar is what stops it, and
+`stopped_learning` — the whole-model check — returns nothing rather than a false
+negative, because a corpus with no facets says nothing about whether the system
+has stopped learning.
+
+The development database, before the volume was destroyed, held three
+hand-asserted goals with one supersession between them: enough for the table to
+show `2 facets, 1 live, 1 change, mean life 0.0d` under `goals` and for the
+verdict to read `cannot say: 0 days of history, under the 30 a rate needs`. That
+is the *other* refusal — a dimension with history too short to rate, rather than
+one with no history at all — and the two are worth distinguishing because only
+the first can ever become a verdict.
 
 ### Deviations and ambiguities
 
