@@ -120,3 +120,123 @@ class Assessment:
             return f"{self.facets} facet(s)"
         detail = f" (best candidate reached {self.best_support})" if self.best_support else ""
         return f"insufficient evidence: {self.gap}{detail}"
+
+
+# --------------------------------------------------------------------------
+# M8.2: how much the model moves
+# --------------------------------------------------------------------------
+
+# Closed facets a dimension needs before a mean lifetime is a mean rather than
+# one facet's lifetime with a bar chart around it. Three, the same number and
+# the same argument as MIN_SUPPORT: two observations describe themselves.
+MIN_CLOSED_FOR_VERDICT = 3
+
+# How long a dimension has to have been watched before "nothing changed" is
+# distinguishable from "nothing has had time to change". A month, chosen because
+# it is the interval M8.1's staleness threshold already uses for the same kind of
+# judgement, and because a fortnight's corpus — which is what this one is —
+# should fall below it rather than squeak past.
+MIN_OBSERVATION_DAYS = 30.0
+
+# Below this mean lifetime a dimension is rewriting itself faster than the
+# evidence under it can plausibly change. A week: a facet needs three distinct
+# observations to exist at all, and three observations that arrive and are
+# overturned inside seven days are a detector responding to arrival order rather
+# than to a regularity.
+NOISE_LIFETIME_DAYS = 7.0
+
+
+@dataclass(frozen=True, slots=True)
+class Stability:
+    """How often one dimension's facets change, and how long they last.
+
+    **The verdict is allowed to be "cannot say", and usually is.** A dimension
+    with one closed facet has a mean lifetime equal to that facet's lifetime, and
+    printing it as a mean invites a reader to treat one event as a rate. The two
+    thresholds above are what stop that: a verdict needs three closed facets and
+    a month of watching, and below either the number is still printed and the
+    judgement is withheld.
+    """
+
+    dimension: Dimension
+    # Every facet ever written in this dimension, live and not.
+    total: int
+    live: int
+    # Facets that stopped being live: superseded, withdrawn or dismissed.
+    closed: int
+    # Events, not rows: supersessions plus dismissals. A facet superseded twice
+    # is two changes and one is not the other.
+    changes: int
+    # Mean days from `created_at` to whenever it stopped, over closed facets.
+    # None when nothing has closed — an average of nothing is not zero.
+    mean_lifetime_days: float | None
+    # Mean age of the facets that are still live. Censored: a live facet has not
+    # finished its lifetime, so this is a lower bound and is reported apart from
+    # the mean above rather than pooled into it.
+    mean_live_age_days: float | None
+    # Oldest facet in this dimension to now. Zero when the dimension is empty.
+    observed_days: float
+
+    @property
+    def changes_per_facet(self) -> float | None:
+        """Churn per facet. None when there are no facets to divide by."""
+        return self.changes / self.total if self.total else None
+
+    @property
+    def has_verdict(self) -> bool:
+        return (
+            self.closed >= MIN_CLOSED_FOR_VERDICT
+            and self.observed_days >= MIN_OBSERVATION_DAYS
+        )
+
+    def verdict(self) -> str:
+        """Which of the two failure modes this dimension resembles, or neither.
+
+        The question M8.2 asks is whether the model is fitting noise or has
+        stopped learning. Both are real failures and they are opposite, so the
+        space between them is where a working model lives — but the space is only
+        visible with enough closed facets to average over, and this corpus has
+        none. Saying so is the answer, not a placeholder for one.
+        """
+        if not self.total:
+            return "no facets: nothing to measure"
+        if self.observed_days < MIN_OBSERVATION_DAYS:
+            return (
+                f"cannot say: {self.observed_days:.0f} days of history, "
+                f"under the {MIN_OBSERVATION_DAYS:.0f} a rate needs"
+            )
+        if self.closed < MIN_CLOSED_FOR_VERDICT:
+            return (
+                f"cannot say: {self.closed} facet(s) have ever changed, "
+                f"under the {MIN_CLOSED_FOR_VERDICT} a mean needs"
+            )
+        assert self.mean_lifetime_days is not None
+        if self.mean_lifetime_days < NOISE_LIFETIME_DAYS:
+            return (
+                f"fitting noise: facets last {self.mean_lifetime_days:.1f} days "
+                f"on average, under the {NOISE_LIFETIME_DAYS:.0f} a regularity needs"
+            )
+        return f"stable: mean lifetime {self.mean_lifetime_days:.0f} days"
+
+
+def stopped_learning(entries: "tuple[Stability, ...]") -> str | None:
+    """Whether the model as a whole has gone quiet, or None if that is unanswerable.
+
+    Separate from `Stability.verdict` because it is a claim about the *model*
+    rather than about a dimension, and the evidence differs: a dimension with no
+    facets says nothing about whether the system has stopped learning, while a
+    model with facets, a month of history and no changes at all says exactly
+    that.
+    """
+    total = sum(item.total for item in entries)
+    if not total:
+        return None
+    observed = max(item.observed_days for item in entries)
+    if observed < MIN_OBSERVATION_DAYS:
+        return None
+    if sum(item.changes for item in entries):
+        return None
+    return (
+        f"stopped learning: {total} facet(s) over {observed:.0f} days "
+        "and not one of them has ever changed"
+    )

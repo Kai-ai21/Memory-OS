@@ -109,6 +109,7 @@ from memoryos.application.watcher import WatchTree
 from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
 from memoryos.container import Container, ToolsUnsupported
+from memoryos.domain import user_model as user_model_domain
 from memoryos.domain.backoff import wait_for
 from memoryos.domain.debounce import DEFAULT_WINDOW
 from memoryos.domain.entities import Source
@@ -126,6 +127,8 @@ from memoryos.domain.surfacing import (
     EXPLANATIONS,
     SINGLE_ROUTE_BEST,
 )
+from memoryos.domain.user_model import MIN_CLOSED_FOR_VERDICT as USER_MODEL_MIN_CLOSED
+from memoryos.domain.user_model import MIN_OBSERVATION_DAYS as USER_MODEL_MIN_OBSERVATION_DAYS
 from memoryos.domain.user_model import MIN_SUPPORT as USER_MODEL_MIN_SUPPORT
 from memoryos.domain.values import (
     DEFAULT_SEARCH_MODE,
@@ -2648,9 +2651,19 @@ async def run_model_derive(settings: Settings) -> int:
     print(f"minimum support:        {USER_MODEL_MIN_SUPPORT} distinct observations")
     print(f"written:                {report.written}")
     print(f"superseded:             {report.superseded}")
+    print(f"withdrawn:              {report.withdrawn}")
     print(f"unchanged:              {report.unchanged}")
     print(f"below the bar:          {report.below_bar}")
     print(f"skipped (dismissed):    {report.skipped_dismissed}")
+
+    if report.withdrawals:
+        # Named rather than counted. A run that retired five claims the system
+        # used to make about somebody is the most consequential thing `derive`
+        # can do, and a bare number would let it happen silently.
+        print("\nretired, because the evidence is no longer there:")
+        for statement, reason in report.withdrawals:
+            print(f"  {textwrap.shorten(statement, width=76)}")
+            print(f"    — {reason}")
 
     if report.rejected:
         print("\nwhat was considered and not written:")
@@ -2781,16 +2794,201 @@ async def run_model_history(settings: Settings, *, facet_id: str) -> int:
         await container.dispose()
 
     for index, facet in enumerate(chain, start=1):
-        marker = (
-            "current"
-            if facet.superseded_by is None
-            else f"superseded by {facet.superseded_by}"
-        )
+        if facet.superseded_by is not None:
+            marker = f"superseded by {facet.superseded_by}"
+        elif facet.superseded_at is not None:
+            # M8.2's third state. Not current, and not replaced either — the
+            # evidence went away, and reading `superseded_by` alone would print
+            # this row as the live one.
+            marker = f"withdrawn {_stamp(facet.superseded_at)}"
+        else:
+            marker = "current"
         print(f"[{index}] {facet.id}  {_stamp(facet.created_at)}  ({marker})")
         for line in textwrap.wrap(facet.statement, width=78):
             print(f"     {line}")
-    if len(chain) == 1:
+        if facet.superseded_reason:
+            print(f"     — {facet.superseded_reason}")
+    if len(chain) == 1 and chain[0].superseded_at is None:
         print("\nOne version: this facet has never been revised.")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# Model evolution (M8.2)
+# --------------------------------------------------------------------------
+
+
+async def run_model_diff(settings: Settings, *, since: str, until: str | None) -> int:
+    """What changed between two moments, in the four ways the model can change.
+
+    **An empty diff is a result and is printed as one.** "Nothing changed between
+    these two dates" and "the model has nothing in it" are different statements,
+    and a command that printed the same blank page for both would make the second
+    unreadable — so the summary line carries the dates and the counts either way.
+    """
+    try:
+        start = parse_moment(since, name="--since")
+        end = parse_moment(until, name="--until") if until else None
+    except ValueError as exc:
+        print(str(exc))
+        return 1
+    if end is not None and end <= start:
+        print("--until must be after --since")
+        return 1
+
+    container = Container.build(settings)
+    try:
+        report = await user_model.diff(
+            container.database.session_factory, since=start, until=end
+        )
+    finally:
+        await container.dispose()
+
+    print(f"from {_stamp(report.since)} to {_stamp(report.until)}\n")
+
+    if report.added:
+        print(f"added ({len(report.added)})")
+        for change in report.added:
+            _print_change(change)
+    if report.superseded:
+        print(f"superseded ({len(report.superseded)})")
+        for change in report.superseded:
+            _print_change(change)
+            if change.withdrawn:
+                # The distinction M8.2 added the column for: a claim that moved
+                # and a claim that lost its evidence are opposite findings.
+                print("      withdrawn: no replacement — the support went away")
+            else:
+                assert change.replacement is not None
+                for line in textwrap.wrap(change.replacement.statement, width=74):
+                    print(f"      → {line}")
+    if report.dismissed:
+        print(f"dismissed ({len(report.dismissed)})")
+        for change in report.dismissed:
+            _print_change(change)
+
+    moves = report.confidence_changes
+    if moves:
+        print("confidence changes")
+        for change, before, after in moves:
+            direction = "up" if after > before else "down"
+            print(
+                f"  {before:.2f} → {after:.2f}  ({direction})  "
+                f"{textwrap.shorten(change.facet.statement, width=60)}"
+            )
+
+    print(
+        f"\n{len(report.added)} added, {len(report.superseded)} superseded, "
+        f"{len(report.dismissed)} dismissed, {len(moves)} confidence change(s)"
+    )
+    if report.empty:
+        print("the model did not change in this window")
+    return 0
+
+
+def _print_change(change: user_model.FacetChange) -> None:
+    print(f"  {_stamp(change.at)}  [{change.facet.dimension}]  {change.facet.id}")
+    for line in textwrap.wrap(change.facet.statement, width=74):
+        print(f"      {line}")
+    if change.reason:
+        print(f"      — {change.reason}")
+
+
+async def run_model_timeline(settings: Settings, *, dimension: str | None) -> int:
+    """Every event in the model's life, oldest first.
+
+    **The history of how the model changed is part of the model.** A facet that
+    held for six months and then stopped is more informative than either state
+    alone — the current state says what the system believes now, and only this
+    says whether it has ever been wrong about it.
+    """
+    wanted = _dimension_or_exit(dimension)
+    container = Container.build(settings)
+    try:
+        events = await user_model.timeline(
+            container.database.session_factory, dimension=wanted
+        )
+    finally:
+        await container.dispose()
+
+    if not events:
+        scope = f" in {wanted.value}" if wanted else ""
+        print(f"no model events{scope}: nothing has ever been written to the model")
+        return 0
+
+    for event in events:
+        print(f"{_stamp(event.at)}  {event.kind:10} [{event.dimension}]")
+        for line in textwrap.wrap(event.statement, width=76):
+            print(f"    {line}")
+        if event.detail:
+            print(f"    — {event.detail}")
+
+    counts: dict[str, int] = {}
+    for event in events:
+        counts[event.kind] = counts.get(event.kind, 0) + 1
+    summary = ", ".join(f"{kind} {count}" for kind, count in sorted(counts.items()))
+    print(f"\n{len(events)} event(s): {summary}")
+    return 0
+
+
+async def run_model_stability(settings: Settings) -> int:
+    """How often facets change, and how long they last, per dimension.
+
+    **The verdict column is allowed to say "cannot say", and here it always
+    does.** A model where everything changes weekly is fitting noise and one
+    where nothing ever changes has stopped learning; telling them apart needs
+    closed facets to average over and a month of watching, and this corpus has
+    neither. Printing a mean lifetime of 0.0 beside a confident label would be
+    the shape of a measurement with none of the substance.
+    """
+    container = Container.build(settings)
+    try:
+        entries = await user_model.stability(container.database.session_factory)
+    finally:
+        await container.dispose()
+
+    header = (
+        f"{'dimension':20} {'facets':>7} {'live':>5} {'changes':>8} "
+        f"{'mean life':>10} {'mean age':>9}"
+    )
+    print(header)
+    print("-" * len(header))
+    for entry in entries:
+        life = (
+            "—"
+            if entry.mean_lifetime_days is None
+            else f"{entry.mean_lifetime_days:.1f}d"
+        )
+        age = (
+            "—"
+            if entry.mean_live_age_days is None
+            else f"{entry.mean_live_age_days:.1f}d"
+        )
+        print(
+            f"{entry.dimension.value:20} {entry.total:>7} {entry.live:>5} "
+            f"{entry.changes:>8} {life:>10} {age:>9}"
+        )
+
+    print("\nverdicts")
+    for entry in entries:
+        print(f"  {entry.dimension.value:20} {entry.verdict()}")
+
+    print(
+        f"\nA verdict needs {USER_MODEL_MIN_CLOSED} closed facet(s) and "
+        f"{USER_MODEL_MIN_OBSERVATION_DAYS:.0f} days of history. Mean life is over "
+        "closed facets only; mean age is the live ones, which have not finished "
+        "their lifetimes and are therefore a lower bound."
+    )
+    overall = user_model_domain.stopped_learning(entries)
+    if overall is not None:
+        print(f"\n{overall}")
+    total = sum(entry.total for entry in entries)
+    if not total:
+        print(
+            "\nThe model holds no facets at all, so there is no churn to measure "
+            "and neither failure mode applies. What this measures is not the "
+            "model's stability but the corpus's size — see `model derive`."
+        )
     return 0
 
 
@@ -5224,6 +5422,23 @@ def build_parser() -> argparse.ArgumentParser:
         "history", help="every version of one facet, oldest first"
     )
     model_history.add_argument("facet_id")
+    model_diff = model_commands.add_parser(
+        "diff", help="what changed between two moments: added, superseded, dismissed"
+    )
+    model_diff.add_argument(
+        "--since", required=True, help="a date or timestamp, e.g. 2026-08-01"
+    )
+    model_diff.add_argument(
+        "--until", default=None, help="defaults to now"
+    )
+    model_timeline = model_commands.add_parser(
+        "timeline", help="every event in the model's life, oldest first"
+    )
+    model_timeline.add_argument("--dimension", default=None)
+    model_commands.add_parser(
+        "stability",
+        help="how often facets change and how long they last, per dimension",
+    )
 
     reflect_parser = commands.add_parser(
         "reflect",
@@ -5880,6 +6095,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.model_command == "history":
             return asyncio.run(run_model_history(settings, facet_id=args.facet_id))
+        if args.model_command == "diff":
+            return asyncio.run(
+                run_model_diff(settings, since=args.since, until=args.until)
+            )
+        if args.model_command == "timeline":
+            return asyncio.run(run_model_timeline(settings, dimension=args.dimension))
+        if args.model_command == "stability":
+            return asyncio.run(run_model_stability(settings))
 
     if args.command == "surfacing":
         if args.surfacing_command == "stats":

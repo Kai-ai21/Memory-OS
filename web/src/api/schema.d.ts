@@ -1831,8 +1831,12 @@ export interface components {
             origin: string;
             /** Statement */
             statement: string;
+            /** Superseded At */
+            superseded_at?: string | null;
             /** Superseded By */
             superseded_by?: string | null;
+            /** Superseded Reason */
+            superseded_reason?: string | null;
             /** Support Count */
             support_count: number;
         };
