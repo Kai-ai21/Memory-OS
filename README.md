@@ -50,6 +50,11 @@ failures in eight, dependency 0.50 concentrated entirely on id-passing, and 10,3
 tokens per question against ~2,000 for single-shot. See
 [Trajectory evaluation](#trajectory-evaluation) and the
 [Phase 7 retrospective](#phase-7-retrospective).
+**Phase 8 continues**: M8.1 (gap analysis) answers "what am I missing?" from four
+absences grounded in the corpus rather than in a model's opinion — and on this
+data it answers by declining, four runs out of four, reporting how many candidates
+it weighed and that the closest reached one of the two instances it needs. See
+[Gap analysis](#gap-analysis).
 **Phase 8 begun**: M8.0 (the user model) builds the structure for a model of the
 person — seven dimensions, evidence, supersession, dismissal — and measures how
 much of it this corpus can fill. **None of it**: zero facets across five
@@ -5547,6 +5552,153 @@ check it, which is the failure eight phases have been arranged against.
   open in a tab.
 * **`--dimension` on `show` filters the assessments too**, so asking for one
   dimension prints one section rather than one section and six gaps.
+
+## Gap analysis
+
+M8.1 answers "what am I missing?" — and on this corpus it answers it by
+declining, every time, with a number.
+
+```bash
+memoryos missing
+memoryos missing --about "How are two retrievers combined into one ranking?"
+memoryos missing --kind unevaluated_assumption
+```
+
+### Why this is different from everything before it
+
+Every prior capability **finds what exists**. Retrieval finds passages, the graph
+finds neighbours, the timeline finds buckets. This one names what is *absent*,
+and nothing in the corpus states what is absent.
+
+That makes it the easiest thing in the project to fake. **Absence has infinite
+candidates** — you are always missing something — so a system asked this question
+can produce output forever without ever being wrong in a way anybody can check.
+That is the exact shape of a horoscope, and the entire difficulty is deciding
+which absences are worth naming.
+
+The rule: **an absence may be named only when the thing that is missing exists
+somewhere else in your own history.** Not in a model's training. In your corpus.
+
+What that excludes is the whole category of advice. "You should consider rate
+limiting" may be good counsel; it is not grounded in anything about the person it
+is offered to, it would be produced with identical confidence for an empty
+corpus, and it cannot cite. `GapKind` has no member for it and no detector emits
+one.
+
+### The four kinds
+
+| Kind | What it compares | Grounded in |
+| --- | --- | --- |
+| `unstated_assumption` | decisions like this one recorded a belief this one does not | the assumptions, on named decisions |
+| `repeated_pattern` | this resembles a pattern whose outcomes went badly | M5.3, already ≥3 decisions |
+| `orphaned_work` | an entity was active, then was not, and no decision says why | M4.0's gap detection |
+| `unevaluated_assumption` | beliefs old enough to check that nobody has checked | M5.2 plus a clock |
+
+The last is the only one whose evidence is the **absence of a row** rather than
+the presence of one, which is as close to the milestone's subject as the schema
+gets.
+
+### The bar, and why it is two rather than three
+
+M5.3 needs three distinct decisions before a pattern may be written. A gap needs
+two, and the difference is the claim being made. "You repeatedly underestimate X"
+needs three occasions before *repeatedly* is honest. "These two decisions wrote
+down a belief this one did not" is fully established by the two — and it names
+both, so a reader disagrees with a specific claim rather than with a statistic.
+
+Three conditions, all required: two supporting instances, support strictly
+greater than contradiction, and confidence above a threshold that is *derived*
+from the minimum rather than set beside it, so the two cannot drift apart.
+
+**Below the bar, nothing is said.** Not a low-confidence gap — an absence stated
+tentatively is still an absence stated, and a reader remembers the sentence
+rather than the hedge.
+
+### What it actually said
+
+Four runs: the whole corpus, and three real M5.0 decisions.
+
+| `--about` | candidates | emitted | what it said |
+| --- | --- | --- | --- |
+| *(none — whole corpus)* | 0 | 0 | "I have no history that bears on this" |
+| the pgvector decision | 5 | **0** | "the closest reached 1 of 2" |
+| the rank-fusion decision | 3 | **0** | "the closest reached 1 of 2" |
+| the embedding-model decision | 6 | **0** | "the closest reached 1 of 2" |
+| a topic with no history | 0 | 0 | "I have no history that bears on this" |
+
+**Zero gaps, four times out of four, and that is the correct answer.** The reason
+is visible in the numbers: fourteen candidates were weighed across the three
+decisions and not one reached two supporting instances. This corpus has 37
+assumptions across 16 decisions, and 35 of them are ungrouped — each belief was
+written once, in its own words, on its own decision. There is no belief that two
+decisions share, so there is no belief a third can be missing.
+
+`unevaluated_assumption` fired for nothing either, for a different and cleaner
+reason: every decision here was recorded inside a fortnight, and the staleness
+threshold is thirty days. Twelve assumptions are unevaluated. None of them is yet
+*overdue*.
+
+### How often it correctly said nothing
+
+**Four of four**, plus every unit case built to make it speak wrongly. That is the
+number this milestone is judged on, and the acceptance criterion — a topic with no
+history producing no gaps — is a test rather than a claim.
+
+The temptation this milestone is arranged against is lowering the bar until
+output appears. Dropping `MIN_SUPPORT` to one would have produced fourteen gaps
+across those three decisions, each of the form "one other decision recorded a
+belief this one did not", and each of them a coincidence dressed as a norm. The
+threshold stayed and the report is a page of declines.
+
+### Any gap I would not have thought of myself
+
+**None, because none was emitted.** Reporting otherwise would require inventing
+one.
+
+What the *silences* did surface is a fact about the corpus I had not put in those
+terms: 35 of 37 assumptions are ungrouped, and that single number is why three of
+the four detectors can never fire here. M5.2 built assumption grouping as a human
+judgement and nobody has spent an hour on it. Until somebody does,
+`unstated_assumption` has no shared belief to notice the absence of — which also
+means the cheapest thing that would make this milestone produce anything is an
+hour of grouping, not more decisions.
+
+### Any gap that was wrong or generic
+
+None to quote, for the same reason. The nearest thing to a defect is a near-miss
+worth naming: on the pgvector decision the analysis considered five candidates,
+and every one of them was an assumption that appeared on exactly one other
+decision because the two questions happened to share a content word. With
+`MIN_SUPPORT = 1` those would have been the output, and they would have read like
+findings.
+
+### Deviations and ambiguities
+
+* **`orphaned_work` requires two or more mentions before a silence counts**, so
+  one mention followed by a gap is not "abandoned work" — it is a word somebody
+  used once. It also treats a decision that names the entity as *contradicting*
+  evidence rather than as a filter, so work that stopped because a decision says
+  it stopped lowers the confidence instead of silently removing the candidate.
+* **`unstated_assumption` compares content-word sets, not sentences.** Two people
+  writing down the same belief will not write the same sentence, and comparing
+  sentences would make every assumption unique — the detector would never fire
+  rather than fire wrongly. The coarseness is what this corpus can support.
+* **Contradicting evidence for an unstated assumption is a peer whose version of
+  the belief broke.** If the last two decisions to record it were wrong about it,
+  "you forgot to write this down" is not the useful sentence.
+* **`--about` resolves to a specific decision only on two or more shared content
+  words.** One is a coincidence, and silently analysing the wrong decision's
+  context is the failure M7.3 caught in `get_decisions`.
+* **`find_gaps_in_reasoning` is registered last** among the seven tools. The order
+  is what a model reads, and a tool that answers "nothing" most of the time should
+  not be the first plausible option for a vague question.
+* **The tool's citations are the corpus evidence under the decisions behind a
+  gap**, following `get_decisions`: a gap is not a passage, and where the
+  decisions link to no memory the content says so rather than being quietly
+  uncited.
+* **No UI.** The command and the agent tool are the surfaces; a page that shows
+  "nothing" almost always is a page nobody opens twice, and the honest place for
+  this output is beside the question that prompted it.
 
 ## Migrations
 
