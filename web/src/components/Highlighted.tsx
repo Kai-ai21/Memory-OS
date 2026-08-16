@@ -31,6 +31,15 @@ interface Props {
   /** Show the whole lead-in and the full height rather than clamping. */
   full?: boolean;
   /**
+   * Clamp harder, for a list where results are compared against each other.
+   *
+   * M9.0 measurement: at the default clamp one result with two matched chunks
+   * still filled most of a 900px viewport, so two results never appeared
+   * together — and a ranked list you cannot see two rows of is not a ranking.
+   * Ignored when `full` is set, because expanding is the request to read.
+   */
+  tight?: boolean;
+  /**
    * `charStart`/`charEnd` already index into `text`.
    *
    * True for a citation excerpt, where the API located the span inside the
@@ -41,11 +50,20 @@ interface Props {
   absolute?: boolean;
 }
 
-export function Highlighted({ text, charStart, charEnd, code, full, absolute }: Props) {
+export function Highlighted({
+  text,
+  charStart,
+  charEnd,
+  code,
+  full,
+  tight,
+  absolute,
+}: Props) {
   const span = absolute
     ? { start: charStart, end: charEnd }
     : ownSpan(text, charStart, charEnd);
-  const className = `${code ? "code-content" : "prose-content"}${full ? "" : " clamped"}`;
+  const clamp = full ? "" : tight ? " clamped-tight" : " clamped";
+  const className = `${code ? "code-content" : "prose-content"}${clamp}`;
 
   if (!span) {
     // The offsets and the text disagree. Show the text, mark nothing.

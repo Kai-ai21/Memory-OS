@@ -17,12 +17,12 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { App } from "../../App";
 import { ReflectionsPage } from "./ReflectionsPage";
-import { renderWithProviders, stubFetch } from "../../test/harness";
+import { SHELL_ROUTES, renderWithProviders, stubFetch } from "../../test/harness";
 
 const REFLECTION = {
   id: "44444444-4444-7444-8444-444444444444",
@@ -139,9 +139,15 @@ describe("the reflections page", () => {
 });
 
 describe("where reflections are not", () => {
-  it("has no nav tab, so nothing volunteers a claim about you", async () => {
-    // The home screen renders search; it must not ask for reflections at all.
-    stubFetch([{ match: "/search", body: { hits: [], total: 0 } }]);
+  it("has no nav entry, so nothing volunteers a claim about you", async () => {
+    // The overview must not ask for reflections at all. M9.0 moved search to
+    // `/search` and put an overview here; the rule this test protects is
+    // unchanged, and the sidebar is now the thing that must not name them.
+    stubFetch([
+      ...SHELL_ROUTES,
+      { match: "/decisions", body: [] },
+      { match: "/memories", body: [] },
+    ]);
     renderWithProviders(<App />, { route: "/" });
 
     const nav = screen.getByRole("navigation");
@@ -166,8 +172,26 @@ describe("where reflections are not", () => {
     // carries its support count while every absence carries its cause. The rule
     // this test protects is about *volunteering*, and nothing on that page
     // speaks unasked either.
-    expect(nav.textContent).toBe(
-      "searchasktimelinedecisionsjudgementscorpussurfacingmodel",
-    );
+    //
+    // M9.0 pins the link names rather than the concatenated text of the whole
+    // sidebar. The old string broke on a group heading being renamed, which is
+    // not the thing worth protecting — what is worth protecting is exactly this
+    // list of destinations.
+    expect(
+      within(nav)
+        .getAllByRole("link")
+        .map((link) => link.textContent?.replace(/soon$/, "").trim()),
+    ).toEqual([
+      "overview",
+      "search",
+      "graph",
+      "timeline",
+      "agent",
+      "decisions",
+      "model",
+      "judgements",
+      "surfacing",
+      "corpus",
+    ]);
   });
 });

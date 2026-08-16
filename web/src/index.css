@@ -1,100 +1,19 @@
-/* Memory OS — search interface.
+/* Memory OS — the visual language, as classes.
  *
- * The character being aimed at is a reference instrument: something closer to a
- * well-made terminal client or a lab notebook than to an admin dashboard. Dense,
- * information-forward, and legible at small sizes, because the person using it
- * wants to see the data rather than be guided through it.
+ * The values all live in `styles/tokens.css`; this file spends them. It is
+ * deliberately the only place a border, a surface or a text role is defined, so
+ * that "make the rules lighter" is one edit here rather than a search across
+ * fifty components.
  *
- * Three decisions carry most of that.
- *
- * GROUND — warm, and committed to. A paper tone rather than pure white, and a
- * warm near-black rather than #000. Pure white on a screen full of small dense
- * text is glary, and warm neutrals make the single accent read as ink on paper
- * instead of as a UI colour.
- *
- * TYPE — three roles, deliberately distinguishable at a glance:
- *   metadata  JetBrains Mono, small, wide-tracked. Paths, scores, ordinals,
- *             offsets, hashes, timestamps. Tabular figures so columns of scores
- *             line up and can be compared vertically.
- *   prose     Source Serif 4. The chunk text being *read*. A serif because it is
- *             the one thing on screen that is content rather than instrument, and
- *             it should not look like more metadata.
- *   code      JetBrains Mono again, but larger, tighter-leaded and on a tinted
- *             surface with a rule — so a code chunk never blurs into the
- *             metadata set in the same face.
- *
- * ACCENT — one amber, spent almost entirely on the matched-span highlight. That
- * highlight is the most important element in the interface: it is what makes a
- * result legible without reading it. Everything else stays neutral so the amber
- * never has to compete.
+ * The structural device throughout is a **ruled sheet**: sections are separated
+ * by hairlines, never by cards. No `rounded-xl`, no drop shadows, no elevation
+ * scale. A card says "this is a discrete object you might rearrange", which is
+ * true of a dashboard widget and false of everything here — a search result, a
+ * chunk, a decision are all passages in one document.
  */
 
-@import "@fontsource/jetbrains-mono/400.css";
-@import "@fontsource/jetbrains-mono/500.css";
-@import "@fontsource/jetbrains-mono/700.css";
-@import "@fontsource-variable/source-serif-4";
-
+@import "./styles/tokens.css";
 @import "tailwindcss";
-
-@theme {
-  /* Warm neutral ground. `paper` is the page, `raised` is anything sitting on
-   * it — a two-step scale, because a tool with five surface levels reads as
-   * decoration. */
-  --color-paper: #f6f3ec;
-  --color-raised: #fffdf7;
-  --color-sunken: #efeae0;
-  --color-rule: #ded6c6;
-  --color-rule-strong: #c8bda7;
-
-  /* Warm ink. `ink` for content, `muted` for metadata, `faint` for things
-   * present but not being read. */
-  --color-ink: #24211b;
-  --color-muted: #6a6357;
-  --color-faint: #9a9284;
-
-  /* The one accent. `amber` for active state and interactive text, `wash` for
-   * the highlight behind matched text, `edge` for its underline. The wash is
-   * deliberately translucent so it multiplies over both paper and code
-   * surfaces without needing a second value. */
-  --color-amber: #96570b;
-  --color-amber-bright: #c8791a;
-  --color-wash: color-mix(in oklab, #e8a63c 42%, transparent);
-  --color-edge: #c8791a;
-
-  /* Verdict colours. Muted on purpose — these are annotations on data, not
-   * status badges, and three saturated pills per row would out-shout the
-   * highlight. */
-  --color-affirm: #2f6b3f;
-  --color-deny: #8f3222;
-
-  /* Kind colours, for the timeline's stacked bars.
-   *
-   * This is the one place the single-accent rule bends, and it bends because
-   * here the categorical encoding *is* the content: a bar that does not say
-   * what it is made of is a count, which M4.0 already prints in a terminal. The
-   * whole reason to draw the chart is to see that a period was all code, or that
-   * the notes arrived in a burst.
-   *
-   * Kept in the same warm, desaturated register as everything else, and dark
-   * enough to hold contrast against `paper` at 2px tall. `code` gets the amber
-   * because it is the dominant kind in this corpus and the eye should land on
-   * the bulk; the highlight still owns the amber everywhere text is read, and
-   * the two never appear in the same view. */
-  --color-kind-code: #b8791a;
-  --color-kind-note: #47657a;
-  --color-kind-document: #63558a;
-  --color-kind-email: #2b7466;
-  --color-kind-commit: #8a5730;
-  --color-kind-meeting: #2f6b3f;
-  --color-kind-bookmark: #8f3222;
-  --color-kind-other: #8b8376;
-
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-prose: "Source Serif 4 Variable", "Source Serif 4", Charter, Georgia, serif;
-
-  --text-meta: 0.6875rem;
-  --text-meta--line-height: 1.45;
-}
 
 @layer base {
   html {
@@ -137,6 +56,18 @@
   * {
     scrollbar-color: var(--color-rule-strong) transparent;
     scrollbar-width: thin;
+  }
+
+  /* Nothing in this interface animates except the two things that appear and
+   * disappear — the palette and the drawer — and even those stop for anybody
+   * who has asked the OS for stillness. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
@@ -198,6 +129,9 @@
     font-size: 0.9375rem;
     line-height: 1.62;
     color: var(--color-ink);
+    /* Prose in this corpus contains file paths and identifiers, which have no
+     * break opportunities and are long enough to push a narrow column sideways. */
+    overflow-wrap: break-word;
   }
 
   .code-content {
@@ -210,6 +144,51 @@
     background-color: var(--color-sunken);
     border-left: 2px solid var(--color-rule-strong);
     padding: 0.5rem 0.75rem;
+    /* Wide code scrolls in its own box; the page never scrolls sideways.
+     *
+     * `pre-wrap` wraps at spaces but cannot break a 90-character comment rule
+     * or a deeply indented line, and at 375px those pushed the whole document
+     * to 654px wide — every view, not just this one, because the widest
+     * element on a page sets the body's scroll width. Breaking the lines
+     * instead would be worse: alignment is most of what makes code readable,
+     * and a diff whose indentation is invented is not a diff. */
+    overflow-x: auto;
+  }
+
+  /* The display face, at the three sizes it is used at and nowhere else.
+   *
+   * Confined deliberately. Fraunces has enough character that it reads as a
+   * voice rather than as a font, and a voice used on every heading in a
+   * fourteen-view tool becomes wallpaper. It marks *the top of a page* — the
+   * wordmark, a page title, the overview's one statement — and section
+   * headings stay in the mono label register they were already in.
+   */
+  .display {
+    font-family: var(--font-display);
+    font-optical-sizing: auto;
+    color: var(--color-ink);
+    letter-spacing: -0.015em;
+    line-height: 1.12;
+  }
+
+  .display-page {
+    font-family: var(--font-display);
+    font-size: 1.75rem;
+    font-weight: 400;
+    letter-spacing: -0.015em;
+    line-height: 1.15;
+    color: var(--color-ink);
+  }
+
+  /* The one paragraph on the overview that has to be *read* rather than
+   * scanned. Larger and looser than `.prose-content`, with a measure that stops
+   * well short of the column so the line length stays in the fifties. */
+  .prose-lead {
+    font-family: var(--font-prose);
+    font-size: 1.0625rem;
+    line-height: 1.68;
+    color: var(--color-muted);
+    max-width: 58ch;
   }
 
   /* --- Controls -----------------------------------------------------------
@@ -225,6 +204,34 @@
 
   .field:focus {
     border-color: var(--color-amber-bright);
+    outline: none;
+  }
+
+  /* The search box on the overview and the search page.
+   *
+   * A ruled underline rather than a box. A bordered input is a form control and
+   * reads as one of several; this is the primary act of the whole application,
+   * and a single heavy rule under a large line of type says so without a filled
+   * button shouting it. The rule thickens and turns amber on focus, which is
+   * the only place interaction colour appears on the page.
+   */
+  .field-prominent {
+    background-color: transparent;
+    border: 0;
+    border-bottom: 1.5px solid var(--color-rule-strong);
+    color: var(--color-ink);
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    padding: 0.4rem 0 0.5rem;
+    width: 100%;
+  }
+
+  .field-prominent::placeholder {
+    color: var(--color-faint);
+  }
+
+  .field-prominent:focus {
+    border-bottom-color: var(--color-edge);
     outline: none;
   }
 
@@ -266,6 +273,61 @@
     background-color: color-mix(in oklab, var(--color-deny) 9%, var(--color-raised));
   }
 
+  /* --- Navigation ----------------------------------------------------------
+   * A nav item is a line of type with a marker, not a filled pill.
+   *
+   * The active state is a 2px amber bar on the leading edge and a shift to full
+   * ink. A filled background would put eight coloured rectangles down the left
+   * of every screen, which is the admin-panel look this interface is built to
+   * avoid — and it would spend the accent on saying "you are here", which the
+   * reader already knows.
+   */
+  .nav-item {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    border-left: 2px solid transparent;
+    padding: 0.3rem 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.02em;
+    color: var(--color-muted);
+  }
+
+  .nav-item:hover {
+    color: var(--color-ink);
+    background-color: color-mix(in oklab, var(--color-rule) 28%, transparent);
+  }
+
+  .nav-item-on {
+    border-left-color: var(--color-edge);
+    color: var(--color-ink);
+    background-color: color-mix(in oklab, var(--color-rule) 34%, transparent);
+  }
+
+  /* A route that exists but has nothing behind it yet. Same type as a live
+   * item, dimmed and marked — hiding it would misrepresent the shape of the
+   * application, and styling it identically would misrepresent its state. */
+  .nav-item-soon {
+    color: var(--color-faint);
+  }
+
+  /* --- Figures -------------------------------------------------------------
+   * A live count, at the size that makes it the thing you see first.
+   *
+   * Mono rather than the display face: these are numbers to be compared, and
+   * tabular figures in a column that lines up beat a prettier proportional
+   * numeral. The label sits *under* the number in small caps — above it, the
+   * eye reads the label first and the number becomes a footnote.
+   */
+  .figure-value {
+    font-family: var(--font-mono);
+    font-size: 1.5rem;
+    font-weight: 500;
+    line-height: 1.1;
+    color: var(--color-ink);
+  }
+
   /* Clamped chunk text.
    *
    * Measured before adding this: ten results ran to 19 screens, averaging nearly
@@ -276,8 +338,26 @@
    */
   .clamped {
     max-height: 16em;
-    overflow: hidden;
+    /* Only the vertical axis. `overflow: hidden` would clip horizontally too,
+     * which silently cuts the right-hand end off a wide code line rather than
+     * letting `.code-content` scroll it. */
+    overflow-y: hidden;
     mask-image: linear-gradient(to bottom, black 78%, transparent 100%);
+  }
+
+  /* The list view's tighter clamp.
+   *
+   * M9.0 measurement: at 16em a single result with two matched chunks still ran
+   * to most of a 900px viewport, so two results never appeared together and the
+   * ranking — the entire point of the page — could not be compared. 7em holds
+   * roughly five lines of prose or seven of code, which is enough to judge a
+   * match and not enough to read a document. Expanding a chunk lifts the clamp
+   * entirely, so reading is still one click away.
+   */
+  .clamped-tight {
+    max-height: 7em;
+    overflow-y: hidden;
+    mask-image: linear-gradient(to bottom, black 72%, transparent 100%);
   }
 
   /* --- The gap hatch -------------------------------------------------------

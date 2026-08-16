@@ -44,6 +44,19 @@ export function CorpusPage() {
             alarm={unembedded > 0}
           />
           <Figure label="cache entries" value={count(data.cache_entries)} />
+          {/* The graph half of the corpus. Here as well as on the overview
+              because this is the page somebody opens to find out why an
+              entity-scoped view is empty, and the answer is usually one of
+              these two numbers. */}
+          <Figure label="entities" value={count(data.entities)} note="unmerged" />
+          <Figure
+            label="relationships"
+            value={count(data.relationships)}
+            // Distinct claims, not stored rows: the same relationship asserted
+            // in five chunks is five rows deliberately, and reporting those as
+            // "relationships" would overstate the graph fivefold.
+            note={data.relationships === 0 ? "none extracted" : "distinct claims"}
+          />
         </dl>
         <div className="mt-1 flex flex-wrap gap-x-5 gap-y-1">
           <Meta label="model">{data.embedding_model}</Meta>

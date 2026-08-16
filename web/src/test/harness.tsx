@@ -70,6 +70,49 @@ export function stubFetch(routes: Route[]): Recorded[] {
   return calls;
 }
 
+/**
+ * What `/stats` returns. Deliberately not round numbers.
+ *
+ * A fixture of 100 memories and 1000 chunks is one a component can accidentally
+ * hardcode and still pass. These are ugly on purpose, so a number that appears
+ * on screen without coming through the API is visible as a number nobody would
+ * have typed.
+ */
+export const STATS = {
+  memories: 282,
+  current_memories: 271,
+  chunks: 3833,
+  embedded_chunks: 3820,
+  cache_entries: 3719,
+  coverage: 0.9966,
+  models: { "bge-small-en-v1.5@1": 3820 },
+  entities: 34,
+  relationships: 7,
+  embedding_model: "bge-small-en-v1.5@1",
+  chunker_version: "structural-v2",
+  model_window: 512,
+};
+
+/** A healthy `/health/ready`. */
+export const READY = {
+  status: "ok",
+  database: true,
+  pgvector_version: "0.8.0",
+  graph: true,
+};
+
+/**
+ * The requests the shell itself makes on every route.
+ *
+ * The sidebar reads stats and readiness on all fourteen views, so a test that
+ * renders `<App />` for any reason needs these routed or the harness throws on
+ * an unstubbed request. Spread it into the route list rather than repeated.
+ */
+export const SHELL_ROUTES: Route[] = [
+  { match: "/stats", body: STATS },
+  { match: "/health/ready", body: READY },
+];
+
 /** The chunk text used by the fixture, exported so a test can assert on it. */
 export const MATCHED_TEXT = "a worker claims a job and holds a lease on it";
 

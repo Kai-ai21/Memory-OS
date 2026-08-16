@@ -1731,6 +1731,8 @@ async def run_stats(settings: Settings) -> int:
             f"({stats.coverage:.1%} coverage)"
         )
         print(f"cache entries     {stats.cache_entries}")
+        print(f"entities          {stats.entities}")
+        print(f"relationships     {stats.relationships} (distinct claims, not assertions)")
         if stats.chunks:
             # How much of the corpus the cache spared. Distinct from the
             # per-run hit rate, which the embed job logs as it goes.

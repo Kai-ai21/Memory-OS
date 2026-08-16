@@ -31,31 +31,57 @@ export function SearchPage() {
   const [draft, setDraft] = useState(state.q);
   const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
   const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLDivElement>(null);
 
   // The box follows the URL, so the back button visibly restores the query rather
   // than only the results.
   useEffect(() => setDraft(state.q), [state.q]);
 
-  // Autofocus on load, and `/` from anywhere. The shortcut is deliberately not
-  // bound while typing — `/` is a character, and a search box that swallows it
-  // would be unusable for path queries.
+  // `/` belongs to the shell now — bound once there so it works on all fourteen
+  // routes rather than on this one alone. What stays here are the two
+  // behaviours that only mean anything with a result list on screen: focus on
+  // arrival, and Escape to get back out of the box.
   useEffect(() => {
     input.current?.focus();
     const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      const typing =
-        target?.tagName === "INPUT" ||
-        target?.tagName === "TEXTAREA" ||
-        target?.isContentEditable === true;
-      if (event.key === "/" && !typing) {
-        event.preventDefault();
-        input.current?.focus();
+      if (event.key === "Escape" && document.activeElement === input.current) {
+        input.current?.blur();
       }
-      if (event.key === "Escape") input.current?.blur();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  /**
+   * Arrows walk the results.
+   *
+   * ArrowDown from the query box steps into the list, which is the gesture that
+   * makes the page keyboard-drivable: the box is where you already are after
+   * typing, and reaching the first result should not cost six tabs through the
+   * filter row.
+   *
+   * Result *links* only, not every focusable thing. A row also carries two
+   * judgement buttons and a chunk toggle, and arrowing through five controls
+   * per result is not navigation — it is the tab key with extra steps.
+   */
+  const step = useCallback((delta: number) => {
+    const links = Array.from(
+      list.current?.querySelectorAll<HTMLElement>("[data-result-link]") ?? [],
+    );
+    if (links.length === 0) return;
+    const here = links.indexOf(document.activeElement as HTMLElement);
+    const next = here < 0 ? (delta > 0 ? 0 : links.length - 1) : here + delta;
+    links[Math.max(0, Math.min(links.length - 1, next))]?.focus();
+  }, []);
+
+  const onArrow = useCallback(
+    (event: React.KeyboardEvent) => {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      event.preventDefault();
+      step(event.key === "ArrowDown" ? 1 : -1);
+    },
+    [step],
+  );
 
   const update = useCallback(
     (next: Partial<SearchState>) => {
@@ -92,24 +118,36 @@ export function SearchPage() {
           event.preventDefault();
           update({ q: draft.trim() });
         }}
-        className="flex items-center gap-2"
+        className="flex flex-col gap-1"
         role="search"
       >
-        <input
-          ref={input}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder="search the corpus"
-          aria-label="Search query"
-          className="field flex-1 font-mono text-sm"
-          spellCheck={false}
-          autoComplete="off"
-        />
-        <button type="submit" className="btn" disabled={!draft.trim()}>
+        <label htmlFor="search-query" className="meta-label">
           search
-        </button>
-        <span className="meta hidden text-faint md:inline">
-          <span className="kbd">/</span> to focus
+        </label>
+        <div className="flex items-baseline gap-3">
+          <input
+            id="search-query"
+            ref={input}
+            // The shell's `/` looks for this, so one key focuses the search box
+            // on whichever page has one.
+            data-search-input
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            // ArrowDown out of the box and into the results.
+            onKeyDown={onArrow}
+            placeholder="search the corpus"
+            aria-label="Search query"
+            className="field-prominent"
+            spellCheck={false}
+            autoComplete="off"
+          />
+          <button type="submit" className="btn shrink-0" disabled={!draft.trim()}>
+            search
+          </button>
+        </div>
+        <span className="meta text-faint">
+          <span className="kbd">/</span> focuses · <span className="kbd">↓</span> walks the
+          results
         </span>
       </form>
 
@@ -153,7 +191,7 @@ export function SearchPage() {
           search, so wording matters more than keywords.
         </Empty>
       ) : (
-        <div>
+        <div ref={list} onKeyDown={onArrow}>
           {results.data?.hits.map((hit, index) => (
             <ResultRow
               key={hit.memory_id}

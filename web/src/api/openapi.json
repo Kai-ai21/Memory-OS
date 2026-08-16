@@ -4253,6 +4253,10 @@
             "title": "Embedding Model",
             "type": "string"
           },
+          "entities": {
+            "title": "Entities",
+            "type": "integer"
+          },
           "memories": {
             "title": "Memories",
             "type": "integer"
@@ -4267,6 +4271,10 @@
             },
             "title": "Models",
             "type": "object"
+          },
+          "relationships": {
+            "title": "Relationships",
+            "type": "integer"
           }
         },
         "required": [
@@ -4277,6 +4285,8 @@
           "cache_entries",
           "coverage",
           "models",
+          "entities",
+          "relationships",
           "embedding_model",
           "chunker_version",
           "model_window"

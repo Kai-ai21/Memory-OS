@@ -92,6 +92,29 @@ async function readDetail(response: Response): Promise<string> {
   }
 }
 
+/**
+ * Readiness, which is the one endpoint whose failure body is the answer.
+ *
+ * `/health/ready` returns 503 when Postgres is unreachable and 200 with
+ * `status: degraded` when only the graph is. Both carry the same shape, and
+ * both are things the indicator should say in words. Only a request that never
+ * arrived is an error here — that one means the API itself is not running,
+ * which is a different sentence.
+ */
+async function readiness(): Promise<Readiness> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/health/ready`);
+  } catch (cause) {
+    throw new NetworkError("/health/ready", cause);
+  }
+  try {
+    return (await response.json()) as Readiness;
+  } catch {
+    throw new ApiError(response.status, "unreadable readiness body", "/health/ready");
+  }
+}
+
 // --------------------------------------------------------------------------
 // Response aliases, so components never reach into `paths` themselves
 // --------------------------------------------------------------------------
@@ -109,6 +132,8 @@ export type Citation = NonNullable<MemoryHit["citations"]>[number];
 export type Explanation = NonNullable<MemoryHit["explanation"]>;
 export type MemoryDetail = Ok<paths["/memories/{memory_id}"]["get"]>;
 export type MemoryChunk = MemoryDetail["chunks"][number];
+export type MemorySummary = Ok<paths["/memories"]["get"]>[number];
+export type Readiness = Ok<paths["/health/ready"]["get"]>;
 export type Source = Ok<paths["/sources"]["get"]>[number];
 export type Stats = Ok<paths["/stats"]["get"]>;
 export type Doctor = Ok<paths["/doctor"]["get"]>;
@@ -194,6 +219,28 @@ export const api = {
   },
 
   memory: (id: string) => request<MemoryDetail>(`/memories/${id}`),
+
+  /**
+   * Current memories, newest ingestion first.
+   *
+   * Two callers with different reasons. The overview shows the first handful as
+   * recent activity. The command palette pulls a larger page once when it
+   * opens and filters client-side, because "open a memory by path" has to
+   * answer on every keystroke and a request per keystroke against a local API
+   * is both slower and noisier than holding 500 keys in memory.
+   */
+  memories: (limit = 50) => request<MemorySummary[]>(`/memories?limit=${limit}`),
+
+  /**
+   * What this instance can currently do. Cheap: two connectivity checks.
+   *
+   * The only endpoint here read through `readiness` rather than `request`,
+   * because it answers 503 when Postgres is unreachable and that response has
+   * a *body worth rendering*. Letting the generic client raise on it would
+   * turn "the database is down, the graph is up" into "request failed", which
+   * is the one thing a health indicator must never do.
+   */
+  ready: () => readiness(),
 
   sources: () => request<Source[]>("/sources"),
 

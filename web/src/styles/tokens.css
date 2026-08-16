@@ -1,0 +1,153 @@
+/* The design system, as values. Nothing in this file draws anything.
+ *
+ * Every colour, face and step the interface uses is declared here and nowhere
+ * else. A colour hardcoded in a component is a colour that will not change when
+ * the palette is revised, and this project has enough surface — fourteen views —
+ * that "revise the palette" has to be one edit rather than fourteen.
+ *
+ * THE CHARACTER: a well-made reading application. Not a dashboard. The corpus is
+ * prose and code that somebody reads and judges, so the interface is built like
+ * a printed reference — ruled sheets, generous margins, strong typographic
+ * hierarchy, one accent — rather than like a control panel of cards and pills.
+ *
+ * GROUND — warm, and committed to throughout. `paper` is a bone white rather
+ * than #fff, `ink` is a warm near-black rather than #000. Pure white behind
+ * small dense text is glary under a lamp, and warm neutrals make the single
+ * accent read as ink on paper instead of as a UI colour. Every neutral in the
+ * scale carries the same hue, so nothing on screen reads as cool by accident.
+ *
+ * TYPE — three faces, three jobs, distinguishable at a glance:
+ *   display   Fraunces. Page titles and the wordmark only. It has real character
+ *             — soft terminals, a slight wonk — which is what keeps the
+ *             interface from reading as generic, and it is confined to a dozen
+ *             elements so that character never becomes noise.
+ *   content   Source Serif 4. The thing being *read*: chunk text, statements,
+ *             answers. A serif because it is content rather than instrument.
+ *   mono      JetBrains Mono. Paths, scores, offsets, hashes, labels, code.
+ *             Tabular figures, so a column of scores compares vertically.
+ *
+ * ACCENT — one amber, spent almost entirely on the matched-span highlight and on
+ * interaction. That highlight is the most important element in the product: it
+ * is what makes a search result legible without reading it. Everything else
+ * stays neutral so the amber never has to compete for attention with a button.
+ */
+
+/* Self-hosted, because this is a local-first tool that has to work with no
+ * network. One file rather than the package's whole subset set: the corpus and
+ * the interface are English, and shipping Cyrillic and Vietnamese to a browser
+ * that will never request them is dead weight in `dist`. */
+@font-face {
+  font-family: "Fraunces Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("@fontsource-variable/fraunces/files/fraunces-latin-wght-normal.woff2")
+    format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/700.css";
+@import "@fontsource-variable/source-serif-4";
+
+@theme {
+  /* --- Ground ------------------------------------------------------------
+   * A four-step surface scale and two rules. Four rather than the two this
+   * had before Phase 9, because the shell introduced a persistent sidebar and
+   * a modal, and both need to sit *behind* or *above* the page without a drop
+   * shadow doing the work. `sunken` is the sidebar and code blocks; `raised`
+   * is anything the reader is meant to act on; `float` is the command palette,
+   * the only surface that overlaps another.
+   */
+  --color-paper: #f6f3ec;
+  --color-raised: #fffdf7;
+  --color-sunken: #efeae0;
+  --color-float: #fffdf7;
+  /* The sidebar. Between `paper` and `sunken`, and opaque rather than an alpha
+   * of either: the same element is the mobile drawer, where anything
+   * translucent shows the article through the navigation. */
+  --color-nav: #f2eee6;
+  --color-rule: #ded6c6;
+  --color-rule-strong: #c8bda7;
+  /* The scrim behind the palette. Warm and weak: a black 50% wash would put a
+   * cool grey over every neutral on the page and break the temperature rule
+   * the moment the dialog opens. */
+  --color-scrim: color-mix(in oklab, #24211b 34%, transparent);
+
+  /* --- Ink ---------------------------------------------------------------
+   * `ink` for content, `muted` for metadata being read, `faint` for metadata
+   * that is present but not being read. Three levels, not five: a fourth grey
+   * is a level nobody can identify without holding two of them side by side.
+   */
+  --color-ink: #24211b;
+  --color-muted: #6a6357;
+  --color-faint: #9a9284;
+
+  /* --- The one accent ----------------------------------------------------
+   * `amber` for interactive text and active state, `wash` for the highlight
+   * behind matched text, `edge` for its underline. The wash is translucent so
+   * it multiplies over paper and over the code surface without needing a
+   * second value per background.
+   */
+  --color-amber: #96570b;
+  --color-amber-bright: #c8791a;
+  --color-wash: color-mix(in oklab, #e8a63c 42%, transparent);
+  --color-edge: #c8791a;
+
+  /* Verdicts. Muted on purpose — these annotate data, they are not status
+   * badges, and three saturated pills in a result row would out-shout the
+   * highlight that row exists to show. */
+  --color-affirm: #2f6b3f;
+  --color-deny: #8f3222;
+
+  /* Kind colours, for the timeline's stacked bars.
+   *
+   * The one place the single-accent rule bends, and it bends because here the
+   * categorical encoding *is* the content: a bar that does not say what it is
+   * made of is a count, which the CLI already prints. Kept in the same warm,
+   * desaturated register as everything else, and dark enough to hold contrast
+   * against `paper` at 2px tall. The highlight still owns the amber everywhere
+   * text is read, and the two never appear in the same view. */
+  --color-kind-code: #b8791a;
+  --color-kind-note: #47657a;
+  --color-kind-document: #63558a;
+  --color-kind-email: #2b7466;
+  --color-kind-commit: #8a5730;
+  --color-kind-meeting: #2f6b3f;
+  --color-kind-bookmark: #8f3222;
+  --color-kind-other: #8b8376;
+
+  /* --- Faces ------------------------------------------------------------- */
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-prose: "Source Serif 4 Variable", "Source Serif 4", Charter, Georgia, serif;
+  --font-display: "Fraunces Variable", "Fraunces", Charter, Georgia, serif;
+
+  --text-meta: 0.6875rem;
+  --text-meta--line-height: 1.45;
+
+  /* --- Space -------------------------------------------------------------
+   * 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64. This is Tailwind's own 4px scale
+   * (`p-1` … `p-16`) named, so the two cannot drift: utilities and custom
+   * properties resolve to the same eight numbers.
+   *
+   * Density here comes from hierarchy — type size, weight, and rules — not
+   * from removing space. A cramped row is not dense, it is just hard to read.
+   */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  /* The width of the sidebar, and the measure of the reading column. Both are
+   * layout constants referenced from more than one component, which is what
+   * makes them tokens rather than numbers in a class. */
+  --width-sidebar: 15rem;
+  --width-reading: 46rem;
+}
