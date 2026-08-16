@@ -20,7 +20,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../api/client";
-import { ALL_ROUTES, type ViewRoute } from "./routes";
+import { PALETTE_ROUTES, type ViewRoute } from "./routes";
 
 /** How many memory paths to hold for matching. */
 const MEMORY_PAGE = 500;
@@ -214,7 +214,7 @@ function match(
 ): Entry[] {
   const term = query.trim().toLowerCase();
 
-  const views: Entry[] = ALL_ROUTES.filter((route) => matchesRoute(route, term)).map(
+  const views: Entry[] = PALETTE_ROUTES.filter((route) => matchesRoute(route, term)).map(
     (route) => ({
       id: `view:${route.path}`,
       kind: "view",

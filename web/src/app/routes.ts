@@ -130,8 +130,65 @@ export const ROUTES: ViewRoute[] = [
   },
 ];
 
-/** Everything the palette and the sidebar walk, home first. */
+/**
+ * Real views that the sidebar does not name.
+ *
+ * Five working pages reachable only from small links in the corner of
+ * `/decisions`. They are not in the sidebar because a nav with two levels for
+ * one section out of four is a nav that has stopped being scannable — but
+ * "jump to any view" has to mean any view, and a palette that cannot reach the
+ * outcome queue is a palette with a hole in it.
+ *
+ * `/decisions/reflections` is deliberately absent from both. It is the one
+ * route in this application that nothing is allowed to offer: a reflection is
+ * a claim about somebody's judgement, and a tool that volunteers those is one
+ * you stop trusting. It is reached from the patterns page, by going to look.
+ * See `ReflectionsPage.test.tsx`.
+ */
+export const SUB_ROUTES: ViewRoute[] = [
+  {
+    path: "/decisions/new",
+    label: "record a decision",
+    blurb: "Write down a choice, its alternatives, and the confidence you hold now.",
+    group: "reasoning",
+    aliases: ["new decision", "decide"],
+  },
+  {
+    path: "/decisions/review",
+    label: "review queue",
+    blurb: "Decisions the system found in the corpus, waiting to be accepted or rejected.",
+    group: "reasoning",
+    aliases: ["suggestions", "queue"],
+  },
+  {
+    path: "/decisions/outcomes",
+    label: "outcome queue",
+    blurb: "How recorded decisions actually turned out, waiting to be confirmed.",
+    group: "reasoning",
+    aliases: ["results", "worked", "failed"],
+  },
+  {
+    path: "/decisions/assumptions",
+    label: "assumptions",
+    blurb: "What decisions assumed, grouped, and which assumptions held.",
+    group: "reasoning",
+    aliases: ["held", "beliefs"],
+  },
+  {
+    path: "/decisions/patterns",
+    label: "patterns",
+    blurb:
+      "Behavioural patterns across decisions, with counter-evidence at equal weight, and calibration.",
+    group: "reasoning",
+    aliases: ["calibration", "habits"],
+  },
+];
+
+/** Everything the sidebar walks, home first. */
 export const ALL_ROUTES: ViewRoute[] = [HOME, ...ROUTES];
+
+/** Everything the palette can reach, which is more than the sidebar shows. */
+export const PALETTE_ROUTES: ViewRoute[] = [...ALL_ROUTES, ...SUB_ROUTES];
 
 /** The routes in one sidebar group, in table order. */
 export function inGroup(group: GroupId): ViewRoute[] {

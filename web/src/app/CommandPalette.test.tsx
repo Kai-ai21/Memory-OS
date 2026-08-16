@@ -165,6 +165,47 @@ describe("what it offers", () => {
     ).toBeInTheDocument();
   });
 
+  it("reaches a view the sidebar does not name", async () => {
+    // Five working pages hang off `/decisions` and none of them is in the
+    // sidebar. "Jump to any view" has to mean any view, or the shortcut has a
+    // hole in exactly the places that are hardest to find by clicking.
+    stubAll();
+    renderWithProviders(<App />, { route: "/" });
+    await userEvent.keyboard("{Meta>}k{/Meta}");
+
+    await userEvent.type(await screen.findByLabelText("Command"), "outcome");
+
+    const results = screen.getByTestId("palette-results");
+    expect(within(results).getByText("outcome queue")).toBeInTheDocument();
+  });
+
+  it("never offers reflections, on any query", async () => {
+    // The one route nothing is allowed to volunteer. A claim about somebody's
+    // judgement is something they go and look at, from the patterns page — a
+    // palette that surfaced it on a keystroke would be the tool speaking
+    // first, which is the failure M5.4 exists to prevent.
+    stubAll();
+    renderWithProviders(<App />, { route: "/" });
+    await userEvent.keyboard("{Meta>}k{/Meta}");
+
+    const box = await screen.findByLabelText("Command");
+    for (const term of ["reflect", "reflection", "decisions", "patterns"]) {
+      await userEvent.clear(box);
+      await userEvent.type(box, term);
+
+      // The *view* entries, not the whole panel. Typing "reflection" always
+      // produces the search fallback labelled with what was typed — that is
+      // the palette offering to search the corpus for a word, which is not the
+      // same act as offering the page and is not what this rule is about.
+      const views = within(screen.getByTestId("palette-results"))
+        .getAllByRole("option")
+        .filter((option) => option.textContent?.startsWith("view"));
+      expect(views.map((option) => option.textContent).join(" ")).not.toMatch(
+        /reflection/i,
+      );
+    }
+  });
+
   it("offers to search the corpus for anything it does not recognise", async () => {
     // The fallback that always works, and the reason the box never dead-ends.
     stubAll();
