@@ -2622,6 +2622,8 @@ export interface components {
             embedded_chunks: number;
             /** Embedding Model */
             embedding_model: string;
+            /** Entities */
+            entities: number;
             /** Memories */
             memories: number;
             /** Model Window */
@@ -2630,6 +2632,8 @@ export interface components {
             models: {
                 [key: string]: number;
             };
+            /** Relationships */
+            relationships: number;
         };
         /** StepOut */
         StepOut: {

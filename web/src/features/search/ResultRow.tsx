@@ -85,7 +85,13 @@ export function ResultRow({
 
   return (
     <article className="border-b border-rule py-3" data-testid="result">
-      <header className="flex items-baseline gap-3">
+      {/* Wraps, and the path is the thing that must survive it.
+          Unwrapped, at 768 the flex row squeezed `flex-1 min-w-0 truncate` to
+          zero and the external key — the one element that says *which result
+          this is* — disappeared entirely while the judgement buttons stayed.
+          A basis wide enough to be worth reading forces the metadata onto a
+          second line instead. */}
+      <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         {/* Rank and score in a fixed-width gutter, so scores form a column that
             can be compared down the page rather than a ragged edge. */}
         <span className="meta w-6 shrink-0 text-right text-faint">{rank}</span>
@@ -97,7 +103,11 @@ export function ResultRow({
         </span>
         <Link
           to={`/memory/${hit.memory_id}`}
-          className="min-w-0 flex-1 truncate font-mono text-sm text-ink underline decoration-rule-strong decoration-1 underline-offset-2 hover:decoration-edge"
+          // What the arrow keys walk. See `SearchPage.step` — the row's other
+          // controls are reachable by tab, but the arrows move between results
+          // rather than between every focusable thing inside one.
+          data-result-link
+          className="min-w-48 flex-1 basis-48 truncate font-mono text-sm text-ink underline decoration-rule-strong decoration-1 underline-offset-2 hover:decoration-edge"
           title={hit.external_key}
         >
           {hit.external_key}
@@ -113,9 +123,9 @@ export function ResultRow({
         />
       </header>
 
-      {hit.title ? <p className="meta mt-1 pl-25 text-muted">{hit.title}</p> : null}
+      {hit.title ? <p className="meta mt-1 lg:pl-25 text-muted">{hit.title}</p> : null}
 
-      <div className="mt-2 space-y-2 pl-25">
+      <div className="mt-2 space-y-2 lg:pl-25">
         {visibleChunks.map((chunk) => (
           <ChunkBlock
             key={chunk.chunk_id}
@@ -196,8 +206,15 @@ function ChunkBlock({
     typeof chunk.metadata?.definition === "string" ? chunk.metadata.definition : null;
 
   return (
-    <div className="border-l border-rule pl-3" data-testid="matched-chunk">
-      <div className="flex items-baseline gap-2">
+    <div className="min-w-0 border-l border-rule pl-3" data-testid="matched-chunk">
+      {/* Wraps, and the definition truncates.
+          A Python test name runs to sixty characters and this row does not
+          wrap by default, so one of them stretched the whole result column to
+          654px at a 375px viewport — and because the column then fitted the
+          code, `.code-content`'s own scroll box never engaged. The widest
+          element on a page sets the body's scroll width, so this row was
+          making every view scroll sideways. */}
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
         <button
           type="button"
           className="meta text-amber hover:text-amber-bright"
@@ -211,7 +228,11 @@ function ChunkBlock({
         {/* What M1.7 persisted the chunk metadata for: a citation that can name
             the function it came from rather than only the file. */}
         {definition ? (
-          <span className="meta text-amber" data-testid="definition">
+          <span
+            className="meta min-w-0 max-w-full truncate text-amber"
+            data-testid="definition"
+            title={`${definition}()`}
+          >
             {definition}()
           </span>
         ) : null}
@@ -232,6 +253,9 @@ function ChunkBlock({
           code={code}
           // Expanded shows the whole borrowed lead-in as well as the neighbours.
           full={expanded}
+          // Collapsed, this is a list to compare rather than a document to
+          // read, so the clamp is the tight one.
+          tight
         />
       </div>
 

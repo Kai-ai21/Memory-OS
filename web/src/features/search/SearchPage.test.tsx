@@ -255,16 +255,17 @@ describe("keyboard", () => {
     expect(screen.getByLabelText("Search query")).toHaveFocus();
   });
 
-  it("focuses the query box when / is pressed from elsewhere", async () => {
+  it("marks its box as the one / focuses", () => {
+    // The `/` binding moved to the shell in M9.0 so that it works on all
+    // fourteen routes rather than on this one — see `Shell.test.tsx`, which
+    // presses the key. What this page still owns is the contract that makes
+    // that possible: the attribute the shell looks for. Without it the
+    // shortcut silently navigates instead of focusing, which is the failure
+    // that would otherwise reach nobody's test.
     stubFetch([{ match: "/sources", body: SOURCES }]);
     renderWithProviders(<SearchPage />);
 
-    const input = screen.getByLabelText("Search query");
-    input.blur();
-    expect(input).not.toHaveFocus();
-
-    await userEvent.keyboard("/");
-    expect(input).toHaveFocus();
+    expect(screen.getByLabelText("Search query")).toHaveAttribute("data-search-input");
   });
 
   it("does not steal / while typing, because it is a character", async () => {

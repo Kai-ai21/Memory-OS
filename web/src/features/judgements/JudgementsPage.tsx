@@ -80,7 +80,7 @@ export function JudgementsPage() {
                   <td className="py-1.5">
                     <Link
                       className="meta text-amber underline"
-                      to={`/?q=${encodeURIComponent(row.query_text)}`}
+                      to={`/search?q=${encodeURIComponent(row.query_text)}`}
                     >
                       re-run
                     </Link>

@@ -44,7 +44,11 @@ export function MemoryPage() {
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-2">
         <div className="flex flex-wrap items-baseline gap-3">
-          <h1 className="font-mono text-base text-ink">{detail.external_key}</h1>
+          {/* Mono rather than the display face, and deliberately: this heading
+              is a path. Setting a filename in a display serif makes it look
+              like a title, and the one thing a reader must be able to do with
+              it is match it character for character against a shell. */}
+          <h1 className="font-mono text-base break-all text-ink">{detail.external_key}</h1>
           <Tag>{detail.kind}</Tag>
           {detail.deleted_at ? <Tag>deleted</Tag> : null}
           {!detail.is_current ? <Tag>superseded</Tag> : null}

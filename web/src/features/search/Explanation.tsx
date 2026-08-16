@@ -29,7 +29,7 @@ export function ExplanationPanel({ explanation, citations, code }: Props) {
   if (!explanation) return null;
 
   return (
-    <div className="mt-2 pl-25" data-testid="explanation">
+    <div className="mt-2 lg:pl-25" data-testid="explanation">
       <button
         type="button"
         className="meta text-amber hover:text-amber-bright"
@@ -45,12 +45,32 @@ export function ExplanationPanel({ explanation, citations, code }: Props) {
 
       {open ? (
         <div className="mt-2 space-y-3 border-l border-rule pl-3">
+          {/* Written for somebody who has not read the ranker: "semantic 55%"
+              is meaningless without knowing that several retrievers run and
+              their opinions are combined, and without that sentence the table
+              below is a row of jargon.
+              Prose rather than metadata, too — set in the 11px mono the offsets
+              use, three sentences of explanation look like one more field to
+              skip past. */}
+          <p className="prose-content max-w-prose text-sm text-muted">
+            Several retrievers look for this result independently and their opinions are
+            combined. Each row is one of them: where it placed this result, and how much
+            of the final score came from it.
+          </p>
           <table className="w-full">
+            <thead>
+              <tr>
+                <th className="meta-label py-0.5 text-left font-normal">retriever</th>
+                <th className="meta-label py-0.5 text-left font-normal">its rank</th>
+                <th className="meta-label py-0.5 text-right font-normal">share</th>
+                <th />
+              </tr>
+            </thead>
             <tbody>
               {explanation.contributions.map((item) => (
                 <tr key={item.name} data-testid="contribution">
                   <td className="meta w-24 py-0.5 text-muted">{item.name}</td>
-                  <td className="meta w-16 py-0.5 text-faint">rank {item.rank}</td>
+                  <td className="meta w-16 py-0.5 text-faint">#{item.rank}</td>
                   <td className="meta w-14 py-0.5 text-right text-ink">
                     {(item.share * 100).toFixed(0)}%
                   </td>
@@ -71,7 +91,8 @@ export function ExplanationPanel({ explanation, citations, code }: Props) {
                 <tr>
                   <td className="meta w-24 py-0.5 text-muted">reranked</td>
                   <td className="meta py-0.5 text-faint" colSpan={3}>
-                    cross-encoder score {explanation.rerank_score.toFixed(3)}
+                    a second model read the query and this text together and scored the
+                    pair {explanation.rerank_score.toFixed(3)}
                   </td>
                 </tr>
               ) : null}
@@ -85,13 +106,16 @@ export function ExplanationPanel({ explanation, citations, code }: Props) {
                 <tr>
                   <td className="meta w-24 py-0.5 text-muted">graph route</td>
                   <td className="meta py-0.5 text-ink" colSpan={3} data-testid="graph-path">
-                    {explanation.graph_path}
+                    reached through the entity graph: {explanation.graph_path}
                   </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
 
+          {citations && citations.length > 0 ? (
+            <p className="meta-label">the passages it quoted</p>
+          ) : null}
           {(citations ?? []).map((citation) => (
             <CitationBlock
               key={`${citation.chunk_ordinal}-${citation.char_start}`}

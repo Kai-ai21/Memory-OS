@@ -34,6 +34,12 @@ class StatsOut(BaseModel):
     cache_entries: int
     coverage: float
     models: dict[str, int]
+    # Phase 3's half of the corpus. Here rather than on a graph endpoint because
+    # the overview asks one question — how big is this thing — and answering it
+    # from two requests is how the two halves end up measured at different
+    # instants and quietly disagreeing.
+    entities: int
+    relationships: int
     # What the corpus was built with, so a number on screen can be attributed to
     # a model and a chunker rather than floating free.
     embedding_model: str
@@ -77,6 +83,8 @@ async def get_stats(container: ContainerDep) -> StatsOut:
         cache_entries=stats.cache_entries,
         coverage=stats.coverage,
         models=stats.models,
+        entities=stats.entities,
+        relationships=stats.relationships,
         embedding_model=container.embedder.model_id,
         chunker_version=container.chunker.version,
         model_window=container.embedder.max_sequence_tokens,
