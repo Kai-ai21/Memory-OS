@@ -17,14 +17,43 @@ import { describeConnections } from "../../lib/connections";
 import { renderWithProviders, stubFetch } from "../../test/harness";
 
 const MEMORY_ID = "11111111-1111-7111-8111-111111111111";
+const SESSION_ID = "99999999-9999-7999-8999-999999999999";
+
+const SESSION = {
+  id: SESSION_ID,
+  title: "postgres full-text search is faster than I expected",
+  started_at: "2026-08-17T10:00:00Z",
+  last_activity: "2026-08-17T10:05:00Z",
+  message_count: 2,
+  archived_at: null,
+};
 
 const STATEMENT = {
   id: "aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa",
-  text: "postgres full-text search is faster than I expected",
+  session_id: SESSION_ID,
+  role: "user",
+  content: "postgres full-text search is faster than I expected",
+  ordinal: 0,
   intent: "statement",
   created_at: "2026-08-17T10:00:00Z",
+  external_key: "2026-08-17/aaaa.md",
   memory_id: MEMORY_ID,
-  answer: null,
+  answer_model: null,
+  refused: null,
+  grounded: null,
+  citations: [],
+};
+
+const QUESTION = {
+  id: "cccccccc-cccc-7ccc-8ccc-ccccccccccc1",
+  session_id: SESSION_ID,
+  role: "user",
+  content: "what did I say about sourdough?",
+  ordinal: 1,
+  intent: "question",
+  created_at: "2026-08-17T10:05:00Z",
+  external_key: null,
+  memory_id: null,
   answer_model: null,
   refused: null,
   grounded: null,
@@ -33,17 +62,29 @@ const STATEMENT = {
 
 const REFUSAL = {
   id: "bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb",
-  text: "what did I say about sourdough?",
-  intent: "question",
-  created_at: "2026-08-17T10:05:00Z",
-  memory_id: null,
-  answer:
+  session_id: SESSION_ID,
+  role: "assistant",
+  content:
     "The retrieved passages do not contain anything about this, so there is nothing here to answer from.",
+  ordinal: 2,
+  intent: null,
+  created_at: "2026-08-17T10:05:00Z",
+  external_key: null,
+  memory_id: null,
   answer_model: "groq/llama",
   refused: true,
   grounded: true,
   citations: [],
 };
+
+/** The requests the page makes on mount, plus whatever a test adds. */
+function chatRoutes(messages: unknown[], sessions: unknown[] = [SESSION]) {
+  return [
+    { match: `/chat/${SESSION_ID}`, body: messages },
+    { match: "/chat/sessions", body: sessions },
+    { match: `/chat/messages/${MEMORY_ID}/status`, body: CONNECTED },
+  ];
+}
 
 const CONNECTED = {
   memory_id: MEMORY_ID,
@@ -91,11 +132,8 @@ describe("the connection line", () => {
   });
 
   it("renders the line under a stored message", async () => {
-    stubFetch([
-      { match: `/chat/${MEMORY_ID}/status`, body: CONNECTED },
-      { match: "/chat", body: [STATEMENT] },
-    ]);
-    renderWithProviders(<ChatPage />);
+    stubFetch(chatRoutes([STATEMENT]));
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
 
     expect(
       await screen.findByText(/connects to 3 earlier memories via postgres/i),
@@ -105,8 +143,8 @@ describe("the connection line", () => {
 
 describe("an answer", () => {
   it("renders a refusal as a refusal, unsoftened", async () => {
-    stubFetch([{ match: "/chat", body: [REFUSAL] }]);
-    renderWithProviders(<ChatPage />);
+    stubFetch(chatRoutes([QUESTION, REFUSAL]));
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
 
     const answer = await screen.findByTestId("answer");
     // Labelled `declined`, and carrying the API's own words. Nothing here may
@@ -120,8 +158,8 @@ describe("an answer", () => {
   });
 
   it("shows no stored line for a question, because nothing was stored", async () => {
-    stubFetch([{ match: "/chat", body: [REFUSAL] }]);
-    renderWithProviders(<ChatPage />);
+    stubFetch(chatRoutes([QUESTION, REFUSAL]));
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
 
     await screen.findByTestId("answer");
     expect(screen.queryByTestId("connection-line")).not.toBeInTheDocument();
@@ -135,10 +173,14 @@ describe("sending", () => {
     // and the symptom would be a message stored by one and answered by the
     // other.
     const calls = stubFetch([
-      { match: `/chat/${MEMORY_ID}/status`, body: CONNECTED },
-      { match: "/chat", body: [] },
+      ...chatRoutes([STATEMENT]),
+      {
+        match: "/chat",
+        body: { session_id: SESSION_ID, messages: [STATEMENT] },
+        status: 201,
+      },
     ]);
-    renderWithProviders(<ChatPage />);
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
 
     await userEvent.type(
       await screen.findByLabelText("Message"),
@@ -146,14 +188,18 @@ describe("sending", () => {
     );
 
     const posted = calls.find((call) => call.method === "POST");
+    // The session travels with the message. A page that omitted it would let the
+    // thirty-minute rule reopen a conversation the reader has explicitly opened.
     expect(posted?.body).toEqual({
       text: "postgres full-text search is faster than I expected",
+      session_id: SESSION_ID,
+      new_session: false,
     });
   });
 
   it("shift-enter writes a line rather than sending", async () => {
-    const calls = stubFetch([{ match: "/chat", body: [] }]);
-    renderWithProviders(<ChatPage />);
+    const calls = stubFetch(chatRoutes([]));
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
 
     const box = await screen.findByLabelText("Message");
     await userEvent.type(box, "first{Shift>}{Enter}{/Shift}second");
@@ -165,11 +211,8 @@ describe("sending", () => {
 
 describe("the classification", () => {
   it("is visible on the message and explains itself", async () => {
-    stubFetch([
-      { match: `/chat/${MEMORY_ID}/status`, body: CONNECTED },
-      { match: "/chat", body: [STATEMENT] },
-    ]);
-    renderWithProviders(<ChatPage />);
+    stubFetch(chatRoutes([STATEMENT]));
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
 
     const mark = await screen.findByRole("button", { name: "stored" });
     await userEvent.click(mark);
@@ -179,5 +222,90 @@ describe("the classification", () => {
       "href",
       `/memory/${MEMORY_ID}`,
     );
+  });
+});
+
+describe("sessions", () => {
+  it("lists conversations and loads the one that is clicked", async () => {
+    const other = {
+      ...SESSION,
+      id: "88888888-8888-7888-8888-888888888888",
+      title: "a different conversation",
+      message_count: 1,
+    };
+    const calls = stubFetch([
+      { match: `/chat/${other.id}`, body: [] },
+      ...chatRoutes([STATEMENT], [SESSION, other]),
+    ]);
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
+
+    // Awaited on the rows rather than on the list: the `ul` renders while the
+    // request is still in flight, so `findByTestId("sessions")` resolves against
+    // an empty rail and asserts nothing.
+    expect(await screen.findAllByTestId("session-row")).toHaveLength(2);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /a different conversation/ }),
+    );
+
+    // The clicked session is fetched. Its id is in the URL too, so the
+    // conversation is a link somebody can paste.
+    expect(calls.some((call) => call.url.includes(`/chat/${other.id}`))).toBe(true);
+  });
+
+  it("filters within a session server-side, and says it is not corpus search", async () => {
+    const calls = stubFetch(chatRoutes([STATEMENT]));
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
+
+    await userEvent.type(
+      await screen.findByLabelText("Filter this conversation"),
+      "postgres",
+    );
+
+    // Sent as `q` on the session route rather than to `/search`: this is a
+    // substring filter over rows already on screen, and the page offers the
+    // corpus search as a separate, labelled way out.
+    expect(
+      calls.some((call) => call.url.includes(`/chat/${SESSION_ID}?q=postgres`)),
+    ).toBe(true);
+    expect(
+      screen.getByRole("link", { name: /search the corpus/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("a new conversation creates nothing until something is typed", async () => {
+    const calls = stubFetch(chatRoutes([STATEMENT]));
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
+
+    await screen.findAllByTestId("session-row");
+    await userEvent.click(screen.getByRole("button", { name: "new" }));
+
+    // No POST. A conversation begins on its first message, which is what keeps
+    // the rail free of empty rows nobody typed into.
+    expect(calls.some((call) => call.method === "POST")).toBe(false);
+    expect(await screen.findByText(/nothing typed yet/i)).toBeInTheDocument();
+  });
+
+  it("archives without deleting, and says so", async () => {
+    const calls = stubFetch([
+      { match: "/archive", body: null, status: 204 },
+      ...chatRoutes([STATEMENT]),
+    ]);
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
+
+    await screen.findAllByTestId("session-row");
+    const archive = screen.getByRole("button", { name: "archive" });
+    // The promise is in the control's own tooltip, not buried in a help page.
+    expect(archive).toHaveAttribute(
+      "title",
+      expect.stringContaining("stays a memory"),
+    );
+
+    await userEvent.click(archive);
+    expect(
+      calls.some(
+        (call) => call.method === "POST" && call.url.includes(`${SESSION_ID}/archive`),
+      ),
+    ).toBe(true);
   });
 });

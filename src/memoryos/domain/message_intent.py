@@ -36,6 +36,19 @@ import re
 from enum import StrEnum, auto
 
 
+class ChatRole(StrEnum):
+    """Who said one turn.
+
+    Two, and there is deliberately no `system`. Nothing in this product shows a
+    system message to anybody — the grounding prompt lives in
+    `application/answering.py` and is not a turn in anybody's conversation — and a
+    role nobody renders is a branch nobody tests.
+    """
+
+    USER = auto()
+    ASSISTANT = auto()
+
+
 class MessageIntent(StrEnum):
     """What to do with a message, which is the only question this answers."""
 

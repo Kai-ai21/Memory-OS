@@ -38,7 +38,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from memoryos.domain.events import EventKind
 from memoryos.domain.jobs import DEFAULT_MAX_ATTEMPTS, JobStatus
-from memoryos.domain.message_intent import MessageIntent
+from memoryos.domain.message_intent import ChatRole
 from memoryos.domain.surfacing import SurfaceReason
 from memoryos.domain.values import (
     HEX64_PATTERN,
@@ -2874,69 +2874,127 @@ class FacetEvidence(Base):
     )
 
 
+class ChatSession(Base):
+    """One conversation, as a place to look rather than as a thing that holds.
+
+    **A session is a view.** M10.0 stored each message as its own memory so that a
+    thought from Tuesday connects to one from last month through the entities they
+    share rather than through having been typed together, and M10.1 does not
+    change that: no memory is created for a session, no message is merged into
+    one, and nothing that decides *meaning* — retrieval, the graph, the timeline —
+    reads this table. What it decides is what to draw in a list and which three
+    turns to carry into the next question.
+
+    That is what makes the derived columns safe to keep here. `message_count` and
+    `last_activity` are denormalised from `chat_messages` on purpose: the rail
+    reads every session on every render, and a count-and-max per row is a query
+    per row. They are maintained in the same transaction as the message that moves
+    them, so the only way they can be wrong is a bug rather than a race.
+
+    `archived_at` hides without deleting, which is the same call `dismissed_at`
+    makes everywhere else in this schema. A conversation you are done with is not
+    a conversation that did not happen.
+    """
+
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    # Derived from the first user message. Null for a session whose first message
+    # was whitespace-shaped, which the rail renders as "untitled" rather than
+    # inventing "Conversation 4" — a name that says nothing cannot be searched.
+    title: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False)
+    # What the thirty-minute gap is measured from, and what the rail sorts by.
+    last_activity: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False)
+    message_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+
+    __table_args__ = (
+        CheckConstraint("message_count >= 0", name="ck_chat_sessions_count_non_negative"),
+        CheckConstraint(
+            "last_activity >= started_at", name="ck_chat_sessions_activity_after_start"
+        ),
+        # The rail's only read: unarchived, newest activity first.
+        Index(
+            "ix_chat_sessions_live",
+            "last_activity",
+            postgresql_where=text("archived_at IS NULL"),
+        ),
+    )
+
+
 class ChatMessage(Base):
-    """One turn typed into the front door, and what was done with it.
+    """One turn in one session. Not the memory, and never the corpus.
 
-    **This table is not the memory and must never become one.** A stored message
-    is a `memories` row like any other — hashed, chunked, embedded, extracted,
-    retrievable — and `external_key` names it. What lives here is the turn: the
-    text as typed, the intent it was read as, and, for a question, the answer
-    that came back.
+    **This table is the transcript.** A stored user message is a `memories` row
+    like any other — hashed, chunked, embedded, extracted, retrievable — and
+    `external_key` names it. What lives here is the turn: which session it fell
+    in, where in the order, who said it, and how it was read.
 
-    So the obvious objection first. M10.0 says answers are not stored as
-    memories, because generated text that can be retrieved becomes evidence for
-    the next generation and a corpus that cites itself degrades in a way nothing
-    reports. `answer` is a column here, and the guarantee is structural rather
-    than promised: nothing on this table is hashed, chunked or embedded, there is
-    no tsvector, and no retriever joins to it. It is the transcript, which is
-    what makes the message list survive a reload and what makes "what about the
-    other one?" resolvable — and a transcript is not evidence.
+    So the objection first. M10.0 says answers are not stored as memories, because
+    generated text that can be retrieved becomes evidence for the next generation
+    and a corpus that cites itself decays in a way nothing reports. An assistant
+    row holds prose, and the guarantee is structural rather than promised: nothing
+    on this table is hashed, chunked or embedded, there is no tsvector, and no
+    retriever joins to it. It is the transcript, which is what makes a
+    conversation resumable — and a transcript is not evidence.
 
-    **`external_key` rather than a foreign key to `memories`, and that is the
-    replay classification deciding a schema.** A `memory_id` would be the obvious
-    column and it is the wrong one: `memories` is derived, a full replay
-    truncates it, and `TRUNCATE ... CASCADE` reaches every table referencing it
-    whatever set this one is classified in. `decision_evidence` solved that with
-    a snapshot taken before the truncation and re-linked after — machinery built
-    for *link* rows, which these are not, and which would mean deleting and
-    reinserting the whole transcript on every rebuild.
+    **`external_key` rather than a foreign key to `memories`, and the milestone's
+    own requirement is what decides it.** M10.1 asks that these rows survive a
+    replay while the memories they point at are rebuilt, and that the link "key on
+    nothing that changes". A memory id changes on every replay: `memories` is
+    derived, a replay truncates it, and every id is minted fresh. So an id is
+    exactly the wrong column, and `TRUNCATE memories CASCADE` would take this
+    table with it whatever set it is classified in. The external key is what the
+    ingestion log records, so the memory comes back carrying the same one and the
+    join finds it again having preserved nothing. Names outlive ids — the argument
+    M1.7 made for the golden set.
 
-    The key needs none of it. It is what the ingestion log records, so the memory
-    comes back after a replay carrying the same one, and the join finds it again
-    without anything having been preserved. Names outlive ids — the same argument
-    M1.7 made for the golden set, arrived at one table earlier this time.
-
-    A null key means the turn was a question, which stored nothing. That is now
-    enforceable in both directions, because nothing can null this column behind
-    the schema's back.
-
-    `intent` is stored rather than recomputed on read, and that is the correction
-    path working: the classifier is rules over a regex and it will misread
-    things, so the reading that was *acted on* has to stay recoverable.
-    Recomputing it later under a newer rule set would rewrite history to agree
-    with the present.
+    **One row per turn, two rows per exchange.** A question and its answer are two
+    messages, which is what makes `ordinal` a total order over a conversation and
+    what let M10.0's single-row-with-an-answer-column shape stop being a special
+    case. It also means "the last three turns" is a `LIMIT 6` rather than a rule
+    about how many halves of a row to count.
     """
 
     __tablename__ = "chat_messages"
 
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
-    text: Mapped[str] = mapped_column(Text, nullable=False)
-    intent: Mapped[str] = mapped_column(Text, nullable=False)
-    # The memory this message became, named the way the log names it. Null for a
-    # question. No foreign key — see the class docstring.
+    session_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "chat_sessions.id", name="fk_chat_messages_session_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    # `user` or `assistant`. Two roles and no `system`: nothing in this product
+    # shows a system message to anybody, and a role nobody renders is a branch
+    # nobody tests.
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Position within the session, from zero. Dense and gapless, because it is
+    # assigned from the session's own `message_count` in the transaction that
+    # increments it.
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The memory this message became, named the way the log names it. Null for an
+    # assistant message, and null for a question — neither stores anything.
     external_key: Mapped[str | None] = mapped_column(Text)
-    answer: Mapped[str | None] = mapped_column(Text)
+    # How the classifier read it. User messages only.
+    intent: Mapped[str | None] = mapped_column(Text)
+    # Assistant messages only, all three.
     answer_model: Mapped[str | None] = mapped_column(Text)
-    # Whether the corpus declined to answer. Recorded rather than derived from
-    # the prose, because the refusal rate over a chat log is the one number that
-    # says whether the guardrail survived being put behind a conversational
-    # interface — and re-deriving it by pattern-matching the answer text later
-    # would be measuring the words instead of the verdict.
+    # Whether the corpus declined. Recorded rather than derived from the prose,
+    # because the refusal rate over a chat log is the number that says whether the
+    # guardrail survived being put behind a conversational interface — and
+    # re-deriving it by pattern-matching text later would measure the words
+    # instead of the verdict.
     answer_refused: Mapped[bool | None] = mapped_column(Boolean)
     # What the answer cited, flattened to locator and excerpt. Enough to redraw
     # the citation list on reload and nothing more: the full M2.5 citation is
-    # reconstructible from the memories it points at, and a copy of it here would
-    # be a second version of a chunk's text that no re-chunk could ever update.
+    # reconstructible from the memories it points at, and a copy of a chunk's text
+    # here would be a second version of it that no re-chunk could ever update.
     citations: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, server_default=_EMPTY_JSONB_ARRAY
     )
@@ -2945,30 +3003,39 @@ class ChatMessage(Base):
     )
 
     __table_args__ = (
-        _enum_check("intent", MessageIntent, "ck_chat_messages_intent"),
-        CheckConstraint("length(btrim(text)) > 0", name="ck_chat_messages_text_non_empty"),
-        # A question stores nothing and anything else does, both directions.
-        # Enforceable only because this column is not a foreign key into a table
-        # a replay truncates: nothing but this schema can ever null it.
+        UniqueConstraint("session_id", "ordinal", name="uq_chat_messages_session_ordinal"),
+        _enum_check("role", ChatRole, "ck_chat_messages_role"),
+        CheckConstraint("ordinal >= 0", name="ck_chat_messages_ordinal_non_negative"),
         CheckConstraint(
-            "(intent = 'question') = (external_key IS NULL)",
+            "length(btrim(content)) > 0", name="ck_chat_messages_content_non_empty"
+        ),
+        # An assistant message has no intent, stores no memory, and is the only
+        # role that may carry answer columns. Four claims about one role, and each
+        # one is silent if it goes wrong: an assistant row with an `external_key`
+        # would mean generated text entering the corpus, which is the single thing
+        # M10.0 forbids.
+        CheckConstraint(
+            "role <> 'assistant' OR (intent IS NULL AND external_key IS NULL)",
+            name="ck_chat_messages_assistant_stores_nothing",
+        ),
+        CheckConstraint(
+            "role <> 'user' OR (answer_model IS NULL AND answer_refused IS NULL "
+            "AND citations = '[]'::jsonb)",
+            name="ck_chat_messages_user_is_not_an_answer",
+        ),
+        # A user message was read as something. Enforceable in both directions
+        # because nothing but this schema can null the column — it is not a
+        # foreign key into a table a replay truncates.
+        CheckConstraint(
+            "(role = 'user') = (intent IS NOT NULL)",
+            name="ck_chat_messages_user_has_intent",
+        ),
+        # A question stores nothing and anything else does.
+        CheckConstraint(
+            "intent IS NULL OR (intent = 'question') = (external_key IS NULL)",
             name="ck_chat_messages_question_stores_nothing",
         ),
-        # And a statement is answered by nothing. The mirror of the rule above,
-        # and silent without it: an answered statement is a model call nobody
-        # asked for.
-        CheckConstraint(
-            "intent <> 'statement' OR answer IS NULL",
-            name="ck_chat_messages_statement_is_not_answered",
-        ),
-        # The verdict travels with the prose or neither exists. A refusal is a
-        # kind of answer, not the absence of one, and a null verdict beside real
-        # text would make "did it refuse?" unanswerable for that row.
-        CheckConstraint(
-            "(answer IS NULL) = (answer_refused IS NULL)",
-            name="ck_chat_messages_answer_verdict",
-        ),
-        # The message list reads it descending and the conversational context
-        # reads the last three turns. One index, both reads.
+        # The session's own read, in order.
+        Index("ix_chat_messages_session", "session_id", "ordinal"),
         Index("ix_chat_messages_created_at", "created_at"),
     )

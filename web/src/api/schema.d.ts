@@ -89,11 +89,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Transcript
-         * @description The conversation, oldest first — newest at the bottom, as it is drawn.
-         */
-        get: operations["transcript_chat_get"];
+        get?: never;
         put?: never;
         /** Send */
         post: operations["send_chat_post"];
@@ -103,7 +99,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/chat/{memory_id}/status": {
+    "/chat/messages/{memory_id}/status": {
         parameters: {
             query?: never;
             header?: never;
@@ -115,11 +111,82 @@ export interface paths {
          * @description How far a stored message has got, and what it turned out to connect to.
          *
          *     Keyed by memory id rather than message id, because what it reports is a
-         *     property of the memory: the same question is worth asking about a file, and
-         *     an endpoint that only worked for things that were typed would be the first
+         *     property of the memory: the same question is worth asking about a file, and an
+         *     endpoint that only worked for things that were typed would be the first
          *     chat-shaped special case in this system.
          */
-        get: operations["message_status_chat__memory_id__status_get"];
+        get: operations["message_status_chat_messages__memory_id__status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chat/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Sessions
+         * @description Conversations, newest activity first.
+         */
+        get: operations["list_sessions_chat_sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chat/sessions/{session_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Archive Session
+         * @description Hide a conversation, or with `archived=false`, bring it back.
+         *
+         *     Deletes nothing. `archived=false` on the same route rather than a second
+         *     endpoint, because unarchiving is the identical write with the opposite value —
+         *     two routes would be two places for the "and nothing is deleted" guarantee to
+         *     be forgotten.
+         */
+        post: operations["archive_session_chat_sessions__session_id__archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chat/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Session Messages
+         * @description One conversation's turns, in order, oldest first.
+         *
+         *     `q` filters within this session by plain substring, and that is deliberately
+         *     all it does. **Search within a session is not corpus search**: it answers
+         *     "where in this conversation did I say that" over rows the reader has already
+         *     seen, and running it through the embedder would return semantic neighbours
+         *     from a conversation they can see all of. `/search` is the other question.
+         */
+        get: operations["session_messages_chat__session_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1353,6 +1420,17 @@ export interface components {
             /** Excluded Decisions */
             excluded_decisions: number;
         };
+        /**
+         * ChatRole
+         * @description Who said one turn.
+         *
+         *     Two, and there is deliberately no `system`. Nothing in this product shows a
+         *     system message to anybody — the grounding prompt lives in
+         *     `application/answering.py` and is not a turn in anybody's conversation — and a
+         *     role nobody renders is a branch nobody tests.
+         * @enum {string}
+         */
+        ChatRole: "user" | "assistant";
         /** ClaimOut */
         ClaimOut: {
             /** Cited Step */
@@ -1820,6 +1898,16 @@ export interface components {
             /** Truncated Start */
             truncated_start: boolean;
         };
+        /** ExchangeOut */
+        ExchangeOut: {
+            /** Messages */
+            messages: components["schemas"]["MessageOut"][];
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+        };
         /** ExplanationOut */
         ExplanationOut: {
             /** Contributions */
@@ -2129,6 +2217,13 @@ export interface components {
         };
         /** MessageIn */
         MessageIn: {
+            /**
+             * New Session
+             * @default false
+             */
+            new_session: boolean;
+            /** Session Id */
+            session_id?: string | null;
             /** Text */
             text: string;
         };
@@ -2138,6 +2233,42 @@ export interface components {
          * @enum {string}
          */
         MessageIntent: "statement" | "question" | "both";
+        /** MessageOut */
+        MessageOut: {
+            /** Answer Model */
+            answer_model?: string | null;
+            /** Citations */
+            citations?: components["schemas"]["memoryos__api__routes__chat__CitationOut"][];
+            /** Content */
+            content: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** External Key */
+            external_key?: string | null;
+            /** Grounded */
+            grounded?: boolean | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            intent?: components["schemas"]["MessageIntent"] | null;
+            /** Memory Id */
+            memory_id?: string | null;
+            /** Ordinal */
+            ordinal: number;
+            /** Refused */
+            refused?: boolean | null;
+            role: components["schemas"]["ChatRole"];
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+        };
         /** ModelOut */
         ModelOut: {
             /** Assessments */
@@ -2584,6 +2715,30 @@ export interface components {
             /** Unsupported */
             unsupported: boolean;
         };
+        /** SessionOut */
+        SessionOut: {
+            /** Archived At */
+            archived_at?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Last Activity
+             * Format: date-time
+             */
+            last_activity: string;
+            /** Message Count */
+            message_count: number;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Title */
+            title: string | null;
+        };
         /**
          * SourceKind
          * @description Where a memory came into the system through.
@@ -2934,36 +3089,6 @@ export interface components {
             search_ms: number;
             /** Total Ms */
             total_ms: number;
-        };
-        /** TurnOut */
-        TurnOut: {
-            /** Answer */
-            answer?: string | null;
-            /** Answer Model */
-            answer_model?: string | null;
-            /** Citations */
-            citations?: components["schemas"]["memoryos__api__routes__chat__CitationOut"][];
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** External Key */
-            external_key?: string | null;
-            /** Grounded */
-            grounded?: boolean | null;
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            intent: components["schemas"]["MessageIntent"];
-            /** Memory Id */
-            memory_id?: string | null;
-            /** Refused */
-            refused?: boolean | null;
-            /** Text */
-            text: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -3408,37 +3533,6 @@ export interface operations {
             };
         };
     };
-    transcript_chat_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TurnOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     send_chat_post: {
         parameters: {
             query?: never;
@@ -3458,7 +3552,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TurnOut"];
+                    "application/json": components["schemas"]["ExchangeOut"];
                 };
             };
             /** @description Validation Error */
@@ -3472,7 +3566,7 @@ export interface operations {
             };
         };
     };
-    message_status_chat__memory_id__status_get: {
+    message_status_chat_messages__memory_id__status_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -3490,6 +3584,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StatusOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sessions_chat_sessions_get: {
+        parameters: {
+            query?: {
+                include_archived?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_session_chat_sessions__session_id__archive_post: {
+        parameters: {
+            query?: {
+                archived?: boolean;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_messages_chat__session_id__get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageOut"][];
                 };
             };
             /** @description Validation Error */

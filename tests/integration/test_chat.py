@@ -38,7 +38,7 @@ from memoryos.application.search import SearchMemories
 from memoryos.domain.entities import Source
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobType
-from memoryos.domain.message_intent import MessageIntent
+from memoryos.domain.message_intent import ChatRole, MessageIntent
 from memoryos.domain.values import EntityType, SourceKind, TimeProvenance
 from tests.support.fakes import FakeEmbedder, FakeLanguageModel, InMemoryGraphStore
 
@@ -151,15 +151,14 @@ async def test_a_statement_is_stored_and_a_question_is_not(
     """
     chat = build(tmp_path, sessions, FakeLanguageModel("Nothing retrieved covers this."))
 
-    stored = await chat(STATEMENT)
+    stored = (await chat(STATEMENT)).user
     assert stored.intent is MessageIntent.STATEMENT
     assert stored.memory_id is not None
-    assert stored.answer is None
 
     asked = await chat(QUESTION)
-    assert asked.intent is MessageIntent.QUESTION
-    assert asked.memory_id is None
-    assert asked.answer is not None
+    assert asked.user.intent is MessageIntent.QUESTION
+    assert asked.user.memory_id is None
+    assert asked.assistant is not None
 
     async with sessions() as session:
         keys = (
@@ -178,7 +177,10 @@ async def test_a_statement_is_stored_and_a_question_is_not(
         transcript = (
             await session.execute(select(func.count(models.ChatMessage.id)))
         ).scalar_one()
-    assert transcript == 2
+    # Three rows for two sends: one row per *turn* as of M10.1, so the question
+    # and its answer are two messages with two ordinals rather than one row with
+    # an answer column. The statement is one row and is answered by nothing.
+    assert transcript == 3
 
 
 async def test_a_message_flows_through_the_whole_pipeline_and_becomes_searchable(
@@ -191,7 +193,7 @@ async def test_a_message_flows_through_the_whole_pipeline_and_becomes_searchable
     level that matters: the same tables, filled by the same handlers.
     """
     chat = build(tmp_path, sessions)
-    stored = await chat(STATEMENT)
+    stored = (await chat(STATEMENT)).user
     assert stored.memory_id is not None
 
     async with sessions() as session:
@@ -257,7 +259,7 @@ async def test_the_memory_and_its_normalization_job_commit_together(
     test the same boundary less legibly.
     """
     chat = build(tmp_path, sessions)
-    first = await chat(STATEMENT)
+    first = (await chat(STATEMENT)).user
     assert first.memory_id is not None
 
     source = await chat_source(sessions)
@@ -274,7 +276,10 @@ async def test_the_memory_and_its_normalization_job_commit_together(
             session.add(
                 models.ChatMessage(
                     id=new_id(),
-                    text=doomed,
+                    session_id=first.session_id,
+                    role=ChatRole.USER.value,
+                    content=doomed,
+                    ordinal=99,
                     intent=MessageIntent.STATEMENT.value,
                     external_key=item.external_key,
                 )
@@ -307,13 +312,14 @@ async def test_an_unanswerable_question_still_refuses_in_the_chat_path(
     model = FakeLanguageModel("Sourdough is made with a wild yeast starter.")
     chat = build(tmp_path, sessions, model)
 
-    empty = await chat(UNANSWERABLE)
+    empty = (await chat(UNANSWERABLE)).assistant
+    assert empty is not None
 
     assert empty.refused is True
     assert empty.citations == []
     assert model.calls == [], "nothing retrieved, so the model was never asked"
     # The fake would have answered from its training data given the chance.
-    assert "Sourdough" not in (empty.answer or "")
+    assert "Sourdough" not in empty.content
 
     # Now with a corpus that has something in it and nothing about this.
     await chat(STATEMENT)
@@ -321,11 +327,12 @@ async def test_an_unanswerable_question_still_refuses_in_the_chat_path(
 
     declining = "The passages do not cover sourdough starters."
     chat = build(tmp_path, sessions, FakeLanguageModel(declining))
-    turn = await chat(UNANSWERABLE)
+    turn = (await chat(UNANSWERABLE)).assistant
+    assert turn is not None
 
     assert turn.refused is True
     # Verbatim. Not prefixed, not hedged, not wrapped in an apology.
-    assert turn.answer == declining
+    assert turn.content == declining
     assert turn.citations == []
 
     # And the verdict is on the record, so the refusal rate over a chat log is a
@@ -333,8 +340,9 @@ async def test_an_unanswerable_question_still_refuses_in_the_chat_path(
     async with sessions() as session:
         row = await session.get(models.ChatMessage, turn.id)
     assert row is not None
+    assert row.role == ChatRole.ASSISTANT.value
     assert row.answer_refused is True
-    assert row.answer == declining
+    assert row.content == declining
 
 
 async def test_two_messages_sharing_an_entity_are_linked_in_the_graph(
@@ -352,8 +360,8 @@ async def test_two_messages_sharing_an_entity_are_linked_in_the_graph(
     connection query, and a model call would make the test measure the model.
     """
     chat = build(tmp_path, sessions)
-    first = await chat("the postgres keyword half finds SKIP LOCKED immediately")
-    second = await chat("postgres full-text search is cheaper than I assumed")
+    first = (await chat("the postgres keyword half finds SKIP LOCKED immediately")).user
+    second = (await chat("postgres full-text search is cheaper than I assumed")).user
     await drain(tmp_path, sessions)
 
     assert first.memory_id is not None and second.memory_id is not None
