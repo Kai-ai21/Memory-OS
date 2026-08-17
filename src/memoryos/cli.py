@@ -32,7 +32,7 @@ from memoryos.adapters.db.engine import Database
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.extraction.llm import ExtractionStats
 from memoryos.adapters.graph.schema import SCHEMA_VERSION
-from memoryos.adapters.llm.errors import MissingApiKey
+from memoryos.adapters.llm.errors import MissingApiKey, ModelNotAvailable
 from memoryos.application import (
     assumption_groups,
     assumption_suggest,
@@ -1109,6 +1109,16 @@ async def run_extract_entities(
         for index, target in enumerate(targets, start=1):
             try:
                 report = await _extract_with_backoff(extract, target.memory_id)
+            except ModelNotAvailable as exc:
+                # Aborted, not stepped over, and this is the one failure that
+                # earns the difference. A withdrawn model refuses item
+                # twenty-seven exactly as it refused item one, so continuing
+                # prints the same sentence once per row and exits 0 — which reads
+                # like a corpus full of difficult documents rather than one stale
+                # setting. M10.1 watched that happen twenty-six times.
+                print(f"[{index}/{len(targets)}] {target.external_key}: {exc}")
+                print(f"\nstopped after 1 of {len(targets)}. {exc.guidance}")
+                return 2
             except (TransientError, PermanentError) as exc:
                 # Reported and stepped over rather than aborting the run. One
                 # memory the model refuses to process must not cost the corpus
