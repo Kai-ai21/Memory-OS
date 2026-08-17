@@ -214,6 +214,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chat/messages/{memory_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Memory
+         * @description Remove a memory from view, or — with `permanent=true` — delete it.
+         *
+         *     **One route with an explicit flag, rather than two routes, and the flag defaults
+         *     to the recoverable level.** Two endpoints would mean two places for a client to
+         *     get the destructive one by mistake; a default of `permanent=true` would mean a
+         *     client that forgot the parameter destroyed something. The dangerous operation is
+         *     the one you have to ask for by name.
+         *
+         *     `DELETE` for both, because both are deletions from the reader's point of view —
+         *     what differs is whether it can be undone, which is what the response says.
+         */
+        delete: operations["delete_memory_chat_messages__memory_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chat/messages/{memory_id}/deletion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Deletion Scope
+         * @description Exactly what deleting this memory permanently would take.
+         *
+         *     A separate read before the destructive write, so the numbers in the dialog are
+         *     the numbers the operation will hit. A client that computed them from what it
+         *     already had on screen would be confirming against a stale count — and the one
+         *     thing a confirmation must not do is understate.
+         */
+        get: operations["deletion_scope_chat_messages__memory_id__deletion_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chat/messages/{memory_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore Memory
+         * @description Bring a memory removed from view back, as a new version.
+         *
+         *     Not an undelete of the row: the corpus is a projection of the log, so this
+         *     re-observes the same bytes at the same key and lets the ordinary version path
+         *     record it. A replay reproduces the result without knowing restoration exists.
+         */
+        post: operations["restore_memory_chat_messages__memory_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat/messages/{memory_id}/status": {
         parameters: {
             query?: never;
@@ -233,6 +311,64 @@ export interface paths {
         get: operations["message_status_chat_messages__memory_id__status_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chat/messages/{memory_id}/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tag Memory
+         * @description File a memory under one or more concepts.
+         *
+         *     Keyed by memory id rather than message id, for the reason
+         *     `/chat/messages/{memory_id}/status` is: a tag is a property of the memory, the
+         *     same question is worth asking about a file, and an endpoint that only worked
+         *     for things that were typed would be the first chat-shaped special case in the
+         *     corpus.
+         */
+        post: operations["tag_memory_chat_messages__memory_id__tags_post"];
+        /**
+         * Untag Memory
+         * @description Remove tags from a memory. The concepts themselves are left alone.
+         */
+        delete: operations["untag_memory_chat_messages__memory_id__tags_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chat/messages/{message_id}/correct": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Correct Message
+         * @description Amend what a stored message says, keeping what it used to say.
+         *
+         *     **201, not 200, and the status code is the design.** This creates: a new
+         *     version of the memory and a new turn in the transcript. A `PATCH` returning 200
+         *     would describe an edit, and nothing here is edited — M10.0 made turns immutable
+         *     and the original stays visible, superseded, because what somebody believed
+         *     before they corrected it is the data Phase 5 reasons over.
+         *
+         *     Registered above `/chat/{session_id}` with the rest of the literal segments.
+         */
+        post: operations["correct_message_chat_messages__message_id__correct_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -300,6 +436,10 @@ export interface paths {
          *     "where in this conversation did I say that" over rows the reader has already
          *     seen, and running it through the embedder would return semantic neighbours
          *     from a conversation they can see all of. `/search` is the other question.
+         *
+         *     `tag` filters to turns whose memory carries all of them — repeat the parameter
+         *     to narrow. The `#` is optional and stripped, so a client may send what somebody
+         *     typed.
          */
         get: operations["session_messages_chat__session_id__get"];
         put?: never;
@@ -1025,6 +1165,117 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sources/{source_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Source
+         * @description Permanently delete everything a source produced.
+         *
+         *     **`confirm_items` is a second key on the launch panel, and it is required by
+         *     convention rather than by the signature.** A client is expected to read
+         *     `/sources/{id}/deletion`, show the counts, and send back the item count it
+         *     showed. If the corpus has changed since — a sync landed, another tab deleted
+         *     something — the numbers disagree and this refuses, because the person consented
+         *     to a specific amount of loss and the operation is now a different one.
+         *
+         *     Omitting it is allowed, deliberately: this is a local-first tool and `curl`
+         *     without a ceremony parameter is a legitimate way to use it. What is not allowed
+         *     is a *wrong* count, which is the case that means somebody confirmed something
+         *     else.
+         */
+        delete: operations["delete_source_sources__source_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sources/{source_id}/deletion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Source Deletion Scope
+         * @description Exactly what deleting this source would take.
+         */
+        get: operations["source_deletion_scope_sources__source_id__deletion_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sources/{source_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Source
+         * @description Everything from one source, as JSON, with every version.
+         *
+         *     Streamed rather than assembled. A source can hold a corpus, and the format is
+         *     the one `memoryos export` writes — one implementation, so a file downloaded from
+         *     the browser and a file written by the CLI cannot differ.
+         */
+        get: operations["export_source_sources__source_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sources/{source_id}/reindex": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reindex Source
+         * @description Re-run the pipeline over everything this source holds.
+         *
+         *     **Re-normalization, not re-ingestion, and the difference is what makes this
+         *     cheap and safe.** Nothing is re-read from the source and no event is appended:
+         *     the artifacts are already in the blob store and the log already says what was
+         *     observed. This enqueues one `NORMALIZE_MEMORY` job per current memory, and the
+         *     existing pipeline then re-parses, re-chunks and re-embeds — which is the
+         *     operation somebody wants after a chunker change or a parser fix, and it is the
+         *     same work `rechunk` does for a subset.
+         *
+         *     202 with a count, never inline. A corpus-sized re-index is minutes of model
+         *     time.
+         *
+         *     Deliberately does not clear `entity_extractor_version`. Re-extraction is real
+         *     money per chunk and is its own command; a re-index that silently spent it would
+         *     be a button whose cost is invisible.
+         */
+        post: operations["reindex_source_sources__source_id__reindex_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sources/{source_id}/sync": {
         parameters: {
             query?: never;
@@ -1120,6 +1371,29 @@ export interface paths {
          * @description Worth having been shown. Lowers this focus's bar, slowly.
          */
         post: operations["mark_useful_surfacing__surfacing_id__useful_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Tags
+         * @description Every tag in use and how many items carry it, most-used first.
+         *
+         *     Its own top-level path rather than under `/chat`, because a tag is not a chat
+         *     concept — it is on the memory, and the search page filters by it.
+         */
+        get: operations["list_tags_tags_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1259,6 +1533,8 @@ export interface components {
             rerank: boolean;
             /** Source */
             source?: string[] | null;
+            /** Tag */
+            tag?: string[] | null;
         };
         /** AnswerOut */
         AnswerOut: {
@@ -1713,6 +1989,18 @@ export interface components {
             /** Weight */
             weight: number;
         };
+        /**
+         * CorrectionIn
+         * @description The corrected text of a stored message.
+         *
+         *     No id in the body: the message is the path. And no intent override, for the
+         *     reason `/chat` has none — the reading was made once, by the classifier, and a
+         *     correction corrects the words rather than the reading.
+         */
+        CorrectionIn: {
+            /** Text */
+            text: string;
+        };
         /** CostOut */
         CostOut: {
             /** Completion Tokens */
@@ -1882,6 +2170,56 @@ export interface components {
             /** Question */
             question: string;
             status: components["schemas"]["DecisionStatus"];
+        };
+        /**
+         * DeletionOut
+         * @description What a deletion did, and whether it can be taken back.
+         *
+         *     `recoverable` is a field rather than something a client infers from
+         *     `permanent`, because it is the one thing a person needs after the fact and the
+         *     inference is exactly where a UI would eventually get it backwards.
+         */
+        DeletionOut: {
+            /**
+             * Blobs Shredded
+             * @default 0
+             */
+            blobs_shredded: number;
+            /**
+             * Chunks
+             * @default 0
+             */
+            chunks: number;
+            /** Detail */
+            detail: string;
+            /** External Key */
+            external_key?: string | null;
+            /**
+             * Memories
+             * @default 0
+             */
+            memories: number;
+            /**
+             * Mentions
+             * @default 0
+             */
+            mentions: number;
+            /** Permanent */
+            permanent: boolean;
+            /** Recoverable */
+            recoverable: boolean;
+            /** Source */
+            source?: string | null;
+            /**
+             * Tags
+             * @default 0
+             */
+            tags: number;
+            /**
+             * Turns
+             * @default 0
+             */
+            turns: number;
         };
         /** DiffOut */
         DiffOut: {
@@ -2400,6 +2738,11 @@ export interface components {
         /** MessageIn */
         MessageIn: {
             /**
+             * Defer Answer
+             * @default false
+             */
+            defer_answer: boolean;
+            /**
              * New Session
              * @default false
              */
@@ -2425,6 +2768,8 @@ export interface components {
             citations?: components["schemas"]["memoryos__api__routes__chat__CitationOut"][];
             /** Content */
             content: string;
+            /** Corrects */
+            corrects?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -2452,6 +2797,10 @@ export interface components {
              * Format: uuid
              */
             session_id: string;
+            /** Superseded By */
+            superseded_by?: string | null;
+            /** Tags */
+            tags?: string[];
         };
         /** ModelOut */
         ModelOut: {
@@ -2725,6 +3074,43 @@ export interface components {
          * @enum {string}
          */
         Period: "day" | "week" | "month";
+        /**
+         * PurgeScopeOut
+         * @description What a permanent deletion would remove. The confirmation's contents.
+         *
+         *     Every count is here because a person cannot consent to an unspecified amount of
+         *     loss, and `log_note` is here because they cannot consent to a promise this
+         *     system does not keep: the append-only log retains the record that something was
+         *     observed at this key, and the content is what goes. The dialog says so.
+         */
+        PurgeScopeOut: {
+            /** Attachments */
+            attachments: number;
+            /** Blobs */
+            blobs: number;
+            /** Chunks */
+            chunks: number;
+            /** Embedded Chunks */
+            embedded_chunks: number;
+            /** Evidence */
+            evidence: number;
+            /** Log Note */
+            log_note: string;
+            /** Memories */
+            memories: number;
+            /** Mentions */
+            mentions: number;
+            /** Orphaned Entities */
+            orphaned_entities: number;
+            /** Previews */
+            previews: string[];
+            /** Shared Blobs */
+            shared_blobs: number;
+            /** Tags */
+            tags: number;
+            /** Turns */
+            turns: number;
+        };
         /** QuerySummaryOut */
         QuerySummaryOut: {
             /**
@@ -2824,6 +3210,15 @@ export interface components {
             /** Uncited */
             uncited: string[];
         };
+        /** ReindexAccepted */
+        ReindexAccepted: {
+            /** Jobs */
+            jobs: number;
+            /** Memories */
+            memories: number;
+            /** Source */
+            source: string;
+        };
         /** SearchIn */
         SearchIn: {
             /** After */
@@ -2864,6 +3259,8 @@ export interface components {
             rerank: boolean;
             /** Source */
             source?: string[] | null;
+            /** Tag */
+            tag?: string[] | null;
         };
         /**
          * SearchMode
@@ -2922,6 +3319,71 @@ export interface components {
             started_at: string;
             /** Title */
             title: string | null;
+        };
+        /** SourceDeletionOut */
+        SourceDeletionOut: {
+            /** Blobs Shredded */
+            blobs_shredded: number;
+            /** Chunks */
+            chunks: number;
+            /** Detail */
+            detail: string;
+            /** Items */
+            items: number;
+            /** Memories */
+            memories: number;
+            /** Mentions */
+            mentions: number;
+            /** Source */
+            source: string;
+            /** Source Removed */
+            source_removed: boolean;
+            /** Tags */
+            tags: number;
+            /** Turns */
+            turns: number;
+        };
+        /**
+         * SourceDeletionScopeOut
+         * @description What deleting a whole source would remove.
+         *
+         *     **The most destructive operation in the product, so the counts are exact rather
+         *     than approximate and they are read at the moment of asking.** A dialog that said
+         *     "this will delete a lot" is not a dialog somebody can consent to, and one that
+         *     reused a count from the sources list would be confirming against whatever was
+         *     true when the page loaded.
+         */
+        SourceDeletionScopeOut: {
+            /** Attachments */
+            attachments: number;
+            /** Blobs */
+            blobs: number;
+            /** Chunks */
+            chunks: number;
+            /** Embedded Chunks */
+            embedded_chunks: number;
+            /** Evidence */
+            evidence: number;
+            /** Items */
+            items: number;
+            /** Log Note */
+            log_note: string;
+            /** Memories */
+            memories: number;
+            /** Mentions */
+            mentions: number;
+            /** Orphaned Entities */
+            orphaned_entities: number;
+            /** Previews */
+            previews: string[];
+            /** Shared Blobs */
+            shared_blobs: number;
+            /** Source */
+            source: string;
+            /** Tags */
+            tags: number;
+            /** Turns */
+            turns: number;
         };
         /**
          * SourceKind
@@ -3253,6 +3715,35 @@ export interface components {
              * Format: uuid
              */
             source_id: string;
+        };
+        /** TagCountOut */
+        TagCountOut: {
+            /** Items */
+            items: number;
+            /** Tag */
+            tag: string;
+        };
+        /**
+         * TagIn
+         * @description Tags to put on a message's memory.
+         *
+         *     A string rather than a list, so the API takes what somebody typed —
+         *     `"#project #idea"` — and the parser that reads a chat command is the same one
+         *     that reads this. A list would mean two definitions of what a tag looks like,
+         *     and the one that disagreed would be whichever was not being tested.
+         */
+        TagIn: {
+            /** Tags */
+            tags: string;
+        };
+        /** TagsOut */
+        TagsOut: {
+            /** Already */
+            already: string[];
+            /** Applied */
+            applied: string[];
+            /** Entities Created */
+            entities_created: number;
         };
         /**
          * TimeProvenance
@@ -3895,6 +4386,101 @@ export interface operations {
             };
         };
     };
+    delete_memory_chat_messages__memory_id__delete: {
+        parameters: {
+            query?: {
+                permanent?: boolean;
+            };
+            header?: never;
+            path: {
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deletion_scope_chat_messages__memory_id__deletion_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurgeScopeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_memory_chat_messages__memory_id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     message_status_chat_messages__memory_id__status_get: {
         parameters: {
             query?: never;
@@ -3913,6 +4499,111 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StatusOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tag_memory_chat_messages__memory_id__tags_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TagIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    untag_memory_chat_messages__memory_id__tags_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TagIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    correct_message_chat_messages__message_id__correct_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CorrectionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeOut"];
                 };
             };
             /** @description Validation Error */
@@ -3992,6 +4683,7 @@ export interface operations {
         parameters: {
             query?: {
                 q?: string | null;
+                tag?: string[] | null;
             };
             header?: never;
             path: {
@@ -5058,6 +5750,7 @@ export interface operations {
                 after?: string | null;
                 before?: string | null;
                 include_deleted?: boolean;
+                tag?: string[] | null;
                 ef_search?: number | null;
                 exact?: boolean;
                 mode?: components["schemas"]["SearchMode"];
@@ -5163,6 +5856,133 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_source_sources__source_id__delete: {
+        parameters: {
+            query?: {
+                confirm_items?: number | null;
+                keep_registration?: boolean;
+            };
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceDeletionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    source_deletion_scope_sources__source_id__deletion_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceDeletionScopeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_source_sources__source_id__export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reindex_source_sources__source_id__reindex_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReindexAccepted"];
                 };
             };
             /** @description Validation Error */
@@ -5316,6 +6136,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_tags_tags_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagCountOut"][];
                 };
             };
         };

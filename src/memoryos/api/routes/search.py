@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from memoryos.adapters.db import models
+from memoryos.application import tags
 from memoryos.application.citations import ExplainedHit, explain_hits
 from memoryos.application.ports import SearchFilters
 from memoryos.application.search import SearchResult
@@ -185,6 +186,10 @@ class SearchIn(BaseModel):
     after: datetime | None = None
     before: datetime | None = None
     include_deleted: bool = False
+    # M10.4. Repeat to narrow: `?tag=idea&tag=postgres` returns what carries both.
+    # The `#` is optional and stripped, so a client can send what somebody typed
+    # without knowing whether the sigil is syntax or part of the name.
+    tag: list[str] | None = None
     ef_search: int | None = None
     exact: bool = False
     # Hybrid: both retrievers, fused by RRF. `vector` and `keyword` remain
@@ -224,12 +229,26 @@ async def build_filters(container: Container, body: SearchIn) -> SearchFilters:
             )
         source_ids = [found[name] for name in names]
 
+    # Parsed through the same function the chat command and the tag routes use, so
+    # `#Idea`, `Idea` and `idea` are one filter. A second definition of what a tag
+    # looks like is how they become three.
+    wanted: list[str] = []
+    for value in body.tag or []:
+        text = value.strip()
+        if not text:
+            continue
+        wanted.extend(
+            found.name
+            for found in tags.parse(text if text.startswith("#") else f"#{text}")
+        )
+
     return SearchFilters(
         source_ids=source_ids,
         kinds=[body.kind] if body.kind else None,
         occurred_after=body.after,
         occurred_before=body.before,
         include_deleted=body.include_deleted,
+        tags=wanted or None,
     )
 
 
@@ -347,6 +366,7 @@ async def search(
     after: datetime | None = None,
     before: datetime | None = None,
     include_deleted: bool = False,
+    tag: Annotated[list[str] | None, Query()] = None,
     ef_search: int | None = None,
     exact: bool = False,
     mode: SearchMode = DEFAULT_SEARCH_MODE,
@@ -363,6 +383,7 @@ async def search(
             after=after,
             before=before,
             include_deleted=include_deleted,
+            tag=tag,
             ef_search=ef_search,
             exact=exact,
             mode=mode,

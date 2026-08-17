@@ -29,6 +29,7 @@ describe("search params", () => {
       sources: ["self", "notes"],
       kind: "code",
       exact: true,
+      tags: ["idea", "postgres"],
     };
     expect(roundTrip(state)).toEqual(state);
   });

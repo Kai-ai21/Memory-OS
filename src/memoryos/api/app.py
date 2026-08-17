@@ -145,7 +145,13 @@ def _install_cors(app: FastAPI, settings: Settings) -> None:
         # PATCH joins the list in M5.0: editing a decision is the first write in
         # this API that amends a row rather than creating one, and a browser
         # preflight for a method not named here fails before the request is made.
-        allow_methods=["GET", "POST", "PATCH"],
+        #
+        # DELETE joins it in M10.4, and the reason it was not here before is the
+        # point of that milestone: until now nothing in this API deleted anything.
+        # A missing method here fails at the preflight, so the symptom would have
+        # been a delete button that did nothing and reported a CORS error to the
+        # console — the deletion guarantee defeated by a five-item list.
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         # `Last-Event-ID` joins the list in M10.3: a browser reconnecting an
         # `EventSource` across origins sends it, and a preflight for a header not
         # named here fails before the request is made — which would turn every

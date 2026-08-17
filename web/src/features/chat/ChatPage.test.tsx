@@ -43,6 +43,9 @@ const STATEMENT = {
   grounded: null,
   citations: [],
   attachments: [],
+  corrects: null,
+  superseded_by: null,
+  tags: [],
 };
 
 const QUESTION = {
@@ -60,6 +63,9 @@ const QUESTION = {
   grounded: null,
   citations: [],
   attachments: [],
+  corrects: null,
+  superseded_by: null,
+  tags: [],
 };
 
 const REFUSAL = {
@@ -78,6 +84,9 @@ const REFUSAL = {
   grounded: true,
   citations: [],
   attachments: [],
+  corrects: null,
+  superseded_by: null,
+  tags: [],
 };
 
 /** The requests the page makes on mount, plus whatever a test adds. */

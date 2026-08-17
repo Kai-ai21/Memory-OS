@@ -835,6 +835,88 @@ Index("ix_entities_merged_into", Entity.merged_into_id)
 Index("ix_memories_entity_extractor_version", Memory.entity_extractor_version)
 
 
+class MemoryTag(Base):
+    """A tag somebody put on one item. M10.4.
+
+    **The vocabulary is `entities`, not this table.** A tag resolves to a `CONCEPT`
+    entity — the same row an extractor would have written for the same word — which
+    is what makes `#postgres` connect to every memory that mentions Postgres
+    instead of starting a second, parallel classification of the corpus that
+    happens to use the same words. M3.2's resolution then merges tags and extracted
+    concepts without being told which is which, because by the time it runs there
+    is no difference.
+
+    So what is stored here is only the *link*, and two things about its shape are
+    load-bearing.
+
+    **The tag is a name, not a foreign key into `entities`.** `entities` is
+    derived: a replay truncates it, and extraction — which costs money — is what
+    refills it. A foreign key with `ON DELETE CASCADE` would therefore delete
+    every tag anybody had applied on the next rebuild, and a nullable one would
+    leave rows pointing at nothing. The canonical name survives, and
+    `application/tags.py` re-upserts the entity from it. Names outlive ids, which is
+    the argument M1.7 made for the golden set and M10.1 made for this table's
+    neighbour.
+
+    **The item is `(source_id, external_key)`, not `memory_id`.** Same reason,
+    plus one that is specific to this milestone: a correction creates version 2 of
+    the memory, so a tag keyed on a version id would silently stop applying the
+    moment somebody fixed a typo. The key is the item's durable identity, and it
+    is what a purge deletes by.
+
+    That leaves this table user-authored and outside the replay's truncation, which
+    is correct: nothing in the ingestion log says how somebody filed a thought.
+    """
+
+    __tablename__ = "memory_tags"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    # The source is a foreign key and the key is not, which looks inconsistent and
+    # is not: `sources` is source of truth and survives every replay, so the id is
+    # stable. It is here at all because `external_key` is only unique within a
+    # source — two sources may each hold a `notes/queue.md`.
+    source_id: Mapped[UUID] = mapped_column(
+        _UUID, ForeignKey("sources.id", name="fk_memory_tags_source_id"), nullable=False
+    )
+    external_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # Casefolded, without the `#`, whitespace collapsed — `Entity.canonical_name`'s
+    # normalisation, because this joins to that column and two normalisations would
+    # mean a tag that matches no entity for a reason nobody could see.
+    tag: Mapped[str] = mapped_column(Text, nullable=False)
+    # What was typed, kept for display. `#PostgreSQL` and `#postgresql` are one
+    # tag and the first is what somebody wants to read back.
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        # Tagging the same item twice is one tag. Idempotence at the row level, so
+        # `/tag` can be re-run without a check-then-insert.
+        UniqueConstraint(
+            "source_id", "external_key", "tag", name="uq_memory_tags_item_tag"
+        ),
+        CheckConstraint("length(btrim(tag)) > 0", name="ck_memory_tags_tag_non_empty"),
+        CheckConstraint(
+            "length(btrim(label)) > 0", name="ck_memory_tags_label_non_empty"
+        ),
+        # Stored casefolded rather than trusted to be. The join to
+        # `entities.canonical_name` is by equality, so one uppercase character
+        # written by any path — psql included — is a tag that matches nothing.
+        CheckConstraint("tag = lower(tag)", name="ck_memory_tags_tag_casefolded"),
+        # The tag has no `#`: it is a concept's name, and the sigil is syntax for
+        # typing one. Keeping it would make the canonical name `#postgres` and
+        # nothing would ever resolve.
+        CheckConstraint("tag NOT LIKE '#%'", name="ck_memory_tags_tag_without_sigil"),
+        # "Everything tagged `#idea`", which is the filter, and the join that
+        # reaches the entity behind it.
+        Index("ix_memory_tags_tag", "tag"),
+        # "What is this item tagged", per rendered message, and the lookup a purge
+        # deletes by.
+        Index("ix_memory_tags_item", "source_id", "external_key"),
+    )
+
+
 class EntityMerge(Base):
     """One resolution decision: two entities are the same thing, or might be.
 
@@ -2974,15 +3056,53 @@ class ChatMessage(Base):
     # nobody tests.
     role: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    # Position within the session, from zero. Dense and gapless, because it is
-    # assigned from the session's own `message_count` in the transaction that
-    # increments it.
+    # Position within the session, from zero, assigned under the session row's
+    # `FOR UPDATE` lock.
+    #
+    # **Gapless until M10.4, and no longer.** It used to be read straight off
+    # `message_count`, which made "the count" and "the next ordinal" one number.
+    # A permanent deletion removes a turn, and those two numbers then disagree:
+    # decrementing the count would hand the next message an ordinal that already
+    # exists, and not decrementing it would make the rail's "12 messages" a count
+    # of rows that are no longer there. So `message_count` stayed a count and the
+    # ordinal comes from `max(ordinal) + 1` — race-free for the same reason the
+    # counter was, since it is the lock that serializes, not the arithmetic.
+    #
+    # What survives is the only property anything relies on: ordinals order a
+    # conversation. Nothing reads them as a dense index.
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     # The memory this message became, named the way the log names it. Null for an
     # assistant message, and null for a question — neither stores anything.
     external_key: Mapped[str | None] = mapped_column(Text)
     # How the classifier read it. User messages only.
     intent: Mapped[str | None] = mapped_column(Text)
+    # M10.4. The earlier turn this one corrects, when it is a correction.
+    #
+    # **A correction is a new row, because M10.0 made these immutable and the
+    # immutability is the feature.** Editing `content` in place would leave no
+    # record that the first version was ever believed — and what somebody thought
+    # before they corrected it is exactly the data Phase 5 reasons over. So both
+    # rows stay in the transcript: the original marked superseded, this one
+    # pointing back at it.
+    #
+    # Both carry the same `external_key`, which is what makes the *memory* side a
+    # version bump rather than a second memory: `add_version` supersedes v1 and
+    # inserts v2 for the same item, so the corpus holds one item with a history
+    # instead of two items disagreeing.
+    #
+    # `ON DELETE SET NULL` rather than CASCADE, and the asymmetry is deliberate.
+    # A purge deletes every turn sharing the purged key, so in practice the pair
+    # goes together; if some other path ever removes only the original, the
+    # correction is still a message somebody sent and deleting it would be this
+    # column reaching further than its meaning.
+    corrects_message_id: Mapped[UUID | None] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "chat_messages.id",
+            name="fk_chat_messages_corrects_message_id",
+            ondelete="SET NULL",
+        ),
+    )
     # Assistant messages only, all three.
     answer_model: Mapped[str | None] = mapped_column(Text)
     # Whether the corpus declined. Recorded rather than derived from the prose,
@@ -3050,9 +3170,37 @@ class ChatMessage(Base):
             "intent <> 'question' OR external_key IS NULL",
             name="ck_chat_messages_question_stores_nothing",
         ),
+        # A message cannot correct itself. Unreachable through the use case, which
+        # inserts the correction with a fresh id, and asserted anyway: the cycle it
+        # would create is one a transcript renderer follows.
+        CheckConstraint(
+            "corrects_message_id IS NULL OR corrects_message_id <> id",
+            name="ck_chat_messages_not_correcting_self",
+        ),
+        # An answer corrects nothing. Corrections are a person amending what they
+        # said; an assistant turn is derived text, and re-answering is asking again
+        # rather than correcting.
+        CheckConstraint(
+            "corrects_message_id IS NULL OR role = 'user'",
+            name="ck_chat_messages_only_user_corrects",
+        ),
         # The session's own read, in order.
         Index("ix_chat_messages_session", "session_id", "ordinal"),
         Index("ix_chat_messages_created_at", "created_at"),
+        # "Has this turn been superseded by a correction?", asked once per rendered
+        # message. Partial, because the column is null on nearly every row.
+        Index(
+            "ix_chat_messages_corrects",
+            "corrects_message_id",
+            postgresql_where=text("corrects_message_id IS NOT NULL"),
+        ),
+        # Every turn that stored a given memory, which is what a purge deletes and
+        # what resolves a message to its memory on read.
+        Index(
+            "ix_chat_messages_external_key",
+            "external_key",
+            postgresql_where=text("external_key IS NOT NULL"),
+        ),
     )
 
 

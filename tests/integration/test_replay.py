@@ -15,7 +15,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -204,6 +204,80 @@ async def test_versions_and_tombstones_survive_a_rebuild(harness: Harness) -> No
 
     after = await harness.snapshot()
     assert compare(before, after).identical, compare(before, after).render()
+
+
+async def test_a_purged_item_does_not_come_back_from_the_log(
+    harness: Harness, tmp_path: Path
+) -> None:
+    """M10.4's hardest question about replay, and the answer that makes it honest.
+
+    **The corpus is a projection of the log, so a permanent deletion has to survive
+    one.** A purge that only removed rows would be undone by the next rebuild —
+    the observations are still in the log, and a faithful replay would happily
+    reconstruct the memory from them. That would make "delete permanently" mean
+    "until somebody runs replay".
+
+    So the purge is itself an event, and the rebuild skips *every* event for a
+    purged key including the observations before it. Which is also why the blob
+    preflight has to exempt those keys: their bytes were shredded on purpose, and a
+    check that refused to start would mean the first permanent deletion cost the
+    ability to rebuild.
+
+    Both halves are asserted here, and the second is the one that would fail
+    silently: the replay completing at all is the preflight exemption working.
+    """
+    from memoryos.application import deletion
+
+    (harness.root / "queue.md").write_text("# Queue v2\n\n" + QUEUE_TEXT * 4 + "\n")
+    await harness.ingest()
+
+    async with harness.sessions() as session:
+        memory_id = (
+            await session.execute(
+                select(models.Memory.id).where(
+                    models.Memory.external_key == "queue.md",
+                    models.Memory.is_current.is_(True),
+                )
+            )
+        ).scalar_one()
+        versions = (
+            await session.execute(
+                select(func.count(models.Memory.id)).where(
+                    models.Memory.external_key == "queue.md"
+                )
+            )
+        ).scalar_one()
+    assert versions == 2, "the fixture needs a version history to prove all of it goes"
+
+    report = await deletion.purge_memory(harness.sessions, harness.blobs, memory_id)
+    assert report.memories == 2
+
+    # A rebuild from the log — which still holds both observations and the purge.
+    await truncate_derived(harness.sessions, clear_cache=True)
+    replayed = await harness.replay(clear_cache=True)
+
+    async with harness.sessions() as session:
+        assert (
+            await session.execute(
+                select(func.count(models.Memory.id)).where(
+                    models.Memory.external_key == "queue.md"
+                )
+            )
+        ).scalar_one() == 0
+        # The other fixture file rebuilt normally, so this is a replay that worked
+        # rather than one that skipped everything.
+        assert (
+            await session.execute(
+                select(func.count(models.Memory.id)).where(
+                    models.Memory.external_key == "bread.txt"
+                )
+            )
+        ).scalar_one() >= 1
+
+    # Reported rather than silent. "Two events deliberately not applied" and "two
+    # events lost" look identical in a corpus and could not be more different.
+    assert replayed.purged == 1
+    assert replayed.skipped_purged == 2
 
 
 async def test_exactly_one_version_is_current_after_a_rebuild(
@@ -609,8 +683,28 @@ async def test_an_unreplayable_event_type_is_refused(harness: Harness) -> None:
     reporting it. The CHECK constraint is dropped for the duration because the
     scenario being simulated is precisely a schema that has learned a new event
     kind which this code has not.
+
+    **The definition is read back before it is dropped, rather than restored from a
+    literal, and M10.4 is why.** This test used to re-add a hard-coded copy of the
+    constraint as it stood when the test was written — so when `item_purged` joined
+    `EventType`, the restore silently *downgraded* the schema: every later test in
+    the run, and every subsequent run against the same database, saw a constraint
+    that rejected the new event kind. The symptom was five failures in a different
+    file, on the second run only, with nothing wrong in the file that failed.
+
+    DDL is the one thing `clean_database` cannot undo — it truncates rows, not
+    schemas — so a test that alters a constraint owns putting the *actual* one
+    back. `pg_get_constraintdef` is what the actual one is.
     """
     async with harness.sessions.begin() as session:
+        definition = (
+            await session.execute(
+                sa_text(
+                    "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                    "WHERE conname = 'ck_ingestion_events_event_type'"
+                )
+            )
+        ).scalar_one()
         await session.execute(
             sa_text(
                 "ALTER TABLE ingestion_events "
@@ -634,11 +728,19 @@ async def test_an_unreplayable_event_type_is_refused(harness: Harness) -> None:
             await harness.replay()
     finally:
         async with harness.sessions.begin() as session:
+            # The row carrying the invented type has to go before the constraint
+            # comes back, or the restore fails validating it — and then the schema
+            # stays broken for the rest of the run, which is the failure this
+            # docstring is about.
+            await session.execute(
+                delete(models.IngestionEvent).where(
+                    models.IngestionEvent.event_type == "item_archived"
+                )
+            )
             await session.execute(
                 sa_text(
                     "ALTER TABLE ingestion_events ADD CONSTRAINT "
-                    "ck_ingestion_events_event_type CHECK "
-                    "(event_type IN ('artifact_observed', 'item_deleted')) NOT VALID"
+                    f"ck_ingestion_events_event_type {definition}"
                 )
             )
 

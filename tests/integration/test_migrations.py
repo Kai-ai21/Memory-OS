@@ -22,7 +22,23 @@ async def public_tables(engine: AsyncEngine) -> set[str]:
 
 async def test_migration_applies_to_an_empty_database_and_round_trips(
     engine: AsyncEngine,
+    clean_database: None,
 ) -> None:
+    """A first-ever install, and a downgrade that is not a stub.
+
+    `clean_database` is required rather than incidental, and M10.4 is where that
+    became visible. Three migrations — 0027, 0029 and 0030 — deliberately *refuse*
+    to downgrade while rows exist that the older schema cannot hold: a chat source
+    has no file to be re-read from, an upload has no path, and a purge event is the
+    only record that a permanent deletion happened. Each raises rather than choosing
+    between destroying data and leaving it invalid, which is right.
+
+    That makes this test's outcome depend on what the previous test file left
+    behind, which is exactly the order-dependent failure `clean_database` exists to
+    prevent — and it failed for real: a new test file whose name sorts just above
+    this one left a chat source, and the downgrade correctly refused. The
+    refusals are the feature; the missing fixture was the bug.
+    """
     # Start from empty, so this exercises a first-ever install and not just a
     # no-op against a database that already happens to be at head.
     run_alembic(command.downgrade, "base")

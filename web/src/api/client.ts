@@ -217,6 +217,12 @@ export type AttachLimits = Ok<paths["/chat/attach/limits"]["get"]>;
 export type Connection = MessageStatus["connections"][number];
 export type CreateSourceIn =
   paths["/sources"]["post"]["requestBody"]["content"]["application/json"];
+export type DeletionScope = Ok<paths["/chat/messages/{memory_id}/deletion"]["get"]>;
+export type Deletion = Ok<paths["/chat/messages/{memory_id}"]["delete"]>;
+export type TagResult = Ok<paths["/chat/messages/{memory_id}/tags"]["post"]>;
+export type TagCount = Ok<paths["/tags"]["get"]>[number];
+export type SourceDeletionScope = Ok<paths["/sources/{source_id}/deletion"]["get"]>;
+export type SourceDeletion = Ok<paths["/sources/{source_id}"]["delete"]>;
 
 export interface SearchArgs {
   q: string;
@@ -225,14 +231,17 @@ export interface SearchArgs {
   sources?: string[];
   kind?: string;
   exact?: boolean;
+  /** Canonical tag names, no `#`. Conjunctive: every one must be present. */
+  tags?: string[];
 }
 
 export const api = {
-  search: ({ q, k, sources, kind, exact }: SearchArgs) => {
+  search: ({ q, k, sources, kind, exact, tags }: SearchArgs) => {
     const params = new URLSearchParams({ q, k: String(k ?? 10) });
     // Repeated rather than comma-joined: FastAPI reads a list parameter that
     // way, and a source name could legitimately contain a comma.
     for (const name of sources ?? []) params.append("source", name);
+    for (const tag of tags ?? []) params.append("tag", tag);
     if (kind) params.set("kind", kind);
     if (exact) params.set("exact", "true");
     return request<SearchResult>(`/search?${params.toString()}`);
@@ -472,9 +481,13 @@ export const api = {
    * deliberately not corpus search: this answers "where in this conversation did
    * I say that" over rows already on screen, and `/search` is the other question.
    */
-  chatMessages: (sessionId: string, q?: string) => {
+  chatMessages: (sessionId: string, q?: string, tags?: string[]) => {
     const params = new URLSearchParams();
     if (q && q.trim()) params.set("q", q.trim());
+    // Repeated rather than comma-joined, matching `source` on `/search`: FastAPI
+    // reads a list parameter that way, and the tags are conjunctive server-side —
+    // two tags narrow.
+    for (const tag of tags ?? []) if (tag.trim()) params.append("tag", tag.trim());
     const query = params.toString();
     return request<ChatMessage[]>(`/chat/${sessionId}${query ? `?${query}` : ""}`);
   },
@@ -559,6 +572,87 @@ export const api = {
       `/sources/${id}/sync${full ? "?full=true" : ""}`,
       { method: "POST" },
     ),
+
+  /**
+   * Correct what a stored message says.
+   *
+   * POST, not PATCH, because nothing is edited: this creates a new version of the
+   * memory and a new turn in the transcript, and the original stays visible and
+   * marked superseded. What somebody believed before they corrected it is part of
+   * the record.
+   */
+  correctMessage: (messageId: string, text: string) =>
+    request<ChatExchange>(`/chat/messages/${messageId}/correct`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
+
+  /**
+   * What a permanent deletion would remove, read *before* asking.
+   *
+   * A separate call rather than counts carried from the message on screen: the
+   * confirmation has to name what the operation will actually hit, and anything
+   * derived from a previous render is a number that may have moved.
+   */
+  deletionScope: (memoryId: string) =>
+    request<DeletionScope>(`/chat/messages/${memoryId}/deletion`),
+
+  /**
+   * Remove a memory from view, or destroy it.
+   *
+   * `permanent` defaults to false, matching the API, and the two are one call for
+   * the same reason: two functions would be two chances to reach for the
+   * destructive one by mistake.
+   */
+  deleteMemory: (memoryId: string, permanent = false) =>
+    request<Deletion>(
+      `/chat/messages/${memoryId}${permanent ? "?permanent=true" : ""}`,
+      { method: "DELETE" },
+    ),
+
+  restoreMemory: (memoryId: string) =>
+    request<Deletion>(`/chat/messages/${memoryId}/restore`, { method: "POST" }),
+
+  /** Tags as typed — `"#project #idea"` — parsed server-side. */
+  tagMemory: (memoryId: string, tags: string) =>
+    request<TagResult>(`/chat/messages/${memoryId}/tags`, {
+      method: "POST",
+      body: JSON.stringify({ tags }),
+    }),
+
+  untagMemory: (memoryId: string, tags: string) =>
+    request<TagResult>(`/chat/messages/${memoryId}/tags`, {
+      method: "DELETE",
+      body: JSON.stringify({ tags }),
+    }),
+
+  /** Every tag in use, most-used first. The vocabulary a filter control offers. */
+  tags: () => request<TagCount[]>("/tags"),
+
+  sourceDeletionScope: (id: string) =>
+    request<SourceDeletionScope>(`/sources/${id}/deletion`),
+
+  /**
+   * Delete a source and everything from it.
+   *
+   * `confirmItems` is the count the confirmation showed, sent back so the API can
+   * refuse if the corpus moved in between — somebody consented to a specific
+   * amount of loss, and a sync landing mid-dialog makes it a different operation.
+   */
+  deleteSource: (id: string, confirmItems: number) =>
+    request<SourceDeletion>(
+      `/sources/${id}?confirm_items=${confirmItems}`,
+      { method: "DELETE" },
+    ),
+
+  reindexSource: (id: string) =>
+    request<{ source: string; memories: number; jobs: number }>(
+      `/sources/${id}/reindex`,
+      { method: "POST" },
+    ),
+
+  /** Where a browser downloads one source's export from. Not fetched here. */
+  sourceExportUrl: (id: string) => `${API_BASE}/sources/${id}/export`,
 };
 
 export interface AttachArgs {

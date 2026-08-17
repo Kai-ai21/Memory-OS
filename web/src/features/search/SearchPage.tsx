@@ -91,7 +91,15 @@ export function SearchPage() {
   );
 
   const results = useQuery({
-    queryKey: ["search", state.q, state.k, state.sources, state.kind, state.exact],
+    queryKey: [
+      "search",
+      state.q,
+      state.k,
+      state.sources,
+      state.kind,
+      state.exact,
+      state.tags,
+    ],
     queryFn: () =>
       api.search({
         q: state.q,
@@ -99,6 +107,7 @@ export function SearchPage() {
         sources: state.sources,
         kind: state.kind ?? undefined,
         exact: state.exact,
+        tags: state.tags,
       }),
     enabled: isRunnable(state),
     // A search is a question about a fixed corpus; re-asking it on every window
@@ -107,7 +116,13 @@ export function SearchPage() {
   });
 
   const filters = useMemo(
-    () => ({ k: state.k, sources: state.sources, kind: state.kind, exact: state.exact }),
+    () => ({
+      k: state.k,
+      sources: state.sources,
+      kind: state.kind,
+      exact: state.exact,
+      tags: state.tags,
+    }),
     [state],
   );
 

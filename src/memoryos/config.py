@@ -15,9 +15,42 @@ from memoryos.adapters.reranking.cross_encoder import (
 )
 
 
+# Where `./var/blobs` and `./var/hf` are relative *to*.
+#
+# **Not the working directory, and M10.3 is why.** Starting the API from `web/`
+# while the worker ran from the repo gave the two processes different blob roots:
+# the API wrote artifacts into `web/var/blobs`, the worker looked for them in
+# `var/blobs`, and a normalization job dead-lettered on a blob that had in fact
+# been stored — a hundred metres from where anything went looking. Nothing errored
+# at the point of the mistake. M1.7 hit the same edge from the other side, where
+# running `replay` from a subdirectory resolved this default to an empty path and
+# truncated the corpus before failing on the first document.
+#
+# So a relative path is anchored to the tree rather than to the shell. Walking up
+# from this module rather than from `cwd`, because that is the one location that
+# does not depend on how the process was started — which is the entire failure
+# being fixed. An installed-not-editable copy has no `pyproject.toml` above it, so
+# the walk falls back to `cwd` and the old behaviour, and an absolute
+# `MEMOS_BLOB_ROOT` is untouched either way: naming a path outright is the one
+# case where nobody has to guess.
+def _project_root() -> Path:
+    here = Path(__file__).resolve()
+    for candidate in here.parents:
+        if (candidate / "pyproject.toml").is_file():
+            return candidate
+    return Path.cwd()
+
+
+PROJECT_ROOT = _project_root()
+
+
 class Settings(BaseSettings):
+    # `env_file` is anchored for the same reason the paths below are, and the two
+    # halves of the M10.3 failure were both here: run from `web/`, this file was
+    # not found at all, so `MEMOS_BLOB_ROOT` went unread *and* the default it fell
+    # back to resolved somewhere else.
     model_config = SettingsConfigDict(
-        env_file=".env", env_prefix="MEMOS_", extra="ignore"
+        env_file=PROJECT_ROOT / ".env", env_prefix="MEMOS_", extra="ignore"
     )
 
     environment: str = "local"
@@ -244,6 +277,25 @@ class Settings(BaseSettings):
     # reads a private corpus means any page the operator visits can search it.
     # `create_app` refuses a wildcard outright rather than trusting this comment.
     cors_origins: list[str] = []
+
+    @model_validator(mode="after")
+    def _anchor_relative_paths(self) -> "Settings":
+        """Resolve `blob_root` and `hf_home` against the tree, not the shell.
+
+        Here rather than at the two call sites, so that every reader of these
+        fields — the container, the replay preflight, a script somebody writes
+        next week — sees the same absolute path without knowing the rule exists.
+        That is the property the M10.3 failure lacked: the API and the worker read
+        the same setting and disagreed about what it named.
+
+        An absolute path is returned unchanged, which is what makes the test
+        suite's temporary directories and any real deployment unaffected.
+        """
+        if not self.blob_root.is_absolute():
+            self.blob_root = (PROJECT_ROOT / self.blob_root).resolve()
+        if not self.hf_home.is_absolute():
+            self.hf_home = (PROJECT_ROOT / self.hf_home).resolve()
+        return self
 
     @model_validator(mode="after")
     def _redirect_the_test_environment(self) -> "Settings":

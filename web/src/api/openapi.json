@@ -266,6 +266,20 @@
               }
             ],
             "title": "Source"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
           }
         },
         "required": [
@@ -1471,6 +1485,21 @@
         "title": "ContributionOut",
         "type": "object"
       },
+      "CorrectionIn": {
+        "description": "The corrected text of a stored message.\n\nNo id in the body: the message is the path. And no intent override, for the\nreason `/chat` has none \u2014 the reading was made once, by the classifier, and a\ncorrection corrects the words rather than the reading.",
+        "properties": {
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "CorrectionIn",
+        "type": "object"
+      },
       "CostOut": {
         "properties": {
           "completion_tokens": {
@@ -1948,6 +1977,82 @@
           "evidence"
         ],
         "title": "DecisionSummaryOut",
+        "type": "object"
+      },
+      "DeletionOut": {
+        "description": "What a deletion did, and whether it can be taken back.\n\n`recoverable` is a field rather than something a client infers from\n`permanent`, because it is the one thing a person needs after the fact and the\ninference is exactly where a UI would eventually get it backwards.",
+        "properties": {
+          "blobs_shredded": {
+            "default": 0,
+            "title": "Blobs Shredded",
+            "type": "integer"
+          },
+          "chunks": {
+            "default": 0,
+            "title": "Chunks",
+            "type": "integer"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "external_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Key"
+          },
+          "memories": {
+            "default": 0,
+            "title": "Memories",
+            "type": "integer"
+          },
+          "mentions": {
+            "default": 0,
+            "title": "Mentions",
+            "type": "integer"
+          },
+          "permanent": {
+            "title": "Permanent",
+            "type": "boolean"
+          },
+          "recoverable": {
+            "title": "Recoverable",
+            "type": "boolean"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "tags": {
+            "default": 0,
+            "title": "Tags",
+            "type": "integer"
+          },
+          "turns": {
+            "default": 0,
+            "title": "Turns",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "permanent",
+          "recoverable",
+          "detail"
+        ],
+        "title": "DeletionOut",
         "type": "object"
       },
       "DiffOut": {
@@ -3243,6 +3348,11 @@
       },
       "MessageIn": {
         "properties": {
+          "defer_answer": {
+            "default": false,
+            "title": "Defer Answer",
+            "type": "boolean"
+          },
           "new_session": {
             "default": false,
             "title": "New Session",
@@ -3312,6 +3422,18 @@
           "content": {
             "title": "Content",
             "type": "string"
+          },
+          "corrects": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Corrects"
           },
           "created_at": {
             "format": "date-time",
@@ -3389,6 +3511,25 @@
             "format": "uuid",
             "title": "Session Id",
             "type": "string"
+          },
+          "superseded_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superseded By"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
           }
         },
         "required": [
@@ -4000,6 +4141,83 @@
         "title": "Period",
         "type": "string"
       },
+      "PurgeScopeOut": {
+        "description": "What a permanent deletion would remove. The confirmation's contents.\n\nEvery count is here because a person cannot consent to an unspecified amount of\nloss, and `log_note` is here because they cannot consent to a promise this\nsystem does not keep: the append-only log retains the record that something was\nobserved at this key, and the content is what goes. The dialog says so.",
+        "properties": {
+          "attachments": {
+            "title": "Attachments",
+            "type": "integer"
+          },
+          "blobs": {
+            "title": "Blobs",
+            "type": "integer"
+          },
+          "chunks": {
+            "title": "Chunks",
+            "type": "integer"
+          },
+          "embedded_chunks": {
+            "title": "Embedded Chunks",
+            "type": "integer"
+          },
+          "evidence": {
+            "title": "Evidence",
+            "type": "integer"
+          },
+          "log_note": {
+            "title": "Log Note",
+            "type": "string"
+          },
+          "memories": {
+            "title": "Memories",
+            "type": "integer"
+          },
+          "mentions": {
+            "title": "Mentions",
+            "type": "integer"
+          },
+          "orphaned_entities": {
+            "title": "Orphaned Entities",
+            "type": "integer"
+          },
+          "previews": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Previews",
+            "type": "array"
+          },
+          "shared_blobs": {
+            "title": "Shared Blobs",
+            "type": "integer"
+          },
+          "tags": {
+            "title": "Tags",
+            "type": "integer"
+          },
+          "turns": {
+            "title": "Turns",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "memories",
+          "chunks",
+          "embedded_chunks",
+          "mentions",
+          "orphaned_entities",
+          "tags",
+          "turns",
+          "attachments",
+          "evidence",
+          "blobs",
+          "shared_blobs",
+          "previews",
+          "log_note"
+        ],
+        "title": "PurgeScopeOut",
+        "type": "object"
+      },
       "QuerySummaryOut": {
         "properties": {
           "last_judged_at": {
@@ -4224,6 +4442,29 @@
         "title": "ReflectionOut",
         "type": "object"
       },
+      "ReindexAccepted": {
+        "properties": {
+          "jobs": {
+            "title": "Jobs",
+            "type": "integer"
+          },
+          "memories": {
+            "title": "Memories",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "memories",
+          "jobs"
+        ],
+        "title": "ReindexAccepted",
+        "type": "object"
+      },
       "SearchIn": {
         "properties": {
           "after": {
@@ -4318,6 +4559,20 @@
               }
             ],
             "title": "Source"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
           }
         },
         "required": [
@@ -4445,6 +4700,151 @@
           "message_count"
         ],
         "title": "SessionOut",
+        "type": "object"
+      },
+      "SourceDeletionOut": {
+        "properties": {
+          "blobs_shredded": {
+            "title": "Blobs Shredded",
+            "type": "integer"
+          },
+          "chunks": {
+            "title": "Chunks",
+            "type": "integer"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "items": {
+            "title": "Items",
+            "type": "integer"
+          },
+          "memories": {
+            "title": "Memories",
+            "type": "integer"
+          },
+          "mentions": {
+            "title": "Mentions",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_removed": {
+            "title": "Source Removed",
+            "type": "boolean"
+          },
+          "tags": {
+            "title": "Tags",
+            "type": "integer"
+          },
+          "turns": {
+            "title": "Turns",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source",
+          "items",
+          "memories",
+          "chunks",
+          "mentions",
+          "tags",
+          "turns",
+          "blobs_shredded",
+          "source_removed",
+          "detail"
+        ],
+        "title": "SourceDeletionOut",
+        "type": "object"
+      },
+      "SourceDeletionScopeOut": {
+        "description": "What deleting a whole source would remove.\n\n**The most destructive operation in the product, so the counts are exact rather\nthan approximate and they are read at the moment of asking.** A dialog that said\n\"this will delete a lot\" is not a dialog somebody can consent to, and one that\nreused a count from the sources list would be confirming against whatever was\ntrue when the page loaded.",
+        "properties": {
+          "attachments": {
+            "title": "Attachments",
+            "type": "integer"
+          },
+          "blobs": {
+            "title": "Blobs",
+            "type": "integer"
+          },
+          "chunks": {
+            "title": "Chunks",
+            "type": "integer"
+          },
+          "embedded_chunks": {
+            "title": "Embedded Chunks",
+            "type": "integer"
+          },
+          "evidence": {
+            "title": "Evidence",
+            "type": "integer"
+          },
+          "items": {
+            "title": "Items",
+            "type": "integer"
+          },
+          "log_note": {
+            "title": "Log Note",
+            "type": "string"
+          },
+          "memories": {
+            "title": "Memories",
+            "type": "integer"
+          },
+          "mentions": {
+            "title": "Mentions",
+            "type": "integer"
+          },
+          "orphaned_entities": {
+            "title": "Orphaned Entities",
+            "type": "integer"
+          },
+          "previews": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Previews",
+            "type": "array"
+          },
+          "shared_blobs": {
+            "title": "Shared Blobs",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "tags": {
+            "title": "Tags",
+            "type": "integer"
+          },
+          "turns": {
+            "title": "Turns",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source",
+          "items",
+          "memories",
+          "chunks",
+          "embedded_chunks",
+          "mentions",
+          "orphaned_entities",
+          "tags",
+          "turns",
+          "attachments",
+          "evidence",
+          "blobs",
+          "shared_blobs",
+          "previews",
+          "log_note"
+        ],
+        "title": "SourceDeletionScopeOut",
         "type": "object"
       },
       "SourceKind": {
@@ -5131,6 +5531,68 @@
           "full"
         ],
         "title": "SyncAccepted",
+        "type": "object"
+      },
+      "TagCountOut": {
+        "properties": {
+          "items": {
+            "title": "Items",
+            "type": "integer"
+          },
+          "tag": {
+            "title": "Tag",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tag",
+          "items"
+        ],
+        "title": "TagCountOut",
+        "type": "object"
+      },
+      "TagIn": {
+        "description": "Tags to put on a message's memory.\n\nA string rather than a list, so the API takes what somebody typed \u2014\n`\"#project #idea\"` \u2014 and the parser that reads a chat command is the same one\nthat reads this. A list would mean two definitions of what a tag looks like,\nand the one that disagreed would be whichever was not being tested.",
+        "properties": {
+          "tags": {
+            "minLength": 1,
+            "title": "Tags",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tags"
+        ],
+        "title": "TagIn",
+        "type": "object"
+      },
+      "TagsOut": {
+        "properties": {
+          "already": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Already",
+            "type": "array"
+          },
+          "applied": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Applied",
+            "type": "array"
+          },
+          "entities_created": {
+            "title": "Entities Created",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "applied",
+          "already",
+          "entities_created"
+        ],
+        "title": "TagsOut",
         "type": "object"
       },
       "TimeProvenance": {
@@ -6415,6 +6877,148 @@
         ]
       }
     },
+    "/chat/messages/{memory_id}": {
+      "delete": {
+        "description": "Remove a memory from view, or \u2014 with `permanent=true` \u2014 delete it.\n\n**One route with an explicit flag, rather than two routes, and the flag defaults\nto the recoverable level.** Two endpoints would mean two places for a client to\nget the destructive one by mistake; a default of `permanent=true` would mean a\nclient that forgot the parameter destroyed something. The dangerous operation is\nthe one you have to ask for by name.\n\n`DELETE` for both, because both are deletions from the reader's point of view \u2014\nwhat differs is whether it can be undone, which is what the response says.",
+        "operationId": "delete_memory_chat_messages__memory_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "permanent",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Permanent",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Memory",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/chat/messages/{memory_id}/deletion": {
+      "get": {
+        "description": "Exactly what deleting this memory permanently would take.\n\nA separate read before the destructive write, so the numbers in the dialog are\nthe numbers the operation will hit. A client that computed them from what it\nalready had on screen would be confirming against a stale count \u2014 and the one\nthing a confirmation must not do is understate.",
+        "operationId": "deletion_scope_chat_messages__memory_id__deletion_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurgeScopeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deletion Scope",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/chat/messages/{memory_id}/restore": {
+      "post": {
+        "description": "Bring a memory removed from view back, as a new version.\n\nNot an undelete of the row: the corpus is a projection of the log, so this\nre-observes the same bytes at the same key and lets the ordinary version path\nrecord it. A replay reproduces the result without knowing restoration exists.",
+        "operationId": "restore_memory_chat_messages__memory_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Memory",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/chat/messages/{memory_id}/status": {
       "get": {
         "description": "How far a stored message has got, and what it turned out to connect to.\n\nKeyed by memory id rather than message id, because what it reports is a\nproperty of the memory: the same question is worth asking about a file, and an\nendpoint that only worked for things that were typed would be the first\nchat-shaped special case in this system.",
@@ -6454,6 +7058,166 @@
           }
         },
         "summary": "Message Status",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/chat/messages/{memory_id}/tags": {
+      "delete": {
+        "description": "Remove tags from a memory. The concepts themselves are left alone.",
+        "operationId": "untag_memory_chat_messages__memory_id__tags_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Untag Memory",
+        "tags": [
+          "chat"
+        ]
+      },
+      "post": {
+        "description": "File a memory under one or more concepts.\n\nKeyed by memory id rather than message id, for the reason\n`/chat/messages/{memory_id}/status` is: a tag is a property of the memory, the\nsame question is worth asking about a file, and an endpoint that only worked\nfor things that were typed would be the first chat-shaped special case in the\ncorpus.",
+        "operationId": "tag_memory_chat_messages__memory_id__tags_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tag Memory",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/chat/messages/{message_id}/correct": {
+      "post": {
+        "description": "Amend what a stored message says, keeping what it used to say.\n\n**201, not 200, and the status code is the design.** This creates: a new\nversion of the memory and a new turn in the transcript. A `PATCH` returning 200\nwould describe an edit, and nothing here is edited \u2014 M10.0 made turns immutable\nand the original stays visible, superseded, because what somebody believed\nbefore they corrected it is the data Phase 5 reasons over.\n\nRegistered above `/chat/{session_id}` with the rest of the literal segments.",
+        "operationId": "correct_message_chat_messages__message_id__correct_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExchangeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Correct Message",
         "tags": [
           "chat"
         ]
@@ -6556,7 +7320,7 @@
     },
     "/chat/{session_id}": {
       "get": {
-        "description": "One conversation's turns, in order, oldest first.\n\n`q` filters within this session by plain substring, and that is deliberately\nall it does. **Search within a session is not corpus search**: it answers\n\"where in this conversation did I say that\" over rows the reader has already\nseen, and running it through the embedder would return semantic neighbours\nfrom a conversation they can see all of. `/search` is the other question.",
+        "description": "One conversation's turns, in order, oldest first.\n\n`q` filters within this session by plain substring, and that is deliberately\nall it does. **Search within a session is not corpus search**: it answers\n\"where in this conversation did I say that\" over rows the reader has already\nseen, and running it through the embedder would return semantic neighbours\nfrom a conversation they can see all of. `/search` is the other question.\n\n`tag` filters to turns whose memory carries all of them \u2014 repeat the parameter\nto narrow. The `#` is optional and stripped, so a client may send what somebody\ntyped.",
         "operationId": "session_messages_chat__session_id__get",
         "parameters": [
           {
@@ -6583,6 +7347,25 @@
                 }
               ],
               "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tag"
             }
           }
         ],
@@ -8388,6 +9171,25 @@
           },
           {
             "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tag"
+            }
+          },
+          {
+            "in": "query",
             "name": "ef_search",
             "required": false,
             "schema": {
@@ -8570,6 +9372,206 @@
           }
         },
         "summary": "Create Source",
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/sources/{source_id}": {
+      "delete": {
+        "description": "Permanently delete everything a source produced.\n\n**`confirm_items` is a second key on the launch panel, and it is required by\nconvention rather than by the signature.** A client is expected to read\n`/sources/{id}/deletion`, show the counts, and send back the item count it\nshowed. If the corpus has changed since \u2014 a sync landed, another tab deleted\nsomething \u2014 the numbers disagree and this refuses, because the person consented\nto a specific amount of loss and the operation is now a different one.\n\nOmitting it is allowed, deliberately: this is a local-first tool and `curl`\nwithout a ceremony parameter is a legitimate way to use it. What is not allowed\nis a *wrong* count, which is the case that means somebody confirmed something\nelse.",
+        "operationId": "delete_source_sources__source_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "confirm_items",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confirm Items"
+            }
+          },
+          {
+            "in": "query",
+            "name": "keep_registration",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Keep Registration",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceDeletionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Source",
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/sources/{source_id}/deletion": {
+      "get": {
+        "description": "Exactly what deleting this source would take.",
+        "operationId": "source_deletion_scope_sources__source_id__deletion_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceDeletionScopeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Source Deletion Scope",
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/sources/{source_id}/export": {
+      "get": {
+        "description": "Everything from one source, as JSON, with every version.\n\nStreamed rather than assembled. A source can hold a corpus, and the format is\nthe one `memoryos export` writes \u2014 one implementation, so a file downloaded from\nthe browser and a file written by the CLI cannot differ.",
+        "operationId": "export_source_sources__source_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Source",
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/sources/{source_id}/reindex": {
+      "post": {
+        "description": "Re-run the pipeline over everything this source holds.\n\n**Re-normalization, not re-ingestion, and the difference is what makes this\ncheap and safe.** Nothing is re-read from the source and no event is appended:\nthe artifacts are already in the blob store and the log already says what was\nobserved. This enqueues one `NORMALIZE_MEMORY` job per current memory, and the\nexisting pipeline then re-parses, re-chunks and re-embeds \u2014 which is the\noperation somebody wants after a chunker change or a parser fix, and it is the\nsame work `rechunk` does for a subset.\n\n202 with a count, never inline. A corpus-sized re-index is minutes of model\ntime.\n\nDeliberately does not clear `entity_extractor_version`. Re-extraction is real\nmoney per chunk and is its own command; a re-index that silently spent it would\nbe a button whose cost is invisible.",
+        "operationId": "reindex_source_sources__source_id__reindex_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReindexAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reindex Source",
         "tags": [
           "sources"
         ]
@@ -8797,6 +9799,32 @@
         "summary": "Mark Useful",
         "tags": [
           "surfacing"
+        ]
+      }
+    },
+    "/tags": {
+      "get": {
+        "description": "Every tag in use and how many items carry it, most-used first.\n\nIts own top-level path rather than under `/chat`, because a tag is not a chat\nconcept \u2014 it is on the memory, and the search page filters by it.",
+        "operationId": "list_tags_tags_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TagCountOut"
+                  },
+                  "title": "Response List Tags Tags Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Tags",
+        "tags": [
+          "chat"
         ]
       }
     },

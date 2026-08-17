@@ -33,6 +33,19 @@ export interface SearchState {
   sources: string[];
   kind: string | null;
   exact: boolean;
+  /**
+   * Canonical tag names, without the `#`. Conjunctive server-side: two tags
+   * narrow, because a second filter is somebody narrowing.
+   *
+   * Repeated in the URL rather than comma-joined, unlike `source`, and the
+   * difference is not an inconsistency — the API reads `tag` as a repeated
+   * parameter and `source` as one too, while this module has always comma-joined
+   * sources and split them again on the way out. Tags follow the API's shape
+   * because they are also produced by links written elsewhere in the interface
+   * (`/search?tag=idea` from a chat message), and those cannot know this module's
+   * convention.
+   */
+  tags: string[];
 }
 
 export const EMPTY: SearchState = {
@@ -41,6 +54,7 @@ export const EMPTY: SearchState = {
   sources: [],
   kind: null,
   exact: false,
+  tags: [],
 };
 
 export function parseSearchState(params: URLSearchParams): SearchState {
@@ -55,6 +69,16 @@ export function parseSearchState(params: URLSearchParams): SearchState {
       ? params.get("kind")
       : null,
     exact: params.get("exact") === "1",
+    // Sigil-tolerant and casefolded, so a hand-typed `?tag=#Idea` and a link
+    // written as `?tag=idea` are the same filter.
+    tags: [
+      ...new Set(
+        params
+          .getAll("tag")
+          .map((tag) => tag.trim().replace(/^#/, "").toLowerCase())
+          .filter(Boolean),
+      ),
+    ],
   };
 }
 
@@ -71,6 +95,7 @@ export function toSearchParams(state: SearchState): URLSearchParams {
   if (state.sources.length) params.set("source", state.sources.join(","));
   if (state.kind) params.set("kind", state.kind);
   if (state.exact) params.set("exact", "1");
+  for (const tag of state.tags) params.append("tag", tag);
   return params;
 }
 
