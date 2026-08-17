@@ -123,6 +123,13 @@ type Ok<T> = T extends { responses: { 200: { content: { "application/json": infe
   ? R
   : never;
 
+/** The 201 counterpart, for routes that answer Created rather than OK. */
+type Created<T> = T extends {
+  responses: { 201: { content: { "application/json": infer R } } };
+}
+  ? R
+  : never;
+
 export type SearchResult = Ok<paths["/search"]["get"]>;
 export type MemoryHit = SearchResult["hits"][number];
 export type MatchedChunk = MemoryHit["matched_chunks"][number];
@@ -198,10 +205,12 @@ export type AgentAnswer = Ok<paths["/agent/ask"]["post"]>;
 export type AgentClaim = AgentAnswer["verification"]["claims"][number];
 export type AgentStep = AgentAnswer["steps"][number];
 
-export type ChatTurn = Ok<paths["/chat"]["get"]>[number];
-export type MessageIntent = ChatTurn["intent"];
-export type ChatCitation = ChatTurn["citations"][number];
-export type MessageStatus = Ok<paths["/chat/{memory_id}/status"]["get"]>;
+export type ChatMessage = Ok<paths["/chat/{session_id}"]["get"]>[number];
+export type MessageIntent = NonNullable<ChatMessage["intent"]>;
+export type ChatCitation = ChatMessage["citations"][number];
+export type ChatExchange = Created<paths["/chat"]["post"]>;
+export type ChatSession = Ok<paths["/chat/sessions"]["get"]>[number];
+export type MessageStatus = Ok<paths["/chat/messages/{memory_id}/status"]["get"]>;
 export type Connection = MessageStatus["connections"][number];
 export type CreateSourceIn =
   paths["/sources"]["post"]["requestBody"]["content"]["application/json"];
@@ -448,10 +457,40 @@ export const api = {
    * and the failure of two classifiers is a message stored by one and answered
    * by the other.
    */
-  chat: () => request<ChatTurn[]>("/chat"),
+  chatSessions: (includeArchived = false) =>
+    request<ChatSession[]>(
+      `/chat/sessions${includeArchived ? "?include_archived=true" : ""}`,
+    ),
 
-  send: (text: string) =>
-    request<ChatTurn>("/chat", { method: "POST", body: JSON.stringify({ text }) }),
+  /**
+   * One conversation's turns, oldest first.
+   *
+   * `q` filters *within* the session by substring, server-side. It is
+   * deliberately not corpus search: this answers "where in this conversation did
+   * I say that" over rows already on screen, and `/search` is the other question.
+   */
+  chatMessages: (sessionId: string, q?: string) => {
+    const params = new URLSearchParams();
+    if (q && q.trim()) params.set("q", q.trim());
+    const query = params.toString();
+    return request<ChatMessage[]>(`/chat/${sessionId}${query ? `?${query}` : ""}`);
+  },
+
+  send: (text: string, sessionId?: string | null, newSession = false) =>
+    request<ChatExchange>("/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        text,
+        session_id: sessionId ?? null,
+        new_session: newSession,
+      }),
+    }),
+
+  archiveSession: (id: string, archived = true) =>
+    request<null>(
+      `/chat/sessions/${id}/archive${archived ? "" : "?archived=false"}`,
+      { method: "POST" },
+    ),
 
   /**
    * How far a stored message has got, and what it connects to.
@@ -461,7 +500,7 @@ export const api = {
    * being pending rather than spinning forever.
    */
   messageStatus: (memoryId: string) =>
-    request<MessageStatus>(`/chat/${memoryId}/status`),
+    request<MessageStatus>(`/chat/messages/${memoryId}/status`),
 
   createSource: (body: CreateSourceIn) =>
     request<Source>("/sources", { method: "POST", body: JSON.stringify(body) }),

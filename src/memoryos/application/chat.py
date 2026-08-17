@@ -31,6 +31,13 @@ nothing in any answer distinguishing a claim that came from a document from one
 that came from a previous answer about the document. The answer is written to
 `chat_messages`, which no retriever reads, and that is the difference between a
 transcript and a source.
+
+**M10.1's sessions are a view over all of that, and change none of it.** A
+message belongs to a session for navigation and for the three turns of
+conversational context; it belongs to the graph for meaning. Nothing here merges
+messages into a session-level memory, and nothing that decides meaning reads
+`chat_sessions` at all — which is what makes a thirty-minute clock an acceptable
+way to draw the boundary.
 """
 
 from collections.abc import Sequence
@@ -40,7 +47,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -56,7 +63,8 @@ from memoryos.application.ingest import ingest_item
 from memoryos.application.ports import BlobStore, ObservedItem
 from memoryos.domain.entities import Source
 from memoryos.domain.ids import new_id
-from memoryos.domain.message_intent import MessageIntent, classify
+from memoryos.domain.message_intent import ChatRole, MessageIntent, classify
+from memoryos.domain.sessions import starts_new_session, title_for
 from memoryos.domain.values import ContentHash, SourceKind, TimeProvenance
 
 logger = structlog.get_logger(__name__)
@@ -106,39 +114,64 @@ class Citation:
 
 
 @dataclass(frozen=True, slots=True)
-class ChatTurn:
-    """One message and what became of it."""
+class Message:
+    """One turn as a reader sees it.
+
+    `memory_id` is resolved from `external_key` rather than stored, and the
+    difference is what lets this row outlive a replay: the key is what the
+    ingestion log records, the id is minted fresh every rebuild. A null id beside
+    a non-null key means the memory was deleted, which is a fact rather than a
+    fault.
+    """
 
     id: UUID
-    text: str
-    intent: MessageIntent
+    session_id: UUID
+    role: ChatRole
+    content: str
+    ordinal: int
     created_at: datetime
-    # What the log calls the memory this message became. Null exactly when the
-    # turn was a question, and enforced that way by the schema.
+    intent: MessageIntent | None = None
     external_key: str | None = None
-    # The memory itself, resolved from that key. Null for a question, and null
-    # for a statement whose memory has since been deleted — the key survives
-    # either way, which is why it rather than this is the stored column.
     memory_id: UUID | None = None
-    answer: str | None = None
     answer_model: str | None = None
-    # Null when there is no answer. False and None are different states and a
-    # UI that conflated them would render a statement as an answered question.
     refused: bool | None = None
     # Whether every factual sentence carried a citation and none was invented.
     #
-    # Live only — null on a turn read back from the transcript, and deliberately
-    # not a column. It is a property of the *verification run*, and a stored copy
-    # would be a claim about grounding that no later check could re-derive or
-    # contradict. The transcript keeps what was said and whether the corpus
-    # declined; how well the model cited is a measurement, and measurements
-    # belong to the run that made them.
+    # Live only — null on a message read back from the transcript, and
+    # deliberately not a column. It is a property of the *verification run*, and a
+    # stored copy would be a claim about grounding that no later check could
+    # re-derive or contradict.
     grounded: bool | None = None
     citations: list[Citation] = field(default_factory=list)
 
     @property
     def stored(self) -> bool:
-        return self.intent is not MessageIntent.QUESTION
+        return self.external_key is not None
+
+
+@dataclass(frozen=True, slots=True)
+class Exchange:
+    """What one send produced: the message, and the answer if there was one."""
+
+    session_id: UUID
+    user: Message
+    assistant: Message | None = None
+
+    @property
+    def messages(self) -> list[Message]:
+        return [self.user] if self.assistant is None else [self.user, self.assistant]
+
+
+@dataclass(frozen=True, slots=True)
+class SessionSummary:
+    """One conversation, for the rail."""
+
+    id: UUID
+    title: str | None
+    started_at: datetime
+    last_activity: datetime
+    message_count: int
+    archived_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,8 +219,12 @@ class MessageStatus:
         return self.chunks > 0 and self.embedded_chunks == self.chunks
 
 
+class NoSuchSession(LookupError):
+    """A session id nothing has."""
+
+
 class Chat:
-    """Classify, then store or answer. The only thing that decides which."""
+    """Classify, then store or answer, inside a session."""
 
     def __init__(
         self,
@@ -208,154 +245,284 @@ class Chat:
         self._k = k
         self._history_turns = history_turns
 
-    async def __call__(self, text: str, *, now: datetime | None = None) -> ChatTurn:
+    async def __call__(
+        self,
+        text: str,
+        *,
+        now: datetime | None = None,
+        session_id: UUID | None = None,
+        new_session: bool = False,
+    ) -> Exchange:
         message = text.strip()
         if not message:
             raise EmptyMessage("a message must contain something other than whitespace")
 
         at = now or datetime.now(UTC)
         intent = classify(message)
-        turn_id = new_id()
 
-        memory_id: UUID | None = None
-        external_key: str | None = None
-        if intent is not MessageIntent.QUESTION:
-            external_key, memory_id = await self._store(turn_id, message, intent, at)
-        else:
-            await self._record_question(turn_id, message, at)
-
-        turn = ChatTurn(
-            id=turn_id,
-            text=message,
-            intent=intent,
-            created_at=at,
-            external_key=external_key,
-            memory_id=memory_id,
+        source = None if intent is MessageIntent.QUESTION else await self._source()
+        user = await self._append_user(
+            message, intent, at, source, session_id=session_id, new_session=new_session
         )
+
         if intent is MessageIntent.STATEMENT:
-            logger.info("chat.stored", message_id=str(turn_id), memory_id=str(memory_id))
-            return turn
+            logger.info(
+                "chat.stored",
+                session_id=str(user.session_id),
+                ordinal=user.ordinal,
+                external_key=user.external_key,
+            )
+            return Exchange(session_id=user.session_id, user=user)
 
-        return await self._answer_turn(turn)
+        return await self._answer_exchange(user)
 
-    async def _store(
-        self, turn_id: UUID, message: str, intent: MessageIntent, at: datetime
-    ) -> tuple[str, UUID]:
-        """The memory, its normalization job and the transcript row, together.
+    # ----------------------------------------------------------------------
+    # Writing a turn
+    # ----------------------------------------------------------------------
 
-        One transaction for all three. The queue is a table precisely so that a
-        memory cannot exist without the job that processes it, and the transcript
-        row joins that guarantee rather than sitting outside it: a turn recorded
-        as stored whose memory was rolled back would be a message the interface
-        claims to have kept and search cannot find.
+    async def _append_user(
+        self,
+        message: str,
+        intent: MessageIntent,
+        at: datetime,
+        source: Source | None,
+        *,
+        session_id: UUID | None,
+        new_session: bool,
+    ) -> Message:
+        """The session, the memory, its normalization job and the turn, together.
+
+        One transaction for all four, and the reason is M10.0's: the queue is a
+        table precisely so a memory cannot exist without the job that processes
+        it, and the transcript row joins that guarantee rather than sitting outside
+        it. A turn recorded as stored whose memory was rolled back would be a
+        message the interface claims to have kept and search cannot find.
+
+        The session's `message_count` is both the ordinal source and the row being
+        incremented, which is why it is read `FOR UPDATE`: two sends racing on one
+        session would otherwise both read the same count and collide on
+        `uq_chat_messages_session_ordinal` — a correct outcome arrived at by
+        constraint violation rather than by ordering.
         """
-        source = await self._source()
-        item = _message_item(turn_id, message, at)
+        item = None if source is None else _message_item(new_id(), message, at)
 
         async with self._sessions.begin() as session:
-            recorded = await ingest_item(session, self._blobs, source, item)
-            if recorded is None:
-                # Unreachable: the external key carries this turn's id, so there
-                # is never a current version for it to be identical to. Named
-                # rather than asserted, because a silent `None` here would insert
-                # a transcript row with no memory and look like a question.
-                raise UnstorableMessage(
-                    f"message {turn_id} produced no memory; its external key "
-                    f"{item.external_key!r} was already current, which cannot happen"
-                )
-            session.add(
-                models.ChatMessage(
-                    id=turn_id,
-                    text=message,
-                    intent=intent.value,
-                    external_key=item.external_key,
-                    created_at=at,
-                )
+            record = await self._resolve_session(
+                session, at, session_id=session_id, new_session=new_session
             )
-            return item.external_key, recorded.memory_id
 
-    async def _record_question(self, turn_id: UUID, message: str, at: datetime) -> None:
-        """The turn, before the model has been asked.
+            external_key: str | None = None
+            memory_id: UUID | None = None
+            if source is not None and item is not None:
+                recorded = await ingest_item(session, self._blobs, source, item)
+                if recorded is None:
+                    # Unreachable: the external key carries a fresh id, so there
+                    # is never a current version for it to be identical to. Named
+                    # rather than asserted, because a silent `None` here would
+                    # write a turn claiming to be stored that stored nothing.
+                    raise UnstorableMessage(
+                        f"message produced no memory; its external key "
+                        f"{item.external_key!r} was already current, which cannot happen"
+                    )
+                external_key = item.external_key
+                memory_id = recorded.memory_id
 
-        Written first so that a model failure leaves a transcript saying a
-        question was asked and not answered, rather than leaving no trace of
-        having been asked at all. The answer is an update.
+            ordinal = record.message_count
+            row = models.ChatMessage(
+                id=new_id(),
+                session_id=record.id,
+                role=ChatRole.USER.value,
+                content=message,
+                ordinal=ordinal,
+                external_key=external_key,
+                intent=intent.value,
+                created_at=at,
+            )
+            session.add(row)
+
+            record.message_count = ordinal + 1
+            record.last_activity = at
+            if ordinal == 0:
+                # From the first user message only. A title that tracked the
+                # latest one would rename a conversation out from under somebody
+                # halfway through reading the list.
+                record.title = title_for(message)
+
+            return Message(
+                id=row.id,
+                session_id=record.id,
+                role=ChatRole.USER,
+                content=message,
+                ordinal=ordinal,
+                created_at=at,
+                intent=intent,
+                external_key=external_key,
+                # Known here without a lookup, because `ingest_item` just minted
+                # it. Reads go the other way — key to id — for the replay reason
+                # the model docstring gives.
+                memory_id=memory_id,
+            )
+
+    async def _resolve_session(
+        self,
+        session: AsyncSession,
+        at: datetime,
+        *,
+        session_id: UUID | None,
+        new_session: bool,
+    ) -> models.ChatSession:
+        """The session this message belongs to, creating one where it should.
+
+        Three ways in, in priority order, and the order is the point: an explicit
+        id is a person having clicked a conversation and must never be overridden
+        by a clock; an explicit new session is the button; and only in the absence
+        of both does the thirty-minute rule get to guess.
         """
-        async with self._sessions.begin() as session:
-            session.add(
-                models.ChatMessage(
-                    id=turn_id,
-                    text=message,
-                    intent=MessageIntent.QUESTION.value,
-                    created_at=at,
-                )
+        if session_id is not None:
+            found = await session.get(
+                models.ChatSession, session_id, with_for_update=True
             )
+            if found is None:
+                raise NoSuchSession(f"no such session: {session_id}")
+            return found
 
-    async def _answer_turn(self, turn: ChatTurn) -> ChatTurn:
+        if not new_session:
+            latest = (
+                await session.execute(
+                    select(models.ChatSession)
+                    .where(models.ChatSession.archived_at.is_(None))
+                    .order_by(models.ChatSession.last_activity.desc())
+                    .limit(1)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if latest is not None and not starts_new_session(at, latest.last_activity):
+                return latest
+
+        record = models.ChatSession(
+            id=new_id(),
+            title=None,
+            started_at=at,
+            last_activity=at,
+            message_count=0,
+        )
+        session.add(record)
+        # Flushed so the message inserted next has a row to point at, and so the
+        # `FOR UPDATE` above sees it on the next send rather than a moment later.
+        await session.flush()
+        logger.info("chat.session_started", session_id=str(record.id))
+        return record
+
+    async def _answer_exchange(self, user: Message) -> Exchange:
         if self._answer is None:
             raise NoLanguageModel(
                 "this deployment has no language model configured, so a question "
                 "cannot be answered. Statements are stored as usual."
             )
 
-        history = await self._history(turn.id)
-        result = await self._answer(turn.text, k=self._k, history=history)
+        history = await self._history(user.session_id, before=user.ordinal)
+        result = await self._answer(user.content, k=self._k, history=history)
         citations = _citations_of(result)
 
         async with self._sessions.begin() as session:
-            await session.execute(
-                update(models.ChatMessage)
-                .where(models.ChatMessage.id == turn.id)
-                .values(
-                    answer=result.answer,
-                    answer_model=result.model_id,
-                    answer_refused=result.refused,
-                    citations=[citation.as_dict() for citation in citations],
-                )
+            record = await session.get(
+                models.ChatSession, user.session_id, with_for_update=True
             )
+            if record is None:
+                raise NoSuchSession(f"no such session: {user.session_id}")
+            ordinal = record.message_count
+            row = models.ChatMessage(
+                id=new_id(),
+                session_id=user.session_id,
+                role=ChatRole.ASSISTANT.value,
+                content=result.answer,
+                ordinal=ordinal,
+                answer_model=result.model_id,
+                answer_refused=result.refused,
+                citations=[citation.as_dict() for citation in citations],
+                # The question's clock, not the wall clock.
+                #
+                # One clock per exchange, and the reason is not only that `Chat`
+                # takes an injectable `now`. An answer is *of* the question that
+                # produced it: stamping it from `datetime.now()` would order a
+                # conversation by two different clocks, and any caller that passed
+                # a time — a test, a backfill, an importer — would produce a
+                # transcript whose answers sort before their own questions.
+                # `ordinal` already separates them.
+                created_at=user.created_at,
+            )
+            session.add(row)
+            record.message_count = ordinal + 1
+            record.last_activity = user.created_at
+            row_id = row.id
 
         logger.info(
             "chat.answered",
-            message_id=str(turn.id),
-            intent=turn.intent.value,
+            session_id=str(user.session_id),
+            intent=user.intent.value if user.intent else None,
             refused=result.refused,
             citations=len(citations),
         )
-        return ChatTurn(
-            id=turn.id,
-            text=turn.text,
-            intent=turn.intent,
-            created_at=turn.created_at,
-            external_key=turn.external_key,
-            memory_id=turn.memory_id,
-            answer=result.answer,
-            answer_model=result.model_id,
-            refused=result.refused,
-            grounded=result.verification.grounded,
-            citations=citations,
+        return Exchange(
+            session_id=user.session_id,
+            user=user,
+            assistant=Message(
+                id=row_id,
+                session_id=user.session_id,
+                role=ChatRole.ASSISTANT,
+                content=result.answer,
+                ordinal=ordinal,
+                created_at=user.created_at,
+                answer_model=result.model_id,
+                refused=result.refused,
+                grounded=result.verification.grounded,
+                citations=citations,
+            ),
         )
 
-    async def _history(self, before: UUID) -> list[ConversationTurn]:
-        """The last few turns, oldest first, excluding this one.
+    async def _history(
+        self, session_id: UUID, *, before: int
+    ) -> list[ConversationTurn]:
+        """The last few turns of *this* session, oldest first.
 
-        Capped, and the cap is the point: "what about the other one?" needs the
-        turn that named the first one, and the turn before that adds referents
-        the question was not about. More context is not more resolution — past
-        three turns it is drift, and drift in a retrieval query is invisible
-        because the results still look like results.
+        A turn is a user message and whatever answer followed it, which is why
+        this reads twice the row limit and folds pairs back together: M10.0's
+        single-row shape made "three turns" and "three rows" the same number, and
+        M10.1's one-row-per-turn shape does not.
+
+        **Capped at three, and the cap is the milestone's own instruction as well
+        as a measured one.** Past three turns the model starts answering the
+        conversation rather than the question, and retrieval degrades because the
+        query is diluted by topics the question has moved on from — M10.0 measured
+        exactly that and narrowed which questions borrow the conversation at all.
+        Resuming an old session loads its last three turns, never all of it.
+
+        Scoped to the session, which is the one thing sessions are load-bearing
+        for. Carrying context across a boundary the interface drew would make the
+        boundary a lie.
         """
         async with self._sessions() as session:
             rows = (
                 await session.execute(
                     select(models.ChatMessage)
-                    .where(models.ChatMessage.id != before)
-                    .order_by(models.ChatMessage.created_at.desc())
-                    .limit(self._history_turns)
+                    .where(
+                        models.ChatMessage.session_id == session_id,
+                        models.ChatMessage.ordinal < before,
+                    )
+                    .order_by(models.ChatMessage.ordinal.desc())
+                    .limit(self._history_turns * 2)
                 )
             ).scalars().all()
-        return [
-            ConversationTurn(text=row.text, answer=row.answer) for row in reversed(rows)
-        ]
+
+        turns: list[ConversationTurn] = []
+        answer: str | None = None
+        for row in rows:
+            if row.role == ChatRole.ASSISTANT.value:
+                answer = row.content
+                continue
+            turns.append(ConversationTurn(text=row.content, answer=answer))
+            answer = None
+        return list(reversed(turns))[-self._history_turns :]
 
     async def _source(self) -> Source:
         """The chat source, created on first use.
@@ -413,6 +580,10 @@ def _message_item(turn_id: UUID, message: str, at: datetime) -> ObservedItem:
     makes it collide with nothing. A key derived from the text would make two
     identical thoughts on two days one memory with two versions, which is the
     wrong answer — the second one was a thought you had again.
+
+    Deliberately carries no session in it. The key is the memory's durable
+    identity and a session is a view; putting one inside the other would make
+    moving a conversation a corpus migration.
     """
     data = message.encode("utf-8")
 
@@ -447,31 +618,105 @@ def _citations_of(result: GroundedAnswer) -> list[Citation]:
     ]
 
 
-async def history(
-    sessions: async_sessionmaker[AsyncSession], *, limit: int = 100
-) -> list[ChatTurn]:
-    """The transcript, oldest first, with each stored turn's memory resolved.
+# --------------------------------------------------------------------------
+# Reads
+# --------------------------------------------------------------------------
 
-    Ordered ascending for the reader — newest at the bottom is where a
-    conversation puts its newest line — but *selected* descending, so a long
-    history returns its tail rather than its head.
 
-    The join is what an id column would have saved and is the price of surviving
-    a replay. It is outer, and a null on the right is meaningful rather than a
-    fault: the memory was deleted, and the turn still happened.
+async def sessions(
+    session_factory: async_sessionmaker[AsyncSession], *, include_archived: bool = False
+) -> list[SessionSummary]:
+    """Conversations, newest activity first.
+
+    Archived ones are excluded by default and available by asking, which is the
+    same shape every other "dismissed" read in this system has: hiding is not
+    deleting, and a list that could not show you what you archived would make it
+    deleting in everything but name.
     """
-    async with sessions() as session:
-        rows = (
+    stmt = select(models.ChatSession).order_by(models.ChatSession.last_activity.desc())
+    if not include_archived:
+        stmt = stmt.where(models.ChatSession.archived_at.is_(None))
+    async with session_factory() as session:
+        rows = (await session.execute(stmt)).scalars().all()
+    return [
+        SessionSummary(
+            id=row.id,
+            title=row.title,
+            started_at=row.started_at,
+            last_activity=row.last_activity,
+            message_count=row.message_count,
+            archived_at=row.archived_at,
+        )
+        for row in rows
+    ]
+
+
+async def latest_session(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> UUID | None:
+    """The conversation a client with no opinion should open. None when there are none."""
+    async with session_factory() as session:
+        return (
             await session.execute(
-                select(models.ChatMessage)
-                .order_by(models.ChatMessage.created_at.desc())
-                .limit(max(1, min(limit, 500)))
+                select(models.ChatSession.id)
+                .where(models.ChatSession.archived_at.is_(None))
+                .order_by(models.ChatSession.last_activity.desc())
+                .limit(1)
             )
-        ).scalars().all()
+        ).scalars().first()
+
+
+async def messages(
+    session_factory: async_sessionmaker[AsyncSession],
+    session_id: UUID,
+    *,
+    query: str | None = None,
+) -> list[Message]:
+    """One session's turns in order, optionally filtered.
+
+    `query` is a plain substring match, case-insensitive, and that is the whole
+    feature. **Search within a session is deliberately not corpus search**: this
+    answers "where in this conversation did I say that", which is a scroll
+    replacement over a hundred rows somebody has already read, and running it
+    through the embedder would return semantic neighbours from a conversation the
+    reader can see all of. Corpus search is a different question with its own
+    page, and blurring them would leave neither answerable.
+    """
+    stmt = (
+        select(models.ChatMessage)
+        .where(models.ChatMessage.session_id == session_id)
+        .order_by(models.ChatMessage.ordinal)
+    )
+    if query and query.strip():
+        stmt = stmt.where(models.ChatMessage.content.ilike(f"%{query.strip()}%"))
+
+    async with session_factory() as session:
+        rows = (await session.execute(stmt)).scalars().all()
         resolved = await _memories_by_key(
             session, [row.external_key for row in rows if row.external_key]
         )
-    return [_turn_of(row, resolved) for row in reversed(rows)]
+    return [_message_of(row, resolved) for row in rows]
+
+
+async def archive(
+    session_factory: async_sessionmaker[AsyncSession],
+    session_id: UUID,
+    *,
+    at: datetime | None = None,
+    archived: bool = True,
+) -> bool:
+    """Hide a conversation, or bring it back. Deletes nothing, ever.
+
+    Returns False when there is no such session, which a transport renders as a
+    404 rather than as a silent success — a button that reports having archived
+    something that does not exist is a button nobody can trust.
+    """
+    async with session_factory.begin() as session:
+        record = await session.get(models.ChatSession, session_id)
+        if record is None:
+            return False
+        record.archived_at = (at or datetime.now(UTC)) if archived else None
+    return True
 
 
 async def _memories_by_key(
@@ -480,8 +725,9 @@ async def _memories_by_key(
     """Current, undeleted chat memories for these external keys.
 
     One query for the whole page rather than one per turn. A key that is absent
-    from the result is a memory that has been deleted, which the caller renders
-    as a turn with no link rather than as an error.
+    from the result is a memory that has been deleted — or one whose replay has
+    not finished — which the caller renders as a turn with no link rather than as
+    an error.
     """
     if not keys:
         return {}
@@ -499,7 +745,7 @@ async def _memories_by_key(
 
 
 async def status(
-    sessions: async_sessionmaker[AsyncSession], memory_id: UUID
+    sessions_factory: async_sessionmaker[AsyncSession], memory_id: UUID
 ) -> MessageStatus | None:
     """How far this memory has got, and what it connects to.
 
@@ -507,7 +753,7 @@ async def status(
     rather than as an empty connection line — "nothing connects to this" and
     "this does not exist" are different sentences.
     """
-    async with sessions() as session:
+    async with sessions_factory() as session:
         memory = await session.get(models.Memory, memory_id)
         if memory is None:
             return None
@@ -540,8 +786,7 @@ async def status(
 # form. Following it further would cost a recursive CTE to reach rows that do not
 # exist.
 def _resolved() -> Any:
-    winner = models.Entity.__table__.alias("winner")
-    return winner
+    return models.Entity.__table__.alias("winner")
 
 
 async def _connections(
@@ -643,15 +888,17 @@ async def _connected_memories(
     )
 
 
-def _turn_of(row: models.ChatMessage, resolved: dict[str, UUID]) -> ChatTurn:
-    return ChatTurn(
+def _message_of(row: models.ChatMessage, resolved: dict[str, UUID]) -> Message:
+    return Message(
         id=row.id,
-        text=row.text,
-        intent=MessageIntent(row.intent),
+        session_id=row.session_id,
+        role=ChatRole(row.role),
+        content=row.content,
+        ordinal=row.ordinal,
         created_at=row.created_at,
+        intent=None if row.intent is None else MessageIntent(row.intent),
         external_key=row.external_key,
         memory_id=None if row.external_key is None else resolved.get(row.external_key),
-        answer=row.answer,
         answer_model=row.answer_model,
         refused=row.answer_refused,
         citations=[

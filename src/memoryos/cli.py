@@ -73,7 +73,13 @@ from memoryos.application.backfill import (
     find_unembedded,
     gather_stats,
 )
-from memoryos.application.chat import Chat, ChatTurn, EmptyMessage, NoLanguageModel
+from memoryos.application.chat import (
+    Chat,
+    EmptyMessage,
+    Exchange,
+    NoLanguageModel,
+    NoSuchSession,
+)
 from memoryos.application.citations import ExplainedHit, explain_hits
 from memoryos.application.doctor import GraphStatus, run_doctor
 from memoryos.application.entity_stats import gather_entity_stats
@@ -635,7 +641,7 @@ async def run_ask(
 
 
 async def run_chat(
-    settings: Settings, *, message: str | None, k: int
+    settings: Settings, *, message: str | None, k: int, new_session: bool = False
 ) -> int:
     """The front door, in a terminal.
 
@@ -653,13 +659,22 @@ async def run_chat(
         chat = container.chat()
         if message is not None:
             return await _chat_turn(container, chat, message)
-        return await _chat_session(container, chat)
+        return await _chat_session(container, chat, new_session=new_session)
     finally:
         await container.dispose()
 
 
-async def _chat_session(container: Container, chat: Chat) -> int:
-    """The interactive loop.
+async def _chat_session(
+    container: Container, chat: Chat, *, new_session: bool = False
+) -> int:
+    """The interactive loop, inside one conversation.
+
+    The session is resolved once on the first message and then pinned for the rest
+    of the loop, rather than re-derived from the thirty-minute rule on each send.
+    A terminal a person left open over lunch is exactly the case the clock would
+    split, and splitting it here would be the wrong answer twice: the boundary is
+    a guess about whether you walked away, and staying in the same REPL is
+    evidence that you did not.
 
     Connection lines arrive on the *next* prompt rather than blocking this one.
     Entity extraction is a background job and a model call; waiting for it would
@@ -668,6 +683,8 @@ async def _chat_session(container: Container, chat: Chat) -> int:
     """
     print("type a thought to store it, or ask a question. ctrl-d to leave.\n")
     pending: list[UUID] = []
+    session_id: UUID | None = None
+    opening = new_session
 
     while True:
         await _report_connections(container, pending)
@@ -680,9 +697,12 @@ async def _chat_session(container: Container, chat: Chat) -> int:
         if not typed.strip():
             continue
         try:
-            turn = await chat(typed)
+            exchange = await chat(typed, session_id=session_id, new_session=opening)
         except EmptyMessage:
             continue
+        except NoSuchSession as exc:
+            print(f"  {exc}\n")
+            return 1
         except (NoLanguageModel, MissingApiKey) as exc:
             print(f"  {exc}\n")
             continue
@@ -690,14 +710,19 @@ async def _chat_session(container: Container, chat: Chat) -> int:
             print(f"  the language model could not answer: {exc}\n")
             continue
 
-        _print_turn(turn)
-        if turn.memory_id is not None:
-            pending.append(turn.memory_id)
+        if session_id is None:
+            session_id = exchange.session_id
+            print(f"  session {session_id}\n")
+        opening = False
+
+        _print_exchange(exchange)
+        if exchange.user.memory_id is not None:
+            pending.append(exchange.user.memory_id)
 
 
 async def _chat_turn(container: Container, chat: Chat, message: str) -> int:
     try:
-        turn = await chat(message)
+        exchange = await chat(message)
     except EmptyMessage as exc:
         print(str(exc))
         return 1
@@ -709,43 +734,45 @@ async def _chat_turn(container: Container, chat: Chat, message: str) -> int:
         return 1
 
     note: str | None = None
-    if turn.memory_id is not None:
+    if exchange.user.memory_id is not None:
         # One look, not a poll. In a one-shot command there is no "later" to
         # show the line in, and blocking on a worker that may not be running
         # would hang the command rather than inform it. So the line says which
         # state it is in — including "not yet", which is the usual one here and
         # is a fact rather than a placeholder.
         found = await chat_use_case.status(
-            container.database.session_factory, turn.memory_id
+            container.database.session_factory, exchange.user.memory_id
         )
         if found is not None:
             note = format_connections(found)
-    _print_turn(turn, note=note)
+    _print_exchange(exchange, note=note)
     # Non-zero only for an answer that cited badly, matching `ask`. A refusal is
     # grounded — it makes no factual claims — so it exits 0, and a script that
     # treated the guardrail firing as a fault would be measuring it as a fault.
-    return 1 if turn.grounded is False else 0
+    return 1 if exchange.assistant is not None and exchange.assistant.grounded is False else 0
 
 
-def _print_turn(turn: ChatTurn, *, note: str | None = None) -> None:
-    if turn.stored:
-        print(f"  stored · {turn.intent.value} · memory {turn.memory_id}")
+def _print_exchange(exchange: Exchange, *, note: str | None = None) -> None:
+    user, answer = exchange.user, exchange.assistant
+    if user.stored:
+        intent = user.intent.value if user.intent else "?"
+        print(f"  stored · {intent} · memory {user.memory_id}")
         if note:
             print(f"  {note}")
-    if turn.answer is None:
-        if turn.stored:
+    if answer is None:
+        if user.stored:
             print()
         return
 
     print()
-    print(textwrap.fill(turn.answer, width=88, initial_indent="  ", subsequent_indent="  "))
+    print(textwrap.fill(answer.content, width=88, initial_indent="  ", subsequent_indent="  "))
     print()
-    if turn.citations:
-        for citation in turn.citations:
+    if answer.citations:
+        for citation in answer.citations:
             print(f"  [{citation.locator}] {citation.excerpt[:120]}")
     else:
         print("  citations: none — the answer cited no passage")
-    if turn.refused:
+    if answer.refused:
         # Said in words. A refusal that looks like a short answer is a refusal
         # nobody notices, and the whole value of the guardrail is that it is
         # visible when it fires.
@@ -6108,6 +6135,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="one message. Omitted, this reads messages until ctrl-d.",
     )
     chat_parser.add_argument("-k", "--k", dest="k", type=int, default=10)
+    chat_parser.add_argument(
+        "--new",
+        dest="new_session",
+        action="store_true",
+        help="start a conversation rather than continuing the latest one",
+    )
 
     ask = commands.add_parser(
         "ask", help="answer a question in prose, grounded in retrieved memories"
@@ -6762,7 +6795,14 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.command == "chat":
-        return asyncio.run(run_chat(settings, message=args.message, k=args.k))
+        return asyncio.run(
+            run_chat(
+                settings,
+                message=args.message,
+                k=args.k,
+                new_session=args.new_session,
+            )
+        )
 
     if args.command == "ask":
         return asyncio.run(

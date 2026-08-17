@@ -20,16 +20,29 @@
  * a misreading nobody can correct. It is a small control on the message rather
  * than a modal: an interruption asking "did you mean to store that?" on every
  * ambiguous line would make the box slower to use than a text file.
+ *
+ * **A session is not the memory, and this page has to make that legible.** The
+ * rail on the left is navigation; the `stored` link under every message goes to
+ * its memory detail view, where it sits beside everything it connects to
+ * regardless of which conversation it was typed in. Those are two different
+ * groupings of the same message and the page shows both, because a reader who
+ * only ever saw the conversation would conclude that is where meaning lives.
+ *
+ * The selected session lives in the URL as `?session=`, so a conversation is a
+ * link somebody can paste. Search within it lives in `?q=` for the same reason —
+ * and it is a substring filter over rows already on screen, not corpus search,
+ * which has its own page and answers a different question.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { api, type ChatTurn, type MessageIntent } from "../../api/client";
+import { api, type ChatMessage, type MessageIntent } from "../../api/client";
 import { Empty, Failure } from "../../components/primitives";
 import { describeConnections } from "../../lib/connections";
 import { timestamp } from "../../lib/format";
+import { SessionRail } from "./SessionRail";
 
 /**
  * How often a message that is still indexing is asked about.
@@ -41,27 +54,79 @@ import { timestamp } from "../../lib/format";
  */
 const POLL_MS = 2_000;
 
+/**
+ * `?session=new`: the button was pressed and no conversation exists yet.
+ *
+ * A real value in the URL rather than the absence of one, so that "I want a fresh
+ * conversation" and "I have not said which conversation" stay distinguishable —
+ * and so the state is linkable like every other piece of view state in this
+ * application. Cannot collide with a session id, which is always a uuid.
+ */
+const NEW_SESSION = "new";
+
 export function ChatPage() {
   const client = useQueryClient();
   const navigate = useNavigate();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const bottom = useRef<HTMLDivElement>(null);
 
-  // Search lived at `/` two milestones ago and an overview lived here until this
-  // one, so a bookmarked `/?q=…` is a real link in somebody's notes. Forwarded
-  // rather than swallowed: the argument for keeping search state in the URL was
-  // that those links are worth something, and they do not stop being worth
-  // something because the route under them changed again.
+  // Search lived at `/` two milestones ago and an overview lived here until the
+  // last one, so a bookmarked `/?q=…` is a real link in somebody's notes — but
+  // `?q=` now means "filter this conversation", so only a `?q=` with no session
+  // is treated as the old search link. Forwarded rather than swallowed: the
+  // argument for keeping search state in the URL was that those links are worth
+  // something.
   const carried = params.get("q");
+  const selected = params.get("session");
   useEffect(() => {
-    if (carried) navigate(`/search?q=${encodeURIComponent(carried)}`, { replace: true });
-  }, [carried, navigate]);
+    if (carried && !selected) {
+      navigate(`/search?q=${encodeURIComponent(carried)}`, { replace: true });
+    }
+  }, [carried, selected, navigate]);
 
-  const turns = useQuery({ queryKey: ["chat"], queryFn: api.chat });
+  const sessions = useQuery({
+    queryKey: ["chat-sessions", false],
+    queryFn: () => api.chatSessions(false),
+  });
+
+  // Three states, not two, and the third is why `session=new` is in the URL as a
+  // literal rather than being represented by its absence.
+  //
+  // *Absent* means "no opinion": draw the most recent conversation, which is what
+  // somebody opening a fresh tab is in the middle of. *A uuid* means a
+  // conversation they clicked. *`new`* means they pressed the button and want an
+  // empty one — and collapsing that into absence would make the button snap
+  // straight back to the latest conversation, which is what it did before this
+  // distinction existed.
+  const starting = selected === NEW_SESSION;
+  const active = starting ? null : (selected ?? sessions.data?.[0]?.id ?? null);
+  const filter = active && selected && !starting ? (carried ?? "") : "";
+
+  const messages = useQuery({
+    queryKey: ["chat-messages", active, filter],
+    queryFn: () => api.chatMessages(active!, filter || undefined),
+    enabled: active !== null,
+  });
 
   const send = useMutation({
-    mutationFn: (text: string) => api.send(text),
-    onSuccess: () => void client.invalidateQueries({ queryKey: ["chat"] }),
+    mutationFn: (text: string) => api.send(text, active, starting),
+    onSuccess: (exchange) => {
+      // Pinned to the session the server actually used, which is not always the
+      // one that was asked for: with no session named, the thirty-minute rule may
+      // have opened a new one, and a page that kept showing the old one would draw
+      // a message into a conversation it is not in.
+      setParams(
+        (was) => {
+          const next = new URLSearchParams(was);
+          next.set("session", exchange.session_id);
+          next.delete("q");
+          return next;
+        },
+        { replace: true },
+      );
+      void client.invalidateQueries({ queryKey: ["chat-sessions"] });
+      void client.invalidateQueries({ queryKey: ["chat-messages"] });
+    },
   });
 
   useEffect(() => {
@@ -70,36 +135,113 @@ export function ChatPage() {
     // this is a nicety of a conversation view, and a missing scroll must never
     // be the reason a test about what was stored fails.
     bottom.current?.scrollIntoView?.({ block: "end" });
-  }, [turns.data?.length, send.isPending]);
+  }, [messages.data?.length, send.isPending]);
+
+  function open(id: string) {
+    setParams((was) => {
+      const next = new URLSearchParams(was);
+      next.set("session", id);
+      next.delete("q");
+      return next;
+    });
+  }
+
+  function start() {
+    setParams((was) => {
+      const next = new URLSearchParams(was);
+      next.set("session", NEW_SESSION);
+      next.delete("q");
+      return next;
+    });
+    // Nothing is created here. A conversation begins on its first message, so an
+    // empty session cannot exist — which is what keeps the rail free of rows
+    // nobody typed into.
+    send.reset();
+  }
 
   return (
-    <div className="flex max-w-(--width-reading) flex-col gap-5">
-      <Preamble />
+    <div className="grid gap-8 lg:grid-cols-[16rem_minmax(0,1fr)]">
+      <SessionRail current={active} onSelect={open} onNew={start} />
 
-      {turns.isError ? <Failure error={turns.error} /> : null}
-      {turns.data?.length === 0 && !send.isPending ? (
-        <Empty title="Nothing typed yet">
-          Anything you write here is kept as a memory and connected to what is
-          already in the corpus through the things it talks about. Anything you
-          ask is answered from all of it, with citations — or declined, if
-          nothing here covers it.
-        </Empty>
-      ) : null}
+      <div className="flex min-w-0 max-w-(--width-reading) flex-col gap-5">
+        <Preamble />
+        {active ? <Filter sessionId={active} /> : null}
 
-      <ol className="flex flex-col gap-5" data-testid="messages">
-        {(turns.data ?? []).map((turn) => (
-          <Turn key={turn.id} turn={turn} />
-        ))}
-      </ol>
+        {messages.isError ? <Failure error={messages.error} /> : null}
+        {active === null && !send.isPending ? (
+          <Empty title="Nothing typed yet">
+            Anything you write here is kept as a memory and connected to what is
+            already in the corpus through the things it talks about. Anything you
+            ask is answered from all of it, with citations — or declined, if
+            nothing here covers it.
+          </Empty>
+        ) : null}
+        {active !== null && messages.data?.length === 0 && filter ? (
+          <Empty title="Nothing in this conversation matches">
+            This is a substring filter over the messages in front of you.{" "}
+            <Link to={`/search?q=${encodeURIComponent(filter)}`} className="text-amber underline">
+              Search the whole corpus
+            </Link>{" "}
+            instead — that one is semantic and reaches everything, not just this
+            conversation.
+          </Empty>
+        ) : null}
 
-      {/* The optimistic half. A message must appear the instant it is sent, and
-          a question takes seconds to come back — so the typed text is drawn
-          immediately and the answer replaces it when it arrives. */}
-      {send.isPending ? <Pending text={send.variables} /> : null}
-      {send.isError ? <Failure error={send.error} /> : null}
+        <ol className="flex flex-col gap-5" data-testid="messages">
+          {(messages.data ?? []).map((message) => (
+            <Turn key={message.id} message={message} />
+          ))}
+        </ol>
 
-      <div ref={bottom} />
-      <Composer onSend={(text) => send.mutate(text)} busy={send.isPending} />
+        {/* The optimistic half. A message must appear the instant it is sent, and
+            a question takes seconds to come back — so the typed text is drawn
+            immediately and the answer replaces it when it arrives. */}
+        {send.isPending ? <Pending text={send.variables} /> : null}
+        {send.isError ? <Failure error={send.error} /> : null}
+
+        <div ref={bottom} />
+        <Composer onSend={(text) => send.mutate(text)} busy={send.isPending} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Search within this conversation.
+ *
+ * **Distinct from corpus search, and the copy says so rather than leaving it to
+ * be discovered.** This is a substring filter over rows the reader can already
+ * see — a scroll replacement — and running it through the embedder would return
+ * semantic neighbours from a conversation they can see all of. The link to
+ * `/search` is right there for the question this one does not answer.
+ */
+function Filter({ sessionId }: { sessionId: string }) {
+  const [params, setParams] = useSearchParams();
+  const value = params.get("q") ?? "";
+
+  return (
+    <div className="flex items-baseline gap-3 border-b border-rule pb-1">
+      <label htmlFor="session-filter" className="meta-label text-muted">
+        in this conversation
+      </label>
+      <input
+        id="session-filter"
+        className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-faint"
+        placeholder="find a line you typed here"
+        value={value}
+        aria-label="Filter this conversation"
+        spellCheck={false}
+        onChange={(event) => {
+          const next = new URLSearchParams(params);
+          next.set("session", sessionId);
+          if (event.target.value) next.set("q", event.target.value);
+          else next.delete("q");
+          setParams(next, { replace: true });
+        }}
+      />
+      <Link to="/search" className="meta shrink-0 text-faint hover:text-amber">
+        search the corpus
+      </Link>
     </div>
   );
 }
@@ -129,17 +271,29 @@ function Preamble() {
  * the answer larger would say it matters more than what you wrote, which is
  * backwards — the answer is derived and the message is the corpus.
  */
-function Turn({ turn }: { turn: ChatTurn }) {
+function Turn({ message }: { message: ChatMessage }) {
+  if (message.role === "assistant") {
+    return (
+      <li data-testid="message">
+        <Answer message={message} />
+      </li>
+    );
+  }
   return (
     <li className="flex flex-col gap-2" data-testid="message">
       <div className="flex items-baseline gap-3">
         <span className="meta-label text-muted">you</span>
-        <span className="meta text-faint">{timestamp(turn.created_at)}</span>
-        <IntentMark turn={turn} />
+        <span className="meta text-faint">{timestamp(message.created_at)}</span>
+        <IntentMark message={message} />
       </div>
-      <p className="whitespace-pre-wrap text-ink">{turn.text}</p>
-      {turn.memory_id ? <StoredLine memoryId={turn.memory_id} /> : null}
-      {turn.answer !== null ? <Answer turn={turn} /> : null}
+      <p className="whitespace-pre-wrap text-ink">{message.content}</p>
+      {message.memory_id ? <StoredLine memoryId={message.memory_id} /> : null}
+      {message.external_key && !message.memory_id ? (
+        // The key outlived the memory: it was deleted, or a replay has not
+        // rebuilt it yet. Said rather than rendered as an un-clickable "stored",
+        // because a link that silently does nothing is worse than a sentence.
+        <p className="meta text-faint">stored · its memory is not in the corpus right now</p>
+      ) : null}
     </li>
   );
 }
@@ -153,8 +307,9 @@ function Turn({ turn }: { turn: ChatTurn }) {
  * explains what happened and links to the memory, which is where a wrongly
  * stored message is dealt with.
  */
-function IntentMark({ turn }: { turn: ChatTurn }) {
+function IntentMark({ message }: { message: ChatMessage }) {
   const [open, setOpen] = useState(false);
+  if (message.intent === null) return null;
   const label: Record<MessageIntent, string> = {
     statement: "stored",
     question: "asked",
@@ -176,13 +331,13 @@ function IntentMark({ turn }: { turn: ChatTurn }) {
         aria-expanded={open}
         onClick={() => setOpen((was) => !was)}
       >
-        {label[turn.intent]}
+        {label[message.intent]}
       </button>
       {open ? (
         <span className="meta mt-1 block max-w-prose text-muted">
-          {why[turn.intent]}{" "}
-          {turn.memory_id ? (
-            <Link to={`/memory/${turn.memory_id}`} className="text-amber underline">
+          {why[message.intent]}{" "}
+          {message.memory_id ? (
+            <Link to={`/memory/${message.memory_id}`} className="text-amber underline">
               open the memory
             </Link>
           ) : null}
@@ -243,25 +398,25 @@ function StoredLine({ memoryId }: { memoryId: string }) {
  * guardrail dies: a hedged refusal reads as a weak answer, and a weak answer is
  * something a reader will act on.
  */
-function Answer({ turn }: { turn: ChatTurn }) {
+function Answer({ message }: { message: ChatMessage }) {
   return (
     <div className="border-l-2 border-rule-strong pl-4" data-testid="answer">
       <div className="flex items-baseline gap-3">
         <span className="meta-label text-muted">
-          {turn.refused ? "declined" : "answer"}
+          {message.refused ? "declined" : "answer"}
         </span>
-        {turn.answer_model ? (
-          <span className="meta text-faint">{turn.answer_model}</span>
+        {message.answer_model ? (
+          <span className="meta text-faint">{message.answer_model}</span>
         ) : null}
-        {turn.grounded === false ? (
+        {message.grounded === false ? (
           <span className="meta text-deny">not fully cited</span>
         ) : null}
       </div>
-      <p className="mt-1 leading-relaxed text-ink">{turn.answer}</p>
+      <p className="mt-1 leading-relaxed text-ink">{message.content}</p>
 
-      {turn.citations.length > 0 ? (
+      {message.citations.length > 0 ? (
         <ul className="mt-2 flex flex-col gap-1" data-testid="citations">
-          {turn.citations.map((citation) => (
+          {message.citations.map((citation) => (
             <li key={`${citation.locator}-${citation.excerpt.slice(0, 24)}`}>
               {citation.memory_id ? (
                 <Link
@@ -283,7 +438,7 @@ function Answer({ turn }: { turn: ChatTurn }) {
         // Said rather than omitted. An answer with no citation list looks
         // exactly like an answer whose citations have not rendered.
         <p className="meta mt-2 text-faint">
-          {turn.refused
+          {message.refused
             ? "nothing was cited because nothing was used"
             : "the answer cited no passage"}
         </p>

@@ -1062,6 +1062,15 @@
         "title": "CalibrationOut",
         "type": "object"
       },
+      "ChatRole": {
+        "description": "Who said one turn.\n\nTwo, and there is deliberately no `system`. Nothing in this product shows a\nsystem message to anybody \u2014 the grounding prompt lives in\n`application/answering.py` and is not a turn in anybody's conversation \u2014 and a\nrole nobody renders is a branch nobody tests.",
+        "enum": [
+          "user",
+          "assistant"
+        ],
+        "title": "ChatRole",
+        "type": "string"
+      },
       "ClaimOut": {
         "properties": {
           "cited_step": {
@@ -2156,6 +2165,28 @@
         "title": "ExcerptOut",
         "type": "object"
       },
+      "ExchangeOut": {
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageOut"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "session_id": {
+            "format": "uuid",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "messages"
+        ],
+        "title": "ExchangeOut",
+        "type": "object"
+      },
       "ExplanationOut": {
         "properties": {
           "contributions": {
@@ -3045,6 +3076,23 @@
       },
       "MessageIn": {
         "properties": {
+          "new_session": {
+            "default": false,
+            "title": "New Session",
+            "type": "boolean"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
           "text": {
             "minLength": 1,
             "title": "Text",
@@ -3066,6 +3114,119 @@
         ],
         "title": "MessageIntent",
         "type": "string"
+      },
+      "MessageOut": {
+        "properties": {
+          "answer_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Model"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/memoryos__api__routes__chat__CitationOut"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "external_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Key"
+          },
+          "grounded": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grounded"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessageIntent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Id"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "refused": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refused"
+          },
+          "role": {
+            "$ref": "#/components/schemas/ChatRole"
+          },
+          "session_id": {
+            "format": "uuid",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "session_id",
+          "role",
+          "content",
+          "ordinal",
+          "created_at"
+        ],
+        "title": "MessageOut",
+        "type": "object"
       },
       "ModelOut": {
         "properties": {
@@ -4057,6 +4218,61 @@
         "title": "SentenceOut",
         "type": "object"
       },
+      "SessionOut": {
+        "properties": {
+          "archived_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_activity": {
+            "format": "date-time",
+            "title": "Last Activity",
+            "type": "string"
+          },
+          "message_count": {
+            "title": "Message Count",
+            "type": "integer"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "started_at",
+          "last_activity",
+          "message_count"
+        ],
+        "title": "SessionOut",
+        "type": "object"
+      },
       "SourceKind": {
         "description": "Where a memory came into the system through.\n\n`CHAT` is not a connector and never will be. Every other kind names\nsomething that is *walked* \u2014 a directory now, a mailbox later \u2014 and a walk is\ndriven by `Connector.observe`. A typed message arrives one at a time, pushed,\nwith nothing to enumerate and no cursor to keep; there is no second sync that\ncould observe it again.\n\nIt is a `SourceKind` anyway, and the reason is `memories.source_id`: every\nmemory in this system belongs to a source, every scope in Phase 4 is a source\nid, and a memory whose origin was recorded some other way would be invisible\nto the timeline, to `--source` on every command, and to the graph's\n`FROM_SOURCE` edge. A kind that no connector implements is a smaller\nexception than a memory with no source.",
         "enum": [
@@ -4799,109 +5015,6 @@
           "total_ms"
         ],
         "title": "TimingOut",
-        "type": "object"
-      },
-      "TurnOut": {
-        "properties": {
-          "answer": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Answer"
-          },
-          "answer_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Answer Model"
-          },
-          "citations": {
-            "items": {
-              "$ref": "#/components/schemas/memoryos__api__routes__chat__CitationOut"
-            },
-            "title": "Citations",
-            "type": "array"
-          },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "external_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "External Key"
-          },
-          "grounded": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Grounded"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "intent": {
-            "$ref": "#/components/schemas/MessageIntent"
-          },
-          "memory_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Memory Id"
-          },
-          "refused": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Refused"
-          },
-          "text": {
-            "title": "Text",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "text",
-          "intent",
-          "created_at"
-        ],
-        "title": "TurnOut",
         "type": "object"
       },
       "ValidationError": {
@@ -5908,52 +6021,6 @@
       }
     },
     "/chat": {
-      "get": {
-        "description": "The conversation, oldest first \u2014 newest at the bottom, as it is drawn.",
-        "operationId": "transcript_chat_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/TurnOut"
-                  },
-                  "title": "Response Transcript Chat Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Transcript",
-        "tags": [
-          "chat"
-        ]
-      },
       "post": {
         "operationId": "send_chat_post",
         "requestBody": {
@@ -5971,7 +6038,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TurnOut"
+                  "$ref": "#/components/schemas/ExchangeOut"
                 }
               }
             },
@@ -5994,10 +6061,10 @@
         ]
       }
     },
-    "/chat/{memory_id}/status": {
+    "/chat/messages/{memory_id}/status": {
       "get": {
-        "description": "How far a stored message has got, and what it turned out to connect to.\n\nKeyed by memory id rather than message id, because what it reports is a\nproperty of the memory: the same question is worth asking about a file, and\nan endpoint that only worked for things that were typed would be the first\nchat-shaped special case in this system.",
-        "operationId": "message_status_chat__memory_id__status_get",
+        "description": "How far a stored message has got, and what it turned out to connect to.\n\nKeyed by memory id rather than message id, because what it reports is a\nproperty of the memory: the same question is worth asking about a file, and an\nendpoint that only worked for things that were typed would be the first\nchat-shaped special case in this system.",
+        "operationId": "message_status_chat_messages__memory_id__status_get",
         "parameters": [
           {
             "in": "path",
@@ -6033,6 +6100,165 @@
           }
         },
         "summary": "Message Status",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/chat/sessions": {
+      "get": {
+        "description": "Conversations, newest activity first.",
+        "operationId": "list_sessions_chat_sessions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "include_archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Archived",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SessionOut"
+                  },
+                  "title": "Response List Sessions Chat Sessions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Sessions",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/chat/sessions/{session_id}/archive": {
+      "post": {
+        "description": "Hide a conversation, or with `archived=false`, bring it back.\n\nDeletes nothing. `archived=false` on the same route rather than a second\nendpoint, because unarchiving is the identical write with the opposite value \u2014\ntwo routes would be two places for the \"and nothing is deleted\" guarantee to\nbe forgotten.",
+        "operationId": "archive_session_chat_sessions__session_id__archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "archived",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Archived",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive Session",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/chat/{session_id}": {
+      "get": {
+        "description": "One conversation's turns, in order, oldest first.\n\n`q` filters within this session by plain substring, and that is deliberately\nall it does. **Search within a session is not corpus search**: it answers\n\"where in this conversation did I say that\" over rows the reader has already\nseen, and running it through the embedder would return semantic neighbours\nfrom a conversation they can see all of. `/search` is the other question.",
+        "operationId": "session_messages_chat__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MessageOut"
+                  },
+                  "title": "Response Session Messages Chat  Session Id  Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Messages",
         "tags": [
           "chat"
         ]

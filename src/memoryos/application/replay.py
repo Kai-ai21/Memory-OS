@@ -232,6 +232,17 @@ USER_AUTHORED_TABLES: frozenset[str] = frozenset(
         # not a foreign key — see the model — so nothing here is reachable by a
         # cascade from anything a replay truncates.
         "surfacing_log",
+        # M10.1's conversations. Nothing about a session is derived: its
+        # boundaries are where somebody stopped typing for half an hour, its title
+        # is cut from the first thing they said, and its `archived_at` is a person
+        # having decided they were done with it. A replay that truncated this
+        # would un-archive every archived conversation and lose every boundary,
+        # and the next message would land in whatever the clock guessed.
+        #
+        # It reaches nothing derived — `chat_messages` points *into* it, not the
+        # other way round — so it needs no snapshot and cannot be reached by a
+        # cascade from `memories`.
+        "chat_sessions",
         # M10.0's transcript, and the first table in this set that survives a
         # replay by *schema* rather than by classification or by snapshot.
         #
@@ -254,6 +265,11 @@ USER_AUTHORED_TABLES: frozenset[str] = frozenset(
         # it, so the memory comes back with the same one and the join finds it
         # again having preserved nothing. The classification decided the schema
         # rather than the other way round.
+        #
+        # M10.1 made that requirement explicit — sessions must survive a replay
+        # while their memories are rebuilt — and the column was already right.
+        # Its only foreign key is to `chat_sessions`, which is in this set beside
+        # it, so the whole conversation graph is outside the truncation.
         "chat_messages",
     }
 )

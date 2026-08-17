@@ -23,24 +23,105 @@ async def test_a_statement_comes_back_classified_and_stored(client: AsyncClient)
 
     assert response.status_code == 201
     body = response.json()
-    assert body["intent"] == "statement"
-    assert body["memory_id"] is not None
-    assert body["answer"] is None
+    assert body["session_id"] is not None
+    # One message, not two. A statement is answered by nothing, so there is no
+    # assistant turn to render.
+    assert len(body["messages"]) == 1
+    message = body["messages"][0]
+    assert message["role"] == "user"
+    assert message["intent"] == "statement"
+    assert message["memory_id"] is not None
+    assert message["ordinal"] == 0
     # Null rather than false. A statement was not refused and was not answered,
     # and a client that read `false` here would draw it as an answered question.
-    assert body["refused"] is None
+    assert message["refused"] is None
 
 
 async def test_the_transcript_reads_oldest_first(client: AsyncClient) -> None:
-    for text in ("the first thing I typed", "the second thing I typed"):
-        assert (await client.post("/chat", json={"text": text})).status_code == 201
+    posted = [
+        (await client.post("/chat", json={"text": text})).json()
+        for text in ("the first thing I typed", "the second thing I typed")
+    ]
+    # Both landed in one conversation: nothing waited thirty minutes.
+    assert posted[0]["session_id"] == posted[1]["session_id"]
 
-    body = (await client.get("/chat")).json()
+    body = (await client.get(f"/chat/{posted[0]['session_id']}")).json()
 
-    assert [turn["text"] for turn in body] == [
+    assert [turn["content"] for turn in body] == [
         "the first thing I typed",
         "the second thing I typed",
     ]
+    assert [turn["ordinal"] for turn in body] == [0, 1]
+
+
+async def test_the_session_list_carries_the_derived_title(client: AsyncClient) -> None:
+    await client.post("/chat", json={"text": "postgres is doing the keyword half"})
+
+    body = (await client.get("/chat/sessions")).json()
+
+    assert len(body) == 1
+    assert body[0]["title"] == "postgres is doing the keyword half"
+    assert body[0]["message_count"] == 1
+    assert body[0]["archived_at"] is None
+
+
+async def test_archiving_hides_a_session_without_deleting_it(
+    client: AsyncClient,
+) -> None:
+    """Hidden, and available by asking. Nothing is deleted, ever."""
+    posted = (await client.post("/chat", json={"text": "a thought to put away"})).json()
+    session_id = posted["session_id"]
+
+    assert (
+        await client.post(f"/chat/sessions/{session_id}/archive")
+    ).status_code == 204
+
+    assert (await client.get("/chat/sessions")).json() == []
+    hidden = (await client.get("/chat/sessions?include_archived=true")).json()
+    assert [row["id"] for row in hidden] == [session_id]
+    assert hidden[0]["archived_at"] is not None
+
+    # And the messages are still there, which is the difference between archiving
+    # and deleting.
+    assert len((await client.get(f"/chat/{session_id}")).json()) == 1
+
+    assert (
+        await client.post(f"/chat/sessions/{session_id}/archive?archived=false")
+    ).status_code == 204
+    assert [row["id"] for row in (await client.get("/chat/sessions")).json()] == [
+        session_id
+    ]
+
+
+async def test_searching_within_a_session_filters_that_session_only(
+    client: AsyncClient,
+) -> None:
+    """A substring over rows the reader has already seen, and nothing more.
+
+    Deliberately not corpus search: this answers "where in this conversation did
+    I say that", and running it through the embedder would return semantic
+    neighbours from a conversation somebody can see all of.
+    """
+    posted = (
+        await client.post("/chat", json={"text": "the reranker costs ten seconds"})
+    ).json()
+    session_id = posted["session_id"]
+    await client.post(
+        "/chat", json={"text": "the embedder costs seven", "session_id": session_id}
+    )
+
+    found = (await client.get(f"/chat/{session_id}?q=reranker")).json()
+
+    assert [row["content"] for row in found] == ["the reranker costs ten seconds"]
+
+
+async def test_archiving_a_session_that_does_not_exist_is_a_404(
+    client: AsyncClient,
+) -> None:
+    response = await client.post(
+        "/chat/sessions/11111111-1111-7111-8111-111111111111/archive"
+    )
+    assert response.status_code == 404
 
 
 async def test_an_empty_message_is_refused_rather_than_stored(client: AsyncClient) -> None:
@@ -64,8 +145,9 @@ async def test_status_reports_the_pipeline_before_anything_has_run(
     posted = (
         await client.post("/chat", json={"text": "a thought about the job queue"})
     ).json()
+    memory_id = posted["messages"][0]["memory_id"]
 
-    body = (await client.get(f"/chat/{posted['memory_id']}/status")).json()
+    body = (await client.get(f"/chat/messages/{memory_id}/status")).json()
 
     assert body["chunks"] == 0
     assert body["searchable"] is False
@@ -80,6 +162,6 @@ async def test_status_for_a_memory_that_does_not_exist_is_a_404(
     # "Nothing connects to this" and "this does not exist" are different
     # sentences, and an empty 200 would say the first when it meant the second.
     response = await client.get(
-        "/chat/11111111-1111-7111-8111-111111111111/status"
+        "/chat/messages/11111111-1111-7111-8111-111111111111/status"
     )
     assert response.status_code == 404
