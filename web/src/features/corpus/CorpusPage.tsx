@@ -7,15 +7,15 @@
  * for, not something a page should poll.
  */
 
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../../api/client";
 import { Failure, Loading, Meta, SectionHeading } from "../../components/primitives";
-import { count, percent, timestamp } from "../../lib/format";
+import { count, percent } from "../../lib/format";
 
 export function CorpusPage() {
   const stats = useQuery({ queryKey: ["stats"], queryFn: api.stats });
-  const sources = useQuery({ queryKey: ["sources"], queryFn: api.sources });
   const doctor = useQuery({
     queryKey: ["doctor"],
     queryFn: api.doctor,
@@ -71,40 +71,17 @@ export function CorpusPage() {
         ) : null}
       </section>
 
-      <section className="flex flex-col gap-2">
-        <SectionHeading>sources</SectionHeading>
-        {sources.isError ? (
-          <Failure error={sources.error} />
-        ) : (
-          <table className="w-full border-collapse text-left">
-            <thead>
-              <tr className="border-b border-rule">
-                {["name", "kind", "memories", "chunks", "last sync", "last full sync"].map(
-                  (heading) => (
-                    <th key={heading} className="meta-label py-1 pr-4 font-normal">
-                      {heading}
-                    </th>
-                  ),
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {(sources.data ?? []).map((source) => (
-                <tr key={source.id} className="border-b border-rule/60">
-                  <td className="meta py-1 pr-4 text-ink">{source.name}</td>
-                  <td className="meta py-1 pr-4 text-faint">{source.kind}</td>
-                  <td className="meta py-1 pr-4">{count(source.memories)}</td>
-                  <td className="meta py-1 pr-4">{count(source.chunks)}</td>
-                  <td className="meta py-1 pr-4 text-faint">{timestamp(source.last_sync_at)}</td>
-                  <td className="meta py-1 pr-4 text-faint">
-                    {timestamp(source.last_full_sync_at)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      {/* The sources table lived here until M10.0 and now lives on `/sources`,
+          where it has the two controls it always needed — register, and sync.
+          Moved rather than copied: a read-only duplicate of a page you can act
+          on is a page somebody edits and then wonders why nothing changed. */}
+      <p className="meta text-faint">
+        Sources moved to{" "}
+        <Link to="/sources" className="text-amber underline">
+          sources
+        </Link>
+        , where they can be registered and synced rather than only counted.
+      </p>
 
       <section className="flex flex-col gap-2">
         <SectionHeading

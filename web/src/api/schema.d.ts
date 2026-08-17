@@ -82,6 +82,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Transcript
+         * @description The conversation, oldest first — newest at the bottom, as it is drawn.
+         */
+        get: operations["transcript_chat_get"];
+        put?: never;
+        /** Send */
+        post: operations["send_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chat/{memory_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Message Status
+         * @description How far a stored message has got, and what it turned out to connect to.
+         *
+         *     Keyed by memory id rather than message id, because what it reports is a
+         *     property of the memory: the same question is worth asking about a file, and
+         *     an endpoint that only worked for things that were typed would be the first
+         *     chat-shaped special case in this system.
+         */
+        get: operations["message_status_chat__memory_id__status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/context": {
         parameters: {
             query?: never;
@@ -957,7 +1003,7 @@ export interface components {
             /** Answer */
             answer: string | null;
             /** Citations */
-            citations?: components["schemas"]["CitationOut"][];
+            citations?: components["schemas"]["memoryos__api__routes__search__CitationOut"][];
             cost: components["schemas"]["CostOut"];
             /** Error */
             error?: string | null;
@@ -1037,7 +1083,7 @@ export interface components {
             /** Answer */
             answer: string;
             /** Citations */
-            citations?: components["schemas"]["CitationOut"][];
+            citations?: components["schemas"]["memoryos__api__routes__search__CitationOut"][];
             context: components["schemas"]["memoryos__api__routes__answer__ContextOut"];
             /** Marked Answer */
             marked_answer: string;
@@ -1307,35 +1353,6 @@ export interface components {
             /** Excluded Decisions */
             excluded_decisions: number;
         };
-        /** CitationOut */
-        CitationOut: {
-            /** Char End */
-            char_end: number;
-            /** Char Start */
-            char_start: number;
-            /** Chunk Ordinal */
-            chunk_ordinal: number;
-            context?: components["schemas"]["ExcerptOut"] | null;
-            /** Definition */
-            definition?: string | null;
-            /** Excerpt */
-            excerpt: string;
-            /** External Key */
-            external_key: string;
-            /**
-             * Memory Id
-             * Format: uuid
-             */
-            memory_id: string;
-            /** Occurred At */
-            occurred_at?: string | null;
-            /** Prefix Chars */
-            prefix_chars: number;
-            /** Source Name */
-            source_name: string;
-            /** Version */
-            version: number;
-        };
         /** ClaimOut */
         ClaimOut: {
             /** Cited Step */
@@ -1369,6 +1386,18 @@ export interface components {
             supported: boolean;
             /** Text */
             text: string;
+        };
+        /** ConnectionOut */
+        ConnectionOut: {
+            /**
+             * Entity Id
+             * Format: uuid
+             */
+            entity_id: string;
+            /** Memories */
+            memories: number;
+            /** Name */
+            name: string;
         };
         /**
          * ContextCategory
@@ -1904,7 +1933,7 @@ export interface components {
         /** HitOut */
         HitOut: {
             /** Citations */
-            citations?: components["schemas"]["CitationOut"][] | null;
+            citations?: components["schemas"]["memoryos__api__routes__search__CitationOut"][] | null;
             explanation?: components["schemas"]["ExplanationOut"] | null;
             /** External Key */
             external_key: string;
@@ -2098,6 +2127,17 @@ export interface components {
             /** Version */
             version: number;
         };
+        /** MessageIn */
+        MessageIn: {
+            /** Text */
+            text: string;
+        };
+        /**
+         * MessageIntent
+         * @description What to do with a message, which is the only question this answers.
+         * @enum {string}
+         */
+        MessageIntent: "statement" | "question" | "both";
         /** ModelOut */
         ModelOut: {
             /** Assessments */
@@ -2546,9 +2586,23 @@ export interface components {
         };
         /**
          * SourceKind
+         * @description Where a memory came into the system through.
+         *
+         *     `CHAT` is not a connector and never will be. Every other kind names
+         *     something that is *walked* — a directory now, a mailbox later — and a walk is
+         *     driven by `Connector.observe`. A typed message arrives one at a time, pushed,
+         *     with nothing to enumerate and no cursor to keep; there is no second sync that
+         *     could observe it again.
+         *
+         *     It is a `SourceKind` anyway, and the reason is `memories.source_id`: every
+         *     memory in this system belongs to a source, every scope in Phase 4 is a source
+         *     id, and a memory whose origin was recorded some other way would be invisible
+         *     to the timeline, to `--source` on every command, and to the graph's
+         *     `FROM_SOURCE` edge. A kind that no connector implements is a smaller
+         *     exception than a memory with no source.
          * @enum {string}
          */
-        SourceKind: "filesystem";
+        SourceKind: "filesystem" | "chat";
         /** SourceOut */
         SourceOut: {
             /**
@@ -2634,6 +2688,29 @@ export interface components {
             };
             /** Relationships */
             relationships: number;
+        };
+        /** StatusOut */
+        StatusOut: {
+            /** Chunks */
+            chunks: number;
+            /**
+             * Connected Memories
+             * @default 0
+             */
+            connected_memories: number;
+            /** Connections */
+            connections?: components["schemas"]["ConnectionOut"][];
+            /** Embedded Chunks */
+            embedded_chunks: number;
+            /** Extracted */
+            extracted: boolean;
+            /**
+             * Memory Id
+             * Format: uuid
+             */
+            memory_id: string;
+            /** Searchable */
+            searchable: boolean;
         };
         /** StepOut */
         StepOut: {
@@ -2858,6 +2935,36 @@ export interface components {
             /** Total Ms */
             total_ms: number;
         };
+        /** TurnOut */
+        TurnOut: {
+            /** Answer */
+            answer?: string | null;
+            /** Answer Model */
+            answer_model?: string | null;
+            /** Citations */
+            citations?: components["schemas"]["memoryos__api__routes__chat__CitationOut"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** External Key */
+            external_key?: string | null;
+            /** Grounded */
+            grounded?: boolean | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            intent: components["schemas"]["MessageIntent"];
+            /** Memory Id */
+            memory_id?: string | null;
+            /** Refused */
+            refused?: boolean | null;
+            /** Text */
+            text: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -2937,6 +3044,15 @@ export interface components {
             sentences?: components["schemas"]["SentenceOut"][];
             /** Supported Sentences */
             supported_sentences: number;
+        };
+        /** CitationOut */
+        memoryos__api__routes__chat__CitationOut: {
+            /** Excerpt */
+            excerpt: string;
+            /** Locator */
+            locator: string;
+            /** Memory Id */
+            memory_id: string | null;
         };
         /** ContextOut */
         memoryos__api__routes__context__ContextOut: {
@@ -3135,6 +3251,35 @@ export interface components {
             /** Text */
             text: string;
         };
+        /** CitationOut */
+        memoryos__api__routes__search__CitationOut: {
+            /** Char End */
+            char_end: number;
+            /** Char Start */
+            char_start: number;
+            /** Chunk Ordinal */
+            chunk_ordinal: number;
+            context?: components["schemas"]["ExcerptOut"] | null;
+            /** Definition */
+            definition?: string | null;
+            /** Excerpt */
+            excerpt: string;
+            /** External Key */
+            external_key: string;
+            /**
+             * Memory Id
+             * Format: uuid
+             */
+            memory_id: string;
+            /** Occurred At */
+            occurred_at?: string | null;
+            /** Prefix Chars */
+            prefix_chars: number;
+            /** Source Name */
+            source_name: string;
+            /** Version */
+            version: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -3259,6 +3404,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AssumptionStatsOut"];
+                };
+            };
+        };
+    };
+    transcript_chat_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TurnOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_chat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MessageIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TurnOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    message_status_chat__memory_id__status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatusOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -1,13 +1,17 @@
 /**
  * The route table, inside the shell.
  *
- * Search moved off `/` to make room for an overview, which is the one
- * user-visible break in this milestone. `/?q=…` is forwarded rather than
- * dropped — see `OverviewPage` — because the entire argument for keeping search
- * state in the URL was that those links are worth keeping.
+ * `/` is the chat as of M10.0, and the overview it replaced moved to
+ * `/overview`. That is the milestone in one line: typing is how things enter
+ * this system, so the box you type into is what you land on.
+ *
+ * `/?q=…` is still forwarded to search — see `ChatPage` — because the argument
+ * for keeping search state in the URL was that those links are worth something,
+ * and they do not stop being worth something because the route under them
+ * changed a second time.
  *
  * `/ask` became `/agent` for the same reason the sidebar exists: the nav, the
- * palette and the router now read one table, and a route whose path and label
+ * palette and the router read one table, and a route whose path and label
  * disagree is a route the palette cannot find. The old path redirects.
  */
 
@@ -17,6 +21,7 @@ import { Shell } from "./app/Shell";
 import { GraphPlaceholder } from "./app/Placeholder";
 import { findRoute } from "./app/routes";
 import { AgentPage } from "./features/agent/AgentPage";
+import { ChatPage } from "./features/chat/ChatPage";
 import { CorpusPage } from "./features/corpus/CorpusPage";
 import { AssumptionsPage } from "./features/decisions/AssumptionsPage";
 import { DecisionForm } from "./features/decisions/DecisionForm";
@@ -31,6 +36,7 @@ import { MemoryPage } from "./features/memory/MemoryPage";
 import { ModelPage } from "./features/model/ModelPage";
 import { OverviewPage } from "./features/overview/OverviewPage";
 import { SearchPage } from "./features/search/SearchPage";
+import { SourcesPage } from "./features/sources/SourcesPage";
 import { SurfacingPage } from "./features/surfacing/SurfacingPage";
 import { TimelinePage } from "./features/timeline/TimelinePage";
 
@@ -38,7 +44,9 @@ export function App() {
   return (
     <Shell>
       <Routes>
-        <Route path="/" element={<OverviewPage />} />
+        <Route path="/" element={<ChatPage />} />
+        {/* Where the overview lived until M10.0. */}
+        <Route path="/overview" element={<OverviewPage />} />
         <Route path="/search" element={<SearchPage />} />
         <Route path="/memory/:id" element={<MemoryPage />} />
 
@@ -70,6 +78,7 @@ export function App() {
 
         <Route path="/judgements" element={<JudgementsPage />} />
         <Route path="/surfacing" element={<SurfacingPage />} />
+        <Route path="/sources" element={<SourcesPage />} />
         <Route path="/corpus" element={<CorpusPage />} />
 
         <Route path="*" element={<NotFound />} />

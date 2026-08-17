@@ -169,7 +169,9 @@ describe("the search box", () => {
         body: { query: "", timing: { embed_ms: 1, search_ms: 1, total_ms: 2 }, hits: [] },
       },
     ]);
-    renderWithProviders(<App />, { route: "/" });
+    // `/overview` since M10.0, which is where this box now lives: `/` is the
+    // chat, and its box is a message rather than a query.
+    renderWithProviders(<App />, { route: "/overview" });
 
     await userEvent.type(
       await screen.findByLabelText("Search query"),

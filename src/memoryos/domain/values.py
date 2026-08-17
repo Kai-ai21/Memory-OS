@@ -78,7 +78,24 @@ class Period(StrEnum):
 
 
 class SourceKind(StrEnum):
+    """Where a memory came into the system through.
+
+    `CHAT` is not a connector and never will be. Every other kind names
+    something that is *walked* — a directory now, a mailbox later — and a walk is
+    driven by `Connector.observe`. A typed message arrives one at a time, pushed,
+    with nothing to enumerate and no cursor to keep; there is no second sync that
+    could observe it again.
+
+    It is a `SourceKind` anyway, and the reason is `memories.source_id`: every
+    memory in this system belongs to a source, every scope in Phase 4 is a source
+    id, and a memory whose origin was recorded some other way would be invisible
+    to the timeline, to `--source` on every command, and to the graph's
+    `FROM_SOURCE` edge. A kind that no connector implements is a smaller
+    exception than a memory with no source.
+    """
+
     FILESYSTEM = auto()
+    CHAT = auto()
 
 
 class MemoryKind(StrEnum):

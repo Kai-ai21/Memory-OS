@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from memoryos.api.routes import (
     agent,
     answer,
+    chat,
     context,
     decisions,
     events,
@@ -82,6 +83,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # M8.0. Read-only: the writes are claims about a person and belong to a
     # command somebody typed rather than to a page they have open.
     app.include_router(model.router)
+    # M10.0, and the only route in this table that both reads and writes the
+    # corpus on a person's behalf. Its own prefix, so `/chat/{memory_id}/status`
+    # cannot be shadowed by anything above and `/answer` is left where it was —
+    # a client that wants a grounded answer without a transcript still has one.
+    app.include_router(chat.router)
     return app
 
 

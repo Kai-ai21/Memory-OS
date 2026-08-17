@@ -522,7 +522,11 @@ async def test_a_failed_transaction_takes_its_job_with_it(
         raise RuntimeError("crash after enqueue, before commit")
         return result
 
-    monkeypatch.setattr("memoryos.application.sync.enqueue_in", enqueue_then_fail)
+    # Patched in `ingest`, which is where the enqueue lives as of M10.0: the
+    # per-item recording moved out of `SyncSource` when chat became a second
+    # writer with no walk to drive. The invariant under test did not move, and
+    # the transaction that holds it is still opened by `SyncSource._ingest`.
+    monkeypatch.setattr("memoryos.application.ingest.enqueue_in", enqueue_then_fail)
 
     report = await fixture.run(full=True)
 

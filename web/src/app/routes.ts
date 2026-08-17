@@ -43,19 +43,30 @@ export const GROUPS: { id: GroupId; label: string }[] = [
 ];
 
 /**
- * The overview sits above the groups rather than inside one.
+ * Chat sits above the groups rather than inside one.
  *
- * It is the only view that is about the whole system rather than one layer of
- * it, and filing it under a heading would make it look like a peer of search.
+ * It was the overview until M10.0, and the swap is the milestone: this is the
+ * only view that both *writes* to the corpus and reads from it, so filing it
+ * under "retrieval" would describe half of what it does. It is also the front
+ * door, and a front door belongs above the map rather than on it.
  */
 export const HOME: ViewRoute = {
   path: "/",
-  label: "overview",
-  blurb: "What this system holds right now, and the one box that searches it.",
+  label: "chat",
+  blurb:
+    "Type a thought and it is kept; ask a question and it is answered from everything kept, with citations.",
   group: "retrieval",
+  aliases: ["say", "write", "note", "ask", "message", "front door"],
 };
 
 export const ROUTES: ViewRoute[] = [
+  {
+    path: "/overview",
+    label: "overview",
+    blurb: "What this system holds right now, in numbers that come from the corpus.",
+    group: "retrieval",
+    aliases: ["home", "start", "figures", "summary"],
+  },
   {
     path: "/search",
     label: "search",
@@ -122,11 +133,19 @@ export const ROUTES: ViewRoute[] = [
     aliases: ["proactive", "refusals", "interruptions"],
   },
   {
+    path: "/sources",
+    label: "sources",
+    blurb:
+      "The directories this reads from, and how to add one. Folders are still right for code.",
+    group: "system",
+    aliases: ["folders", "files", "directories", "sync", "repo", "ingest"],
+  },
+  {
     path: "/corpus",
     label: "corpus",
-    blurb: "Counts, sources and the standing health checks the CLI runs.",
+    blurb: "Counts and the standing health checks the CLI runs.",
     group: "system",
-    aliases: ["stats", "doctor", "health", "sources"],
+    aliases: ["stats", "doctor", "health"],
   },
 ];
 

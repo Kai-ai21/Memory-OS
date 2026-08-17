@@ -38,6 +38,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from memoryos.domain.events import EventKind
 from memoryos.domain.jobs import DEFAULT_MAX_ATTEMPTS, JobStatus
+from memoryos.domain.message_intent import MessageIntent
 from memoryos.domain.surfacing import SurfaceReason
 from memoryos.domain.values import (
     HEX64_PATTERN,
@@ -72,6 +73,11 @@ EMBEDDING_DIMENSIONS = 384
 _UUID = Uuid(as_uuid=True)
 _TIMESTAMPTZ = DateTime(timezone=True)
 _EMPTY_JSONB = text("'{}'::jsonb")
+# A JSON *array* default, for the one column whose empty value is a list rather
+# than an object. Module level rather than inline, because the column that needs
+# it lives on a class with a `text` attribute of its own, and a bare `text(...)`
+# inside that class body resolves to the column.
+_EMPTY_JSONB_ARRAY = text("'[]'::jsonb")
 
 
 def _enum_check(column: str, enum: type[StrEnum], name: str) -> CheckConstraint:
@@ -2865,4 +2871,104 @@ class FacetEvidence(Base):
             "facet_id", "kind", "ref_id", "relation", name="uq_facet_evidence_item"
         ),
         Index("ix_facet_evidence_facet", "facet_id"),
+    )
+
+
+class ChatMessage(Base):
+    """One turn typed into the front door, and what was done with it.
+
+    **This table is not the memory and must never become one.** A stored message
+    is a `memories` row like any other — hashed, chunked, embedded, extracted,
+    retrievable — and `external_key` names it. What lives here is the turn: the
+    text as typed, the intent it was read as, and, for a question, the answer
+    that came back.
+
+    So the obvious objection first. M10.0 says answers are not stored as
+    memories, because generated text that can be retrieved becomes evidence for
+    the next generation and a corpus that cites itself degrades in a way nothing
+    reports. `answer` is a column here, and the guarantee is structural rather
+    than promised: nothing on this table is hashed, chunked or embedded, there is
+    no tsvector, and no retriever joins to it. It is the transcript, which is
+    what makes the message list survive a reload and what makes "what about the
+    other one?" resolvable — and a transcript is not evidence.
+
+    **`external_key` rather than a foreign key to `memories`, and that is the
+    replay classification deciding a schema.** A `memory_id` would be the obvious
+    column and it is the wrong one: `memories` is derived, a full replay
+    truncates it, and `TRUNCATE ... CASCADE` reaches every table referencing it
+    whatever set this one is classified in. `decision_evidence` solved that with
+    a snapshot taken before the truncation and re-linked after — machinery built
+    for *link* rows, which these are not, and which would mean deleting and
+    reinserting the whole transcript on every rebuild.
+
+    The key needs none of it. It is what the ingestion log records, so the memory
+    comes back after a replay carrying the same one, and the join finds it again
+    without anything having been preserved. Names outlive ids — the same argument
+    M1.7 made for the golden set, arrived at one table earlier this time.
+
+    A null key means the turn was a question, which stored nothing. That is now
+    enforceable in both directions, because nothing can null this column behind
+    the schema's back.
+
+    `intent` is stored rather than recomputed on read, and that is the correction
+    path working: the classifier is rules over a regex and it will misread
+    things, so the reading that was *acted on* has to stay recoverable.
+    Recomputing it later under a newer rule set would rewrite history to agree
+    with the present.
+    """
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    intent: Mapped[str] = mapped_column(Text, nullable=False)
+    # The memory this message became, named the way the log names it. Null for a
+    # question. No foreign key — see the class docstring.
+    external_key: Mapped[str | None] = mapped_column(Text)
+    answer: Mapped[str | None] = mapped_column(Text)
+    answer_model: Mapped[str | None] = mapped_column(Text)
+    # Whether the corpus declined to answer. Recorded rather than derived from
+    # the prose, because the refusal rate over a chat log is the one number that
+    # says whether the guardrail survived being put behind a conversational
+    # interface — and re-deriving it by pattern-matching the answer text later
+    # would be measuring the words instead of the verdict.
+    answer_refused: Mapped[bool | None] = mapped_column(Boolean)
+    # What the answer cited, flattened to locator and excerpt. Enough to redraw
+    # the citation list on reload and nothing more: the full M2.5 citation is
+    # reconstructible from the memories it points at, and a copy of it here would
+    # be a second version of a chunk's text that no re-chunk could ever update.
+    citations: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default=_EMPTY_JSONB_ARRAY
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        _enum_check("intent", MessageIntent, "ck_chat_messages_intent"),
+        CheckConstraint("length(btrim(text)) > 0", name="ck_chat_messages_text_non_empty"),
+        # A question stores nothing and anything else does, both directions.
+        # Enforceable only because this column is not a foreign key into a table
+        # a replay truncates: nothing but this schema can ever null it.
+        CheckConstraint(
+            "(intent = 'question') = (external_key IS NULL)",
+            name="ck_chat_messages_question_stores_nothing",
+        ),
+        # And a statement is answered by nothing. The mirror of the rule above,
+        # and silent without it: an answered statement is a model call nobody
+        # asked for.
+        CheckConstraint(
+            "intent <> 'statement' OR answer IS NULL",
+            name="ck_chat_messages_statement_is_not_answered",
+        ),
+        # The verdict travels with the prose or neither exists. A refusal is a
+        # kind of answer, not the absence of one, and a null verdict beside real
+        # text would make "did it refuse?" unanswerable for that row.
+        CheckConstraint(
+            "(answer IS NULL) = (answer_refused IS NULL)",
+            name="ck_chat_messages_answer_verdict",
+        ),
+        # The message list reads it descending and the conversational context
+        # reads the last three turns. One index, both reads.
+        Index("ix_chat_messages_created_at", "created_at"),
     )
