@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -22,6 +24,7 @@ from memoryos.api.routes import (
     surfacing,
     timeline,
 )
+from memoryos.application import live
 from memoryos.config import Settings, get_settings
 from memoryos.container import Container
 from memoryos.logging import configure_logging
@@ -38,9 +41,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.container = container
         # Kept for the health routes, which predate the container.
         app.state.db = container.database
+
+        # One bus per process, on the app rather than the container: it is
+        # process-scoped fan-out with no place in the object graph a request
+        # assembles, and a container-scoped one would be rebuilt per CLI
+        # invocation where there is nothing listening.
+        app.state.live = live.LiveBus()
+        listener = asyncio.create_task(
+            live.listen(app.state.live, live.asyncpg_dsn(resolved.database_url))
+        )
         try:
             yield
         finally:
+            listener.cancel()
+            # Awaited rather than left to be collected, so a shutdown does not
+            # race the listener's own cleanup and leave a Postgres connection
+            # open past the process.
+            with contextlib.suppress(asyncio.CancelledError):
+                await listener
             await container.dispose()
 
     app = FastAPI(title="Memory Intelligence OS", version="0.1.0", lifespan=lifespan)
@@ -128,5 +146,9 @@ def _install_cors(app: FastAPI, settings: Settings) -> None:
         # this API that amends a row rather than creating one, and a browser
         # preflight for a method not named here fails before the request is made.
         allow_methods=["GET", "POST", "PATCH"],
-        allow_headers=["Content-Type"],
+        # `Last-Event-ID` joins the list in M10.3: a browser reconnecting an
+        # `EventSource` across origins sends it, and a preflight for a header not
+        # named here fails before the request is made — which would turn every
+        # reconnect into a stream that silently resumes from the beginning.
+        allow_headers=["Content-Type", "Last-Event-ID"],
     )

@@ -257,10 +257,11 @@ class StoreUpload:
                 # enter, and so is this.
                 occurred_at=at,
                 occurred_at_source=TimeProvenance.DECLARED,
-                # Never called. The bytes are already in the blob store, so
-                # `ingest_item` finds them there and this stays the unread
-                # fallback it is for a connector that cannot stream.
-                read_bytes=_already_stored,
+                # Omitted, which is what `None` means: `stage` streamed the bytes
+                # into the blob store while hashing them, so there is nothing left
+                # to read and no path to read it from. M10.2 passed a function
+                # that raised; the field is optional as of M10.3 and this says the
+                # true thing instead.
                 fingerprint=None,
             ),
         )
@@ -327,14 +328,6 @@ async def _bounded(stream: AsyncIterator[bytes], filename: str) -> AsyncIterator
         if seen > MAX_FILE_BYTES:
             raise FileTooLarge(filename)
         yield chunk
-
-
-async def _already_stored() -> bytes:
-    """Unreachable: `stage` put the bytes in the blob store before this was built."""
-    raise UnstorableUpload(
-        "an upload's bytes are streamed to the blob store before the row is "
-        "written, so nothing should ever ask an upload to read itself"
-    )
 
 
 def attachment_rows(

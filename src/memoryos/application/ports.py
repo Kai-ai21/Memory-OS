@@ -183,10 +183,21 @@ class ObservedItem:
     media_type: str | None
     occurred_at: datetime | None
     occurred_at_source: TimeProvenance
-    # Lazy on purpose. Most files on most syncs are unchanged, and reading
-    # every byte of every file to discover that would defeat the point of
-    # having a change filter at all.
-    read_bytes: Callable[[], Awaitable[bytes]]
+    # Lazy on purpose, and optional since M10.3. Most files on most syncs are
+    # unchanged, and reading every byte of every file to discover that would
+    # defeat the point of having a change filter at all.
+    #
+    # `None` means **the bytes are already in the blob store**, which is what a
+    # pushed source looks like: an upload streams them in while computing the
+    # hash, so by the time an item exists there is nothing left to read and no
+    # path to read it from. M10.2 filled this with a function that raised, which
+    # worked and was a lie about the shape of the type — the field said "this can
+    # always be read" and the value said otherwise only when called.
+    #
+    # `ingest_item` is the only caller and only calls it when the blob is
+    # genuinely absent, so a `None` here is unreachable rather than merely
+    # unlikely; it raises a named error if it is ever reached.
+    read_bytes: Callable[[], Awaitable[bytes]] | None = None
     # Whatever the connector wants remembered about this item so that the next
     # sync can cheaply decide whether to look at it again — `(mtime_ns, size)`
     # for the filesystem. The sync use case stores it verbatim in the source
@@ -689,6 +700,38 @@ class LanguageModel(Protocol):
         and an empty string presented as an answer is worse than a failure.
         """
         ...
+
+    def stream(
+        self, system: str, user: str, *, max_tokens: int = 1024
+    ) -> AsyncIterator[str]:
+        """The same completion, in pieces, as they arrive.
+
+        **A default implementation rather than a required method**, and the
+        default is the whole reason this is safe to add. A provider that cannot
+        stream yields one chunk containing the finished answer, so every caller
+        can be written against the streaming shape and nothing has to branch on
+        whether the configured provider supports it. The difference between the
+        two is *when* text appears, never whether it does.
+
+        The pieces are whatever the provider sends and carry no meaning
+        individually — a chunk may be half a word, and a citation marker may
+        arrive split across two. Anything that parses the answer has to
+        accumulate first, which is why M2.6's verification runs on the joined
+        text after the stream ends rather than per chunk.
+
+        Same failure taxonomy as `complete`, raised from inside the iterator: a
+        stream that dies partway is a `TransientError` and the caller has already
+        shown the text that arrived, which is why a partial answer has to be
+        *marked* rather than left looking finished.
+        """
+        return _one_chunk(self, system, user, max_tokens=max_tokens)
+
+
+async def _one_chunk(
+    model: LanguageModel, system: str, user: str, *, max_tokens: int
+) -> AsyncIterator[str]:
+    """`complete`, wearing a stream's shape. The non-streaming fallback."""
+    yield await model.complete(system, user, max_tokens=max_tokens)
 
 
 class ToolCallingModel(Protocol):

@@ -19,26 +19,32 @@ message — a message links out to its memory detail view, where it sits beside
 everything it connects to regardless of which conversation it was typed in.
 """
 
+import json
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
+import structlog
 from fastapi import (
     APIRouter,
     Depends,
     File,
     Form,
+    Header,
     HTTPException,
     Query,
     Request,
     UploadFile,
     status,
 )
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from memoryos.adapters.llm.errors import MissingApiKey
 from memoryos.application import chat as chat_use_case
+from memoryos.application import live
+from memoryos.application.answering import EventKind, StreamEvent
 from memoryos.application.attachments import (
     ALLOWED_SUFFIXES,
     CHUNK_BYTES,
@@ -56,9 +62,11 @@ from memoryos.application.chat import (
     NoSuchSession,
     Stage,
 )
-from memoryos.container import Container
+from memoryos.container import Container, ToolsUnsupported
 from memoryos.domain.jobs import PermanentError, TransientError
 from memoryos.domain.message_intent import ChatRole, MessageIntent
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["chat"])
 
@@ -80,6 +88,15 @@ class MessageIn(BaseModel):
     # The new-conversation button. Ignored when `session_id` is given, because an
     # explicit session is a person having clicked one and outranks a flag.
     new_session: bool = False
+    # Store and classify, but do not answer — the caller will open `/chat/ask`.
+    #
+    # **The server still classifies.** A streaming client sends every message
+    # here, because a second classifier in the browser would eventually disagree
+    # with this one and then a statement stored by the server would be answered by
+    # the client. What this asks for is the decision without the several-second
+    # model call attached: the turn is stored, `intent` comes back, and a caller
+    # that sees a question opens the stream.
+    defer_answer: bool = False
 
 
 class AttachmentOut(BaseModel):
@@ -178,7 +195,10 @@ class StatusOut(BaseModel):
 async def send(body: MessageIn, container: ContainerDep) -> ExchangeOut:
     try:
         exchange = await container.chat()(
-            body.text, session_id=body.session_id, new_session=body.new_session
+            body.text,
+            session_id=body.session_id,
+            new_session=body.new_session,
+            defer_answer=body.defer_answer,
         )
     except EmptyMessage as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
@@ -193,6 +213,149 @@ async def send(body: MessageIn, container: ContainerDep) -> ExchangeOut:
     except PermanentError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     return _exchange_out(exchange)
+
+
+class AskIn(BaseModel):
+    """A question to stream the answer to.
+
+    No `store` flag and no intent override: whether this is a question is the
+    classifier's decision, made once, server-side, exactly as it is for `/chat`.
+    A second way to decide would be a second classifier.
+    """
+
+    question: str = Field(min_length=1)
+    # Where to write the assistant turn when the stream finishes. Omitted means
+    # "answer without recording", which is what a caller that only wants the
+    # prose gets — `/answer` with a progress bar.
+    session_id: UUID | None = None
+    k: int = 10
+
+
+# Registered before `/chat/{session_id}` for the reason `/chat/sessions` is:
+# FastAPI matches in registration order, so the parameterised route would claim
+# `/chat/ask` and answer 422 for a path that was never a UUID.
+@router.post("/chat/ask")
+async def ask(body: AskIn, container: ContainerDep) -> StreamingResponse:
+    """A grounded answer, streamed as it becomes true.
+
+    **Not `EventSource`-compatible on purpose.** `EventSource` only issues GET,
+    and a question with three turns of conversation behind it does not belong in a
+    query string — it is long, it is the user's own words, and it would land in
+    every access log between here and the browser. The client reads the body with
+    `fetch` and a stream reader instead, which costs it a reconnect loop it has to
+    write and buys a request that says what it is.
+
+    Everything after the first byte is an event, including failure: by the time a
+    model call fails the response is a 200 with half a body in flight, so an
+    exception here would truncate the stream and leave the client unable to tell a
+    finished answer from a broken pipe. `error` is an event.
+    """
+
+    async def frames() -> AsyncIterator[str]:
+        try:
+            answer = container.answer()
+        except (MissingApiKey, ToolsUnsupported) as exc:
+            yield _frame(
+                StreamEvent(EventKind.ERROR, {"message": str(exc), "stage": "startup"})
+            )
+            return
+
+        chat = container.chat()
+        history = await chat.history_for(body.session_id)
+        final: StreamEvent | None = None
+        async for event in answer.stream(
+            body.question, k=max(1, min(body.k, 50)), history=history
+        ):
+            if event.kind is EventKind.DONE:
+                final = event
+            yield _frame(event)
+
+        if final is None or body.session_id is None:
+            # No `done` means the stream was interrupted, and an interrupted
+            # answer is not written to the transcript: a conversation resumed
+            # from it would carry half a sentence as though somebody had said it.
+            return
+        try:
+            await chat.record_answer(
+                body.session_id,
+                # The replacement when verification withdrew the draft, so the
+                # transcript never holds text the check rejected. This is the
+                # reason the row is written here rather than as tokens arrive.
+                content=str(final.data["replacement"] or final.data["answer"]),
+                model_id=str(final.data["model_id"]),
+                refused=bool(final.data["refused"]),
+            )
+        except NoSuchSession:
+            logger.warning("chat.answer_unrecorded", session_id=str(body.session_id))
+
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={
+            # Buffering is what breaks streaming behind a proxy: nginx holds the
+            # body until it has enough of it, which turns token-by-token into
+            # all-at-once and looks exactly like the feature not working.
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@router.get("/chat/events")
+async def events(
+    request: Request,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> StreamingResponse:
+    """Everything a background job finishes, pushed to any open page.
+
+    This one *is* `EventSource`-shaped: a GET with no body, so the browser's own
+    implementation reconnects and replays `Last-Event-ID` without a line of client
+    code. The id comes from the header on a reconnect and from the query string
+    only as a fallback for clients that cannot set headers.
+
+    The bus lives on the app rather than the container, because it is one per
+    *process* and has nothing to do with the object graph a request assembles.
+    """
+    bus: live.LiveBus = request.app.state.live
+    resume = _resume_from(last_event_id, request.query_params.get("last_event_id"))
+    return StreamingResponse(
+        live.stream(bus, last_event_id=resume),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+def _resume_from(header: str | None, query: str | None) -> int | None:
+    """The last event a client saw, from whichever place it stated it.
+
+    A malformed id resumes from the beginning of the buffer rather than failing
+    the request: the client is reconnecting, it has already lost its place, and a
+    400 would leave it with no stream at all.
+    """
+    for value in (header, query):
+        if value:
+            try:
+                return int(value)
+            except ValueError:
+                logger.warning("live.unreadable_last_event_id", value=value[:64])
+    return None
+
+
+def _frame(event: StreamEvent) -> str:
+    """One SSE frame for an answer event.
+
+    No `id:` field, and that is the difference between this stream and
+    `/chat/events`. An answer cannot be resumed from the middle — the model has
+    moved on, and re-asking would produce different text — so an id would be an
+    offer this endpoint cannot honour. An interrupted answer is *marked*, not
+    resumed.
+    """
+    return f"event: {event.kind.value}\ndata: {json.dumps(event.data)}\n\n"
 
 
 @router.post(

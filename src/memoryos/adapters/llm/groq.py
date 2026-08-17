@@ -24,7 +24,7 @@ not to have information the SDK is handing over.
 import asyncio
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -106,6 +106,53 @@ class GroqLanguageModel(LanguageModel):
     @property
     def model_id(self) -> str:
         return self._model_name
+
+    async def stream(
+        self, system: str, user: str, *, max_tokens: int = 1024
+    ) -> AsyncIterator[str]:
+        """The same call with `stream=True`, yielding deltas as they arrive.
+
+        **The timeout moves from the whole call to each chunk**, and it has to.
+        `asyncio.wait_for` around a generation that legitimately takes thirty
+        seconds would cancel a stream that was working; what "unresponsive" means
+        here is that *no token has arrived* for the timeout, which is a different
+        measurement and the only one that can distinguish a slow answer from a
+        dead socket.
+
+        Deltas are yielded exactly as sent, including the empty ones providers
+        emit around role changes and finish reasons — filtered here rather than
+        downstream, because an empty chunk reaching an interface is a render with
+        nothing to render.
+        """
+        client = self._load()
+        try:
+            stream = await client.chat.completions.create(
+                model=self._model_name,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                max_tokens=max_tokens,
+                temperature=0.0,
+                stream=True,
+            )
+            iterator = stream.__aiter__()
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        iterator.__anext__(), timeout=self._timeout
+                    )
+                except StopAsyncIteration:
+                    break
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if delta:
+                    yield delta
+        except TimeoutError as exc:
+            raise TransientError(
+                f"{self._model_name} stopped sending for {self._timeout}s"
+            ) from exc
+        except Exception as exc:
+            raise _classify(exc, model=self._model_name) from exc
 
     async def complete(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
         client = self._load()

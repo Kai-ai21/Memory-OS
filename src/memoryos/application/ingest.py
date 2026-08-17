@@ -48,6 +48,10 @@ from memoryos.domain.jobs import JobSpec, JobType
 from memoryos.domain.values import EventType
 
 
+class UnreadableItem(RuntimeError):
+    """An item whose bytes are neither readable nor already stored."""
+
+
 @dataclass(frozen=True, slots=True)
 class Ingested:
     """What one recorded item became.
@@ -96,6 +100,16 @@ async def ingest_item(
         # streaming into the blob store has already done this; one that cannot
         # stream leaves it to us.
         if not await blobs.exists(item.content_hash):
+            if item.read_bytes is None:
+                # A pushed source promised its bytes were already stored and they
+                # are not. Named rather than left as a `TypeError` on `None()`,
+                # because the two causes are very different: a connector that
+                # forgot to supply a reader, or a blob store that lost a write.
+                raise UnreadableItem(
+                    f"{item.external_key!r} carries no reader and its bytes are "
+                    f"not in the blob store; a source that supplies no "
+                    f"`read_bytes` must have stored them first"
+                )
             await blobs.put(item.content_hash, await item.read_bytes())
         await artifacts.add(
             RawArtifact(

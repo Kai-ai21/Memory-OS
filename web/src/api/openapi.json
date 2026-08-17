@@ -354,6 +354,38 @@
         "title": "AnswerTimingOut",
         "type": "object"
       },
+      "AskIn": {
+        "description": "A question to stream the answer to.\n\nNo `store` flag and no intent override: whether this is a question is the\nclassifier's decision, made once, server-side, exactly as it is for `/chat`.\nA second way to decide would be a second classifier.",
+        "properties": {
+          "k": {
+            "default": 10,
+            "title": "K",
+            "type": "integer"
+          },
+          "question": {
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "AskIn",
+        "type": "object"
+      },
       "AssessmentOut": {
         "properties": {
           "best_support": {
@@ -6231,6 +6263,46 @@
         ]
       }
     },
+    "/chat/ask": {
+      "post": {
+        "description": "A grounded answer, streamed as it becomes true.\n\n**Not `EventSource`-compatible on purpose.** `EventSource` only issues GET,\nand a question with three turns of conversation behind it does not belong in a\nquery string \u2014 it is long, it is the user's own words, and it would land in\nevery access log between here and the browser. The client reads the body with\n`fetch` and a stream reader instead, which costs it a reconnect loop it has to\nwrite and buys a request that says what it is.\n\nEverything after the first byte is an event, including failure: by the time a\nmodel call fails the response is a 200 with half a body in flight, so an\nexception here would truncate the stream and leave the client unable to tell a\nfinished answer from a broken pipe. `error` is an event.",
+        "operationId": "ask_chat_ask_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ask",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/chat/attach": {
       "post": {
         "description": "Files dropped into the chat, optionally with a note about them.\n\n**Streamed, never buffered.** Each file is read in `CHUNK_BYTES` pieces and\nhanded to `BlobStore.put_stream`, which hashes as it writes \u2014 the single-pass\npattern from M1.4. A 50MB PDF costs 64KiB of this process at a time, and the\nceiling is enforced mid-stream rather than from `Content-Length`, which a\nclient states and can be wrong about.\n\nRegistered above `/chat/{session_id}` for the reason `/chat/sessions` is:\nFastAPI matches in registration order, so the parameterised route would claim\n`/chat/attach` and answer 422 for a path that was never a UUID.",
@@ -6290,6 +6362,54 @@
           }
         },
         "summary": "Attach Limits",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/chat/events": {
+      "get": {
+        "description": "Everything a background job finishes, pushed to any open page.\n\nThis one *is* `EventSource`-shaped: a GET with no body, so the browser's own\nimplementation reconnects and replays `Last-Event-ID` without a line of client\ncode. The id comes from the header on a reconnect and from the query string\nonly as a fallback for clients that cannot set headers.\n\nThe bus lives on the app rather than the container, because it is one per\n*process* and has nothing to do with the object graph a request assembles.",
+        "operationId": "events_chat_events_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Events",
         "tags": [
           "chat"
         ]

@@ -27,8 +27,9 @@ refusal. See `_retrieval_query`.
 """
 
 import time
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum, auto
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -124,6 +125,46 @@ class ConversationTurn:
         if self.answer:
             lines.append(f"  answered: {_clip(self.answer)}")
         return "\n".join(lines)
+
+
+class EventKind(StrEnum):
+    """What one event in a streamed answer is.
+
+    The two retrieval events are the ones that would be easy to leave out and are
+    the reason this streams at all. M10.0 measured the shape of the wait: embedding
+    the query, searching, and reranking fifty candidates is *seven to eleven
+    seconds* on this machine, and generation — the only part token streaming makes
+    visible — is well under two. Streaming just the tokens would replace a
+    ten-second blank screen with an eight-second blank screen.
+    """
+
+    # Sent before anything is embedded, so the first thing on screen arrives in
+    # milliseconds rather than seconds.
+    RETRIEVAL_STARTED = auto()
+    # How much was searched and how much came back. A number makes the wait
+    # legible: "searching 3,833 chunks" is a system working, and a spinner is a
+    # system that might be broken.
+    RETRIEVAL_DONE = auto()
+    TOKEN = auto()
+    CITATION = auto()
+    # Carries the verification verdict and, when verification rejected the draft,
+    # the refusal that replaces it. Always sent last on a successful stream.
+    DONE = auto()
+    ERROR = auto()
+
+
+@dataclass(frozen=True, slots=True)
+class StreamEvent:
+    """One event, and whatever it carries.
+
+    A kind and a dict rather than a class per event, because every one of these
+    is serialised straight to SSE as JSON and a hierarchy would exist only to be
+    flattened again at the transport. The kinds are closed; the payloads are what
+    each kind documents.
+    """
+
+    kind: EventKind
+    data: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,6 +317,142 @@ class AnswerQuestion:
             ),
         )
 
+    async def stream(
+        self,
+        question: str,
+        *,
+        k: int = 10,
+        filters: SearchFilters | None = None,
+        max_tokens: int = 1024,
+        history: Sequence[ConversationTurn] = (),
+    ) -> AsyncIterator[StreamEvent]:
+        """The same answer, as events, in the order they become true.
+
+        **Every guardrail runs, and runs where it ran before.** Retrieval,
+        assembly, generation, verification, citation resolution — the same calls
+        in the same order as `__call__`, with the only difference being that the
+        generation step yields as it goes. In particular:
+
+        * An empty context still refuses *without a model call*, before a single
+          token is streamed. There is nothing to invent from and nothing is asked
+          to.
+        * **Verification runs on the joined text after the stream ends**, because
+          it has to: a citation marker can arrive split across two chunks, and a
+          per-chunk check would see `[` and `1]` and find neither. So tokens are
+          streamed as a *draft*, and `done` carries the verdict.
+        * When verification rejects the draft outright, `done` carries a
+          `replacement` — the refusal — and the interface swaps the text it has
+          been drawing. Visibly. An interface that quietly kept the draft would be
+          showing text this system has decided not to stand behind.
+
+        Errors are yielded as an `error` event rather than raised, because by the
+        time one happens the caller has already sent an HTTP 200 and streamed some
+        of a body. Raising would truncate the response and leave the client unable
+        to tell a finished answer from a broken pipe — which is the whole reason
+        step 4 exists.
+        """
+        started = time.monotonic()
+        recent = tuple(history)[-DEFAULT_HISTORY_TURNS:]
+
+        yield StreamEvent(EventKind.RETRIEVAL_STARTED, {"question": question, "k": k})
+
+        retrieve_started = time.monotonic()
+        try:
+            result = await self._search(
+                _retrieval_query(question, recent), k=k, filters=filters
+            )
+        except Exception as exc:
+            yield StreamEvent(EventKind.ERROR, {"message": str(exc), "stage": "retrieval"})
+            return
+        retrieve_ms = _ms(retrieve_started)
+
+        context = assemble_context(
+            result.hits, counter=self._counter, token_budget=self._token_budget
+        )
+        yield StreamEvent(
+            EventKind.RETRIEVAL_DONE,
+            {
+                # What was actually found, not what was searched. The corpus size
+                # belongs to `/stats` and the interface already has it; reporting
+                # it from here would be this layer guessing at a number another
+                # one owns.
+                "hits": len(result.hits),
+                "chunks": sum(len(hit.matched_chunks) for hit in result.hits),
+                "passages": len(context.passages),
+                "dropped": len(context.dropped),
+                "retrieve_ms": retrieve_ms,
+                "rerank_ms": result.timing.rerank_ms,
+            },
+        )
+
+        if context.is_empty:
+            # The strongest form of the guardrail, and it survives streaming
+            # unchanged: nothing was retrieved, so nothing is asked, so there is
+            # nothing that could have been invented.
+            verification = verify_citations(REFUSAL_WITHOUT_CONTEXT, set())
+            yield StreamEvent(EventKind.TOKEN, {"text": REFUSAL_WITHOUT_CONTEXT})
+            yield StreamEvent(
+                EventKind.DONE,
+                _done_payload(
+                    REFUSAL_WITHOUT_CONTEXT, verification, [], self._model.model_id,
+                    total_ms=_ms(started),
+                ),
+            )
+            return
+
+        pieces: list[str] = []
+        generate_started = time.monotonic()
+        try:
+            async for piece in self._model.stream(
+                SYSTEM_PROMPT,
+                USER_TEMPLATE.format(
+                    passages=context.render(), question=_asked(question, recent)
+                ),
+                max_tokens=max_tokens,
+            ):
+                pieces.append(piece)
+                yield StreamEvent(EventKind.TOKEN, {"text": piece})
+        except Exception as exc:
+            # Partial text has already been drawn. The event says so, and the
+            # interface marks what it has rather than leaving it looking finished.
+            yield StreamEvent(
+                EventKind.ERROR,
+                {"message": str(exc), "stage": "generation", "partial": "".join(pieces)},
+            )
+            return
+
+        answer = "".join(pieces)
+        verification = verify_citations(answer, context.valid_indices)
+        citations = await self._resolve(context, verification)
+
+        for explained in citations:
+            for citation in explained.citations[:1]:
+                yield StreamEvent(
+                    EventKind.CITATION,
+                    {
+                        "memory_id": str(citation.memory_id),
+                        "locator": citation.locator,
+                        "excerpt": " ".join(citation.excerpt.split()),
+                    },
+                )
+
+        logger.info(
+            "answer.streamed",
+            question_length=len(question),
+            passages=len(context.passages),
+            citation_rate=round(verification.citation_rate, 3),
+            hallucinated=len(verification.hallucinated_indices),
+            refused=verification.is_refusal,
+            generate_ms=_ms(generate_started),
+        )
+        yield StreamEvent(
+            EventKind.DONE,
+            _done_payload(
+                answer, verification, citations, self._model.model_id,
+                total_ms=_ms(started),
+            ),
+        )
+
     async def _resolve(
         self, context: AssembledContext, verification: VerificationResult
     ) -> list[ExplainedHit]:
@@ -296,6 +473,43 @@ class AnswerQuestion:
         return await explain_hits(
             self._sessions, hits, weights=self._weights, rrf_k=self._rrf_k
         )
+
+
+def _done_payload(
+    answer: str,
+    verification: VerificationResult,
+    citations: Sequence[ExplainedHit],
+    model_id: str,
+    *,
+    total_ms: int,
+) -> dict[str, object]:
+    """What `done` carries, including the replacement when there is one.
+
+    `replacement` is the mechanism M10.3 asks for by name: a draft that
+    verification rejects is not quietly kept. It is set when the answer cited an
+    index it was never given, which is the unambiguous fabrication signal — every
+    other verification result is a matter of degree and is reported as a mark on
+    the sentence rather than a reason to discard the whole answer.
+    """
+    replacement = None
+    if verification.hallucinated_indices:
+        replacement = (
+            "This answer cited passages that were never retrieved "
+            f"({', '.join(str(index) for index in verification.hallucinated_indices)}), "
+            "so it has been withdrawn. Nothing here supports it."
+        )
+    return {
+        "answer": answer,
+        "replacement": replacement,
+        "marked_answer": verification.marked(),
+        "model_id": model_id,
+        "refused": verification.is_refusal,
+        "grounded": verification.grounded,
+        "citation_rate": round(verification.citation_rate, 4),
+        "hallucinated_indices": list(verification.hallucinated_indices),
+        "citations": len(citations),
+        "total_ms": total_ms,
+    }
 
 
 def _retrieval_query(question: str, history: Sequence[ConversationTurn]) -> str:

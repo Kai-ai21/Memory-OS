@@ -28,3 +28,36 @@ if (typeof HTMLDialogElement !== "undefined" && !HTMLDialogElement.prototype.sho
     this.dispatchEvent(new Event("close"));
   };
 }
+
+
+/**
+ * jsdom ships no `EventSource`, and M10.3's live updates use one.
+ *
+ * A stub rather than a shim: it records the URL it was opened with and lets a
+ * test dispatch server events into it by hand, which is the only way to assert
+ * what the page does when a background job finishes. It deliberately does *not*
+ * emulate reconnection — that is the browser's own behaviour and the reason
+ * `EventSource` was chosen over a hand-written reader, so a test asserting on a
+ * reimplementation of it would be testing this file.
+ */
+class StubEventSource extends EventTarget {
+  static instances: StubEventSource[] = [];
+  readonly url: string;
+  closed = false;
+
+  constructor(url: string) {
+    super();
+    this.url = url;
+    StubEventSource.instances.push(this);
+  }
+
+  close() {
+    this.closed = true;
+  }
+}
+
+if (typeof EventSource === "undefined") {
+  (globalThis as unknown as { EventSource: unknown }).EventSource = StubEventSource;
+}
+
+export { StubEventSource };

@@ -194,3 +194,44 @@ def test_an_uncited_assertion_is_not_a_refusal() -> None:
 
     assert result.is_refusal is False
     assert result.grounded is False
+
+
+def test_fullwidth_citation_brackets_are_read_as_citations() -> None:
+    """`【1】` is a citation, because the configured model writes them.
+
+    Measured rather than anticipated: `openai/gpt-oss-120b` cites with CJK
+    lenticular brackets however firmly the prompt writes `[1]`, and against an
+    ASCII-only pattern every one of those answers scored 0% cited.
+
+    That is the worst direction for this check to fail in. A correctly-cited
+    answer reported as ungrounded trains a reader to ignore the mark, and the mark
+    is the only thing between them and a fabrication — so a verifier that cannot
+    read the marker the model actually sent is a verifier that makes the system
+    look untrustworthy when it was behaving.
+    """
+    result = verify_citations("Postgres full-text search is fast 【1】.", {1})
+
+    assert result.cited_indices == [1]
+    assert result.citation_rate == 1.0
+    assert result.grounded
+
+    # Mixed, because a model may switch mid-answer.
+    mixed = verify_citations(
+        "The queue is a table [1]. The graph is a projection 【2】.", {1, 2}
+    )
+    assert sorted(set(mixed.cited_indices)) == [1, 2]
+
+    # And a fabricated index is still caught in either bracket.
+    invented = verify_citations("Something unsupported 【9】.", {1})
+    assert invented.hallucinated_indices == [9]
+
+
+def test_ordinary_prose_brackets_are_still_not_citations() -> None:
+    """The widening must not turn every bracket into a marker.
+
+    Bare digits are what makes `[note]`, `[sic]` and `[...]` ordinary prose. That
+    was true before fullwidth brackets were added and has to stay true after, or
+    a passage number stops being the only thing this system puts in brackets.
+    """
+    assert verify_citations("An aside [note] and a range [a-b].", {1}).cited_indices == []
+    assert verify_citations("A CJK aside 【see】.", {1}).cited_indices == []

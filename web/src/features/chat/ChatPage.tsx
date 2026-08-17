@@ -44,6 +44,9 @@ import { describeConnections } from "../../lib/connections";
 import { fileSize, timestamp } from "../../lib/format";
 import { AttachmentList } from "./Attachments";
 import { SessionRail } from "./SessionRail";
+import { StreamingAnswer } from "./StreamingAnswer";
+import { useAnswerStream } from "./useAnswerStream";
+import { useLiveEvents } from "./useLiveEvents";
 
 /**
  * How often a message that is still indexing is asked about.
@@ -110,6 +113,11 @@ export function ChatPage() {
   });
 
   const [pending, setPending] = useState<File[]>([]);
+  // Connection lines arrive here, pushed, without a refresh. One subscription for
+  // the page rather than one per message: the server says which memory moved and
+  // the client re-reads that one status.
+  useLiveEvents();
+  const answer = useAnswerStream();
 
   const send = useMutation({
     mutationFn: (text: string) =>
@@ -119,7 +127,10 @@ export function ChatPage() {
       // separate "upload" flow would have been a second front door.
       pending.length > 0
         ? api.attach(pending, { note: text, sessionId: active, newSession: starting })
-        : api.send(text, active, starting),
+        // `defer_answer`: the server stores and classifies, and this page streams
+        // the answer for anything it calls a question. One classifier, on the
+        // server, and the several-second model call moved off the send.
+        : api.send(text, active, starting, true),
     onSuccess: (exchange) => {
       // Pinned to the session the server actually used, which is not always the
       // one that was asked for: with no session named, the thirty-minute rule may
@@ -137,6 +148,20 @@ export function ChatPage() {
       setPending([]);
       void client.invalidateQueries({ queryKey: ["chat-sessions"] });
       void client.invalidateQueries({ queryKey: ["chat-messages"] });
+
+      // The server classified. A question streams its answer from here; a
+      // statement is already stored and there is nothing more to do.
+      const asked = exchange.messages[0];
+      if (asked.intent === "question" || asked.intent === "both") {
+        void answer.run(asked.content, exchange.session_id).then(() => {
+          // The server wrote the assistant turn when the stream ended, so the
+          // transcript now has a row the streamed view is a duplicate of.
+          // Refetching and clearing swaps one for the other; leaving both would
+          // draw the same answer twice.
+          void client.invalidateQueries({ queryKey: ["chat-messages"] });
+          answer.reset();
+        });
+      }
     },
   });
 
@@ -209,10 +234,16 @@ export function ChatPage() {
             immediately and the answer replaces it when it arrives. */}
         {send.isPending ? <Pending text={send.variables} /> : null}
         {send.isError ? <Failure error={send.error} /> : null}
+        {answer.state.question !== null ? (
+          <StreamingAnswer state={answer.state} />
+        ) : null}
 
         <div ref={bottom} />
         <Composer
-          onSend={(text) => send.mutate(text)}
+          onSend={(text) => {
+            answer.reset();
+            send.mutate(text);
+          }}
           busy={send.isPending}
           queued={pending}
           onQueue={(files) => setPending((was) => [...was, ...files])}

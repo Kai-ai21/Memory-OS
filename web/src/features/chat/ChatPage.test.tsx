@@ -225,10 +225,16 @@ describe("sending", () => {
     const posted = calls.find((call) => call.method === "POST");
     // The session travels with the message. A page that omitted it would let the
     // thirty-minute rule reopen a conversation the reader has explicitly opened.
+    //
+    // `defer_answer` is the M10.3 half: the server still classifies — a second
+    // classifier here would eventually disagree with it — but it stores without
+    // answering, and this page opens `/chat/ask` for whatever comes back a
+    // question.
     expect(posted?.body).toEqual({
       text: "postgres full-text search is faster than I expected",
       session_id: SESSION_ID,
       new_session: false,
+      defer_answer: true,
     });
   });
 

@@ -479,13 +479,27 @@ export const api = {
     return request<ChatMessage[]>(`/chat/${sessionId}${query ? `?${query}` : ""}`);
   },
 
-  send: (text: string, sessionId?: string | null, newSession = false) =>
+  /**
+   * Send a message.
+   *
+   * `deferAnswer` stores and classifies without answering, so a streaming client
+   * can open `/chat/ask` for the questions. The *server* still decides which is
+   * which — a second classifier in the browser would eventually disagree with it,
+   * and then a statement stored by one would be answered by the other.
+   */
+  send: (
+    text: string,
+    sessionId?: string | null,
+    newSession = false,
+    deferAnswer = false,
+  ) =>
     request<ChatExchange>("/chat", {
       method: "POST",
       body: JSON.stringify({
         text,
         session_id: sessionId ?? null,
         new_session: newSession,
+        defer_answer: deferAnswer,
       }),
     }),
 
