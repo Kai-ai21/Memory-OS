@@ -56,7 +56,18 @@ __all__ = ["DEFAULT_MODEL", "GroqLanguageModel", "MissingApiKey"]
 # specification: Groq deprecates and renames models often enough that a model id
 # copied from documentation is a plausible-looking string that fails at the first
 # real call. See the milestone report for the response this returned.
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
+#
+# **And that is exactly what happened between M10.0 and M10.1.**
+# `llama-3.3-70b-versatile` answered questions during M10.0's session and was
+# returning `404 model_not_found` within the hour, on the same key, with nothing
+# in this repository having changed. The failure is loud and its message names the
+# cause, which is the best that can be arranged for a dependency that can be
+# withdrawn underneath a running deployment — but it does mean the *default* here
+# has a shelf life, and this comment is the record of one expiring.
+#
+# Re-verified against `GET /v1/models` on the live account before being written
+# down, which is the only check worth doing on a value like this.
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 
 # 5xx means the provider broke, not the request. Anything at or above this is
 # retried; anything below it is the caller's fault and is not.

@@ -60,7 +60,21 @@ _BATCH_MAX_ATTEMPTS = 6
 # Bump when the prompt changes in any way that could change what comes back.
 # Part of `version`, so a prompt improvement becomes a query — find the mentions
 # carrying the old version, redo those — rather than a corpus rebuild.
-PROMPT_VERSION = "v1"
+#
+# v2 adds rule 5, and it was added because M10.0 measured what v1 did to short
+# text. Nine of twenty-three typed messages produced *zero* entities and the mean
+# was 0.83 mentions per message, so the connection line — the one thing that
+# milestone exists to show — had nothing to say about most of what was typed.
+#
+# The cause was rule 1 read strictly against a one-sentence chunk. Messages
+# plainly about the same subject named it as a lowercase noun phrase ("the
+# classifier", "the connection line"), and v1 returned nothing rather than a
+# `concept`, because everything the prompt exemplified was a proper noun.
+#
+# Rule 5 is scoped by the *shape of the chunk* rather than by where it came from.
+# A short note in a file is the same problem and gets the same fix; there is no
+# chat branch here, and M10.0's finding was that there does not need to be one.
+PROMPT_VERSION = "v2"
 
 # Below this, the model is guessing. The prompt asks for it to be applied, and
 # it is enforced here too: an instruction is a request, and a threshold that
@@ -89,6 +103,11 @@ or translate. "postgres" stays "postgres"; do not return "PostgreSQL".
 3. Assign a confidence between 0 and 1. Omit anything below 0.5.
 4. Use only these types: person, technology, project, organization, concept, \
 file, decision. If nothing fits, omit the entity rather than inventing a type.
+5. A chunk may be a single sentence. A short chunk is not an empty one: extract \
+what it is *about*, and a lowercase noun phrase naming a component, mechanism or \
+idea — "the classifier", "entity extraction", "the refusal path" — is a concept, \
+returned without the leading article. Rule 1 still holds: the phrase must appear \
+in the text.
 
 Return this JSON shape and nothing else — no prose, no markdown fences:
 
