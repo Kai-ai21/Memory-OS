@@ -211,6 +211,9 @@ export type ChatCitation = ChatMessage["citations"][number];
 export type ChatExchange = Created<paths["/chat"]["post"]>;
 export type ChatSession = Ok<paths["/chat/sessions"]["get"]>[number];
 export type MessageStatus = Ok<paths["/chat/messages/{memory_id}/status"]["get"]>;
+export type Stage = MessageStatus["stage"];
+export type Attachment = ChatMessage["attachments"][number];
+export type AttachLimits = Ok<paths["/chat/attach/limits"]["get"]>;
 export type Connection = MessageStatus["connections"][number];
 export type CreateSourceIn =
   paths["/sources"]["post"]["requestBody"]["content"]["application/json"];
@@ -486,6 +489,38 @@ export const api = {
       }),
     }),
 
+  attachLimits: () => request<AttachLimits>("/chat/attach/limits"),
+
+  /**
+   * Files into the chat, as multipart.
+   *
+   * `FormData` and *no* `Content-Type` header: the browser has to set it, because
+   * only the browser knows the multipart boundary it generated. Passing the
+   * generic client's `application/json` here would produce a body the server
+   * cannot parse, which is why this is the one call that goes around `request`.
+   */
+  attach: async (
+    files: File[],
+    { note, sessionId, newSession }: AttachArgs = {},
+  ): Promise<ChatExchange> => {
+    const body = new FormData();
+    for (const file of files) body.append("files", file);
+    if (note?.trim()) body.append("note", note.trim());
+    if (sessionId) body.append("session_id", sessionId);
+    if (newSession) body.append("new_session", "true");
+
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}/chat/attach`, { method: "POST", body });
+    } catch (cause) {
+      throw new NetworkError("/chat/attach", cause);
+    }
+    if (!response.ok) {
+      throw new ApiError(response.status, await readDetail(response), "/chat/attach");
+    }
+    return (await response.json()) as ChatExchange;
+  },
+
   archiveSession: (id: string, archived = true) =>
     request<null>(
       `/chat/sessions/${id}/archive${archived ? "" : "?archived=false"}`,
@@ -511,6 +546,12 @@ export const api = {
       { method: "POST" },
     ),
 };
+
+export interface AttachArgs {
+  note?: string;
+  sessionId?: string | null;
+  newSession?: boolean;
+}
 
 export interface TimelineArgs {
   period: Period;

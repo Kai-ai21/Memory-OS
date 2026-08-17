@@ -746,6 +746,96 @@
         "title": "AssumptionVerdict",
         "type": "string"
       },
+      "AttachLimitsOut": {
+        "description": "What the door accepts, so the interface can say it before a rejection.",
+        "properties": {
+          "max_file_bytes": {
+            "title": "Max File Bytes",
+            "type": "integer"
+          },
+          "suffixes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Suffixes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "max_file_bytes",
+          "suffixes"
+        ],
+        "title": "AttachLimitsOut",
+        "type": "object"
+      },
+      "AttachmentOut": {
+        "properties": {
+          "byte_size": {
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "deduplicated": {
+            "title": "Deduplicated",
+            "type": "boolean"
+          },
+          "external_key": {
+            "title": "External Key",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "media_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Type"
+          },
+          "memory_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Id"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "ordinal",
+          "filename",
+          "byte_size",
+          "media_type",
+          "external_key",
+          "content_hash",
+          "deduplicated"
+        ],
+        "title": "AttachmentOut",
+        "type": "object"
+      },
       "BandOut": {
         "description": "One `occurred_at_source` band of the corpus.",
         "properties": {
@@ -789,6 +879,51 @@
           "latest"
         ],
         "title": "BandOut",
+        "type": "object"
+      },
+      "Body_attach_chat_attach_post": {
+        "properties": {
+          "files": {
+            "items": {
+              "contentMediaType": "application/octet-stream",
+              "type": "string"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "new_session": {
+            "default": false,
+            "title": "New Session",
+            "type": "boolean"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "title": "Body_attach_chat_attach_post",
         "type": "object"
       },
       "BreakdownOut": {
@@ -3128,6 +3263,13 @@
             ],
             "title": "Answer Model"
           },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/AttachmentOut"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "citations": {
             "items": {
               "$ref": "#/components/schemas/memoryos__api__routes__chat__CitationOut"
@@ -4274,10 +4416,11 @@
         "type": "object"
       },
       "SourceKind": {
-        "description": "Where a memory came into the system through.\n\n`CHAT` is not a connector and never will be. Every other kind names\nsomething that is *walked* \u2014 a directory now, a mailbox later \u2014 and a walk is\ndriven by `Connector.observe`. A typed message arrives one at a time, pushed,\nwith nothing to enumerate and no cursor to keep; there is no second sync that\ncould observe it again.\n\nIt is a `SourceKind` anyway, and the reason is `memories.source_id`: every\nmemory in this system belongs to a source, every scope in Phase 4 is a source\nid, and a memory whose origin was recorded some other way would be invisible\nto the timeline, to `--source` on every command, and to the graph's\n`FROM_SOURCE` edge. A kind that no connector implements is a smaller\nexception than a memory with no source.",
+        "description": "Where a memory came into the system through.\n\n`CHAT` is not a connector and never will be. Every other kind names\nsomething that is *walked* \u2014 a directory now, a mailbox later \u2014 and a walk is\ndriven by `Connector.observe`. A typed message arrives one at a time, pushed,\nwith nothing to enumerate and no cursor to keep; there is no second sync that\ncould observe it again.\n\nIt is a `SourceKind` anyway, and the reason is `memories.source_id`: every\nmemory in this system belongs to a source, every scope in Phase 4 is a source\nid, and a memory whose origin was recorded some other way would be invisible\nto the timeline, to `--source` on every command, and to the graph's\n`FROM_SOURCE` edge. A kind that no connector implements is a smaller\nexception than a memory with no source.\n\n`UPLOAD` is the second of those and is deliberately *not* `FILESYSTEM`. A\ndropped file has no path this machine can walk back to: the bytes arrived over\nHTTP, the browser's path is meaningless here, and there is nothing for a sync\nto observe a second time. Filing it under `FILESYSTEM` would put rows in a\nsource whose `config.root` cannot explain them, and the first full sync of that\nroot would find them absent and tombstone every one \u2014 a deletion nobody\nperformed, arriving by way of the reconciliation that exists to be correct.",
         "enum": [
           "filesystem",
-          "chat"
+          "chat",
+          "upload"
         ],
         "title": "SourceKind",
         "type": "string"
@@ -4402,6 +4545,18 @@
         "title": "SpanOut",
         "type": "object"
       },
+      "Stage": {
+        "description": "How far one memory has got, as a word rather than four booleans.\n\n**Honest about the middle, which is the point.** A PDF is not searchable the\nmoment its upload finishes: the bytes are stored, then a worker parses them,\nthen chunks them, then embeds them, and on a real document that is tens of\nseconds. An interface that said \"done\" at upload would look broken thirty\nseconds later when a search found nothing \u2014 so each stage is named and the one\nit is actually in is reported.\n\n`FAILED` is a stage rather than a flag because it is terminal in the same way\n`INDEXED` is, and because the alternative is worse: a dead-lettered attachment\nnobody hears about is a document the person believes was filed.",
+        "enum": [
+          "stored",
+          "parsing",
+          "chunking",
+          "indexed",
+          "failed"
+        ],
+        "title": "Stage",
+        "type": "string"
+      },
       "StatsOut": {
         "properties": {
           "cache_entries": {
@@ -4499,6 +4654,17 @@
             "title": "Extracted",
             "type": "boolean"
           },
+          "failure": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure"
+          },
           "memory_id": {
             "format": "uuid",
             "title": "Memory Id",
@@ -4507,6 +4673,9 @@
           "searchable": {
             "title": "Searchable",
             "type": "boolean"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/Stage"
           }
         },
         "required": [
@@ -4514,7 +4683,8 @@
           "chunks",
           "embedded_chunks",
           "extracted",
-          "searchable"
+          "searchable",
+          "stage"
         ],
         "title": "StatusOut",
         "type": "object"
@@ -6056,6 +6226,70 @@
           }
         },
         "summary": "Send",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/chat/attach": {
+      "post": {
+        "description": "Files dropped into the chat, optionally with a note about them.\n\n**Streamed, never buffered.** Each file is read in `CHUNK_BYTES` pieces and\nhanded to `BlobStore.put_stream`, which hashes as it writes \u2014 the single-pass\npattern from M1.4. A 50MB PDF costs 64KiB of this process at a time, and the\nceiling is enforced mid-stream rather than from `Content-Length`, which a\nclient states and can be wrong about.\n\nRegistered above `/chat/{session_id}` for the reason `/chat/sessions` is:\nFastAPI matches in registration order, so the parameterised route would claim\n`/chat/attach` and answer 422 for a path that was never a UUID.",
+        "operationId": "attach_chat_attach_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_attach_chat_attach_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExchangeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Attach",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/chat/attach/limits": {
+      "get": {
+        "description": "The upload limits, served rather than duplicated in the client.\n\nThe allow-list is composed from the parsers that handle each format, so a\nclient that restated it would eventually disagree with the pipeline \u2014 and the\nsymptom is a file the interface refuses that the system can read, or worse the\nreverse.",
+        "operationId": "attach_limits_chat_attach_limits_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachLimitsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Attach Limits",
         "tags": [
           "chat"
         ]

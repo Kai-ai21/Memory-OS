@@ -88,3 +88,24 @@ export function range(start: number, end: number): string {
 export function isCode(kind: string | null | undefined): boolean {
   return kind === "code";
 }
+
+
+/**
+ * A file size somebody can read.
+ *
+ * Binary units, because that is what a file manager shows — a number that
+ * disagrees with the one beside it in Finder is a number that gets questioned.
+ * One decimal below ten and none above, so the column stays narrow without
+ * rounding 1.4MB to 1MB.
+ */
+export function fileSize(size: number): string {
+  if (size < 1024) return `${size} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = size / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}

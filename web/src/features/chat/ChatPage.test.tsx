@@ -9,12 +9,12 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { ChatPage } from "./ChatPage";
 import { describeConnections } from "../../lib/connections";
-import { renderWithProviders, stubFetch } from "../../test/harness";
+import { ATTACH_LIMITS, renderWithProviders, stubFetch } from "../../test/harness";
 
 const MEMORY_ID = "11111111-1111-7111-8111-111111111111";
 const SESSION_ID = "99999999-9999-7999-8999-999999999999";
@@ -42,6 +42,7 @@ const STATEMENT = {
   refused: null,
   grounded: null,
   citations: [],
+  attachments: [],
 };
 
 const QUESTION = {
@@ -58,6 +59,7 @@ const QUESTION = {
   refused: null,
   grounded: null,
   citations: [],
+  attachments: [],
 };
 
 const REFUSAL = {
@@ -75,11 +77,16 @@ const REFUSAL = {
   refused: true,
   grounded: true,
   citations: [],
+  attachments: [],
 };
 
 /** The requests the page makes on mount, plus whatever a test adds. */
 function chatRoutes(messages: unknown[], sessions: unknown[] = [SESSION]) {
   return [
+    // Before the session route, because the stub matcher takes the first entry
+    // whose string the URL contains and `/chat/attach/limits` would otherwise
+    // never be reached past a bare `/chat` match a caller adds.
+    { match: "/chat/attach/limits", body: ATTACH_LIMITS },
     { match: `/chat/${SESSION_ID}`, body: messages },
     { match: "/chat/sessions", body: sessions },
     { match: `/chat/messages/${MEMORY_ID}/status`, body: CONNECTED },
@@ -92,6 +99,8 @@ const CONNECTED = {
   embedded_chunks: 1,
   extracted: true,
   searchable: true,
+  stage: "indexed" as const,
+  failure: null,
   connections: [
     { entity_id: "cccccccc-cccc-7ccc-8ccc-cccccccccccc", name: "postgres", memories: 3 },
     { entity_id: "dddddddd-dddd-7ddd-8ddd-dddddddddddd", name: "indexing", memories: 1 },
@@ -113,13 +122,39 @@ describe("the connection line", () => {
 
   it.each([
     [
-      "says indexing while the vectors are still being written",
-      { ...CONNECTED, embedded_chunks: 0, searchable: false, extracted: false },
-      /indexing/i,
+      "says which stage it is in while the vectors are still being written",
+      {
+        ...CONNECTED,
+        chunks: 1,
+        embedded_chunks: 0,
+        searchable: false,
+        extracted: false,
+        stage: "chunking" as const,
+      },
+      /chunking and embedding/i,
+    ],
+    [
+      "shows the parser's own sentence when a file could not be read",
+      {
+        ...CONNECTED,
+        chunks: 0,
+        embedded_chunks: 0,
+        searchable: false,
+        extracted: false,
+        stage: "failed" as const,
+        failure:
+          "PDF 'scan.pdf' yielded 0 characters across 3 page(s); it is almost certainly scanned and needs OCR",
+      },
+      /almost certainly scanned and needs OCR/,
     ],
     [
       "distinguishes not-yet-looked from looked-and-found-nothing",
-      { ...CONNECTED, extracted: false, connections: [], connected_memories: 0 },
+      {
+        ...CONNECTED,
+        extracted: false,
+        connections: [],
+        connected_memories: 0,
+      },
       /looking for what it connects to/i,
     ],
     [
@@ -307,5 +342,155 @@ describe("sessions", () => {
         (call) => call.method === "POST" && call.url.includes(`${SESSION_ID}/archive`),
       ),
     ).toBe(true);
+  });
+});
+
+describe("attachments", () => {
+  const ATTACHED = {
+    ...STATEMENT,
+    id: "eeeeeeee-eeee-7eee-8eee-eeeeeeeeeee1",
+    content: "this is the vendor's proposal",
+    attachments: [
+      {
+        id: "ffffffff-ffff-7fff-8fff-fffffffffff1",
+        ordinal: 0,
+        filename: "proposal.pdf",
+        byte_size: 2_411_724,
+        media_type: "application/pdf",
+        external_key: "2026-08-17/proposal.pdf#0198",
+        content_hash: "a".repeat(64),
+        deduplicated: false,
+        memory_id: MEMORY_ID,
+      },
+    ],
+  };
+
+  it("shows filename, size, type, and the stage it is actually in", async () => {
+    stubFetch([
+      {
+        match: `/chat/messages/${MEMORY_ID}/status`,
+        body: { ...CONNECTED, chunks: 0, embedded_chunks: 0, searchable: false, extracted: false, stage: "parsing" },
+      },
+      ...chatRoutes([ATTACHED]),
+    ]);
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
+
+    const attachment = await screen.findByTestId("attachment");
+    expect(within(attachment).getByText("proposal.pdf")).toBeInTheDocument();
+    // Binary units, matching what a file manager shows.
+    expect(within(attachment).getByText("2.3 MB")).toBeInTheDocument();
+    expect(within(attachment).getByText("application/pdf")).toBeInTheDocument();
+    // Not "done". A PDF is not searchable the moment upload finishes, and saying
+    // so would make the system look broken thirty seconds later.
+    expect(await within(attachment).findByText(/reading it/i)).toBeInTheDocument();
+  });
+
+  it("shows the parser's own sentence when a file cannot be read", async () => {
+    const reason =
+      "PDF 'scan.pdf' yielded 0 characters across 3 page(s); it is almost certainly scanned and needs OCR";
+    stubFetch([
+      {
+        match: `/chat/messages/${MEMORY_ID}/status`,
+        body: { ...CONNECTED, chunks: 0, embedded_chunks: 0, searchable: false, extracted: false, stage: "failed", failure: reason },
+      },
+      ...chatRoutes([ATTACHED]),
+    ]);
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
+
+    // Verbatim, and at full weight. A dead-lettered attachment nobody hears about
+    // is the worst outcome — they think it worked.
+    expect(await screen.findByText(reason)).toBeInTheDocument();
+  });
+
+  it("says when an upload linked to bytes already in the corpus", async () => {
+    stubFetch(
+      chatRoutes([
+        {
+          ...ATTACHED,
+          attachments: [{ ...ATTACHED.attachments[0], deduplicated: true }],
+        },
+      ]),
+    );
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
+
+    // "already in memory, linked" rather than a silent success, which looks
+    // identical to a re-upload that did nothing.
+    expect(
+      await screen.findByText(/already in memory, linked/i),
+    ).toBeInTheDocument();
+  });
+
+  it("links a file to its memory, not to the conversation", async () => {
+    stubFetch(chatRoutes([ATTACHED]));
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
+
+    // A session is a view; the memory is the thing. The file links out to where
+    // it sits beside everything it connects to regardless of which conversation
+    // it arrived in.
+    expect(await screen.findByRole("link", { name: "proposal.pdf" })).toHaveAttribute(
+      "href",
+      `/memory/${MEMORY_ID}`,
+    );
+  });
+
+  it("queues a dropped file and posts it as multipart with the note", async () => {
+    const calls = stubFetch([
+      // `/chat/attach/limits` first: the stub matcher takes the first entry whose
+      // string the URL contains, and the limits URL contains `/chat/attach`.
+      { match: "/chat/attach/limits", body: ATTACH_LIMITS },
+      {
+        match: "/chat/attach",
+        body: { session_id: SESSION_ID, messages: [ATTACHED] },
+        status: 201,
+      },
+      ...chatRoutes([STATEMENT]),
+    ]);
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
+
+    const file = new File(["# Proposal\n"], "proposal.md", { type: "text/markdown" });
+    const box = await screen.findByLabelText("Message");
+    // The composer is the drop target, not the page: a page-wide target catches a
+    // file somebody meant to drop on another window.
+    fireEvent.drop(box.closest("form")!, { dataTransfer: { files: [file] } });
+
+    expect(await screen.findByTestId("queued")).toBeInTheDocument();
+    await userEvent.type(box, "this is the vendor's proposal{Enter}");
+
+    const posted = await waitFor(() => {
+      const found = calls.find(
+        (call) => call.method === "POST" && call.url.includes("/chat/attach"),
+      );
+      expect(found).toBeDefined();
+      return found!;
+    });
+
+    // Multipart, with the file and the note in one request. The note is not a
+    // separate send: it is a thought about these files and belongs to the same
+    // turn, which is what makes it their context rather than an unrelated message
+    // that happened to follow.
+    const body = posted.body as FormData;
+    expect((body.get("files") as File).name).toBe("proposal.md");
+    expect(body.get("note")).toBe("this is the vendor's proposal");
+    expect(body.get("session_id")).toBe(SESSION_ID);
+  });
+
+  it("offers a paperclip as well, because a drop zone is not discoverable", async () => {
+    stubFetch(chatRoutes([STATEMENT]));
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
+
+    // Awaited, because the accepted formats come from the API rather than from a
+    // constant here: the button renders with a plain title and gains the list
+    // when `/chat/attach/limits` answers. A hardcoded list would eventually hide
+    // a file the pipeline could read, which is the worse of the two failures.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Attach files")).toHaveAttribute(
+        "accept",
+        ATTACH_LIMITS.suffixes.join(","),
+      ),
+    );
+    expect(screen.getByRole("button", { name: /attach/i })).toHaveAttribute(
+      "title",
+      expect.stringContaining(".pdf"),
+    );
   });
 });

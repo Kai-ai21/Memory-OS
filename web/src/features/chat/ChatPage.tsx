@@ -41,7 +41,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type ChatMessage, type MessageIntent } from "../../api/client";
 import { Empty, Failure } from "../../components/primitives";
 import { describeConnections } from "../../lib/connections";
-import { timestamp } from "../../lib/format";
+import { fileSize, timestamp } from "../../lib/format";
+import { AttachmentList } from "./Attachments";
 import { SessionRail } from "./SessionRail";
 
 /**
@@ -108,8 +109,17 @@ export function ChatPage() {
     enabled: active !== null,
   });
 
+  const [pending, setPending] = useState<File[]>([]);
+
   const send = useMutation({
-    mutationFn: (text: string) => api.send(text, active, starting),
+    mutationFn: (text: string) =>
+      // One box, two endpoints, and the client decides by whether files are
+      // queued rather than by asking. A note typed beside a file is the *same*
+      // act as typing a note — `attach` classifies it with the same rules — so a
+      // separate "upload" flow would have been a second front door.
+      pending.length > 0
+        ? api.attach(pending, { note: text, sessionId: active, newSession: starting })
+        : api.send(text, active, starting),
     onSuccess: (exchange) => {
       // Pinned to the session the server actually used, which is not always the
       // one that was asked for: with no session named, the thirty-minute rule may
@@ -124,6 +134,7 @@ export function ChatPage() {
         },
         { replace: true },
       );
+      setPending([]);
       void client.invalidateQueries({ queryKey: ["chat-sessions"] });
       void client.invalidateQueries({ queryKey: ["chat-messages"] });
     },
@@ -200,7 +211,15 @@ export function ChatPage() {
         {send.isError ? <Failure error={send.error} /> : null}
 
         <div ref={bottom} />
-        <Composer onSend={(text) => send.mutate(text)} busy={send.isPending} />
+        <Composer
+          onSend={(text) => send.mutate(text)}
+          busy={send.isPending}
+          queued={pending}
+          onQueue={(files) => setPending((was) => [...was, ...files])}
+          onRemove={(index) =>
+            setPending((was) => was.filter((_, at) => at !== index))
+          }
+        />
       </div>
     </div>
   );
@@ -287,6 +306,7 @@ function Turn({ message }: { message: ChatMessage }) {
         <IntentMark message={message} />
       </div>
       <p className="whitespace-pre-wrap text-ink">{message.content}</p>
+      <AttachmentList attachments={message.attachments} />
       {message.memory_id ? <StoredLine memoryId={message.memory_id} /> : null}
       {message.external_key && !message.memory_id ? (
         // The key outlived the memory: it was deleted, or a replay has not
@@ -469,16 +489,31 @@ function Pending({ text }: { text: string }) {
 function Composer({
   onSend,
   busy,
+  queued,
+  onQueue,
+  onRemove,
 }: {
   onSend: (text: string) => void;
   busy: boolean;
+  queued: File[];
+  onQueue: (files: File[]) => void;
+  onRemove: (index: number) => void;
 }) {
   const [text, setText] = useState("");
-  const box = useRef<HTMLTextAreaElement>(null);
+  const [over, setOver] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
+  const limits = useQuery({
+    queryKey: ["attach-limits"],
+    queryFn: api.attachLimits,
+    staleTime: Infinity,
+  });
 
   function submit() {
     const typed = text.trim();
-    if (!typed || busy) return;
+    // Files alone are a message. A note is optional — "here is the proposal" is
+    // frequently the whole of what somebody wants to say, and requiring text
+    // would make dropping a file a two-step act.
+    if ((!typed && queued.length === 0) || busy) return;
     onSend(typed);
     setText("");
   }
@@ -488,20 +523,88 @@ function Composer({
       // `bg-paper` and not `bg-page`: the page background token is `--color-paper`,
       // and a class naming a token that does not exist compiles to nothing — which
       // makes a sticky element transparent, so the messages scroll visibly through
-      // the box you are typing into. The rule above it is what separates the
-      // composer from the last message now that it sits over them.
-      className="sticky bottom-0 flex flex-col gap-1 border-t border-rule-strong bg-paper pt-2 pb-3"
+      // the box you are typing into.
+      className={`sticky bottom-0 flex flex-col gap-1 border-t bg-paper pt-2 pb-3 ${
+        over ? "border-amber-bright" : "border-rule-strong"
+      }`}
       onSubmit={(event) => {
         event.preventDefault();
         submit();
       }}
+      // The drop target is the composer rather than the whole page. A page-wide
+      // target catches a file somebody meant to drop on another window, and the
+      // highlight has to say *where* it will land.
+      onDragOver={(event) => {
+        event.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setOver(false);
+        onQueue(Array.from(event.dataTransfer.files));
+      }}
     >
-      <label htmlFor="chat-input" className="meta-label">
-        say something
-      </label>
+      {queued.length > 0 ? (
+        <ul className="flex flex-col gap-0.5 pb-1" data-testid="queued">
+          {queued.map((file, index) => (
+            <li
+              key={`${file.name}-${index}`}
+              className="flex items-baseline gap-2 border-l-2 border-rule pl-2"
+            >
+              <span className="font-mono text-sm text-ink">{file.name}</span>
+              <span className="meta text-faint">{fileSize(file.size)}</span>
+              <button
+                type="button"
+                className="meta text-faint hover:text-deny"
+                aria-label={`Remove ${file.name}`}
+                onClick={() => onRemove(index)}
+              >
+                remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <div className="flex items-baseline justify-between gap-3">
+        <label htmlFor="chat-input" className="meta-label">
+          say something
+        </label>
+        <button
+          type="button"
+          className="meta text-faint hover:text-amber"
+          onClick={() => picker.current?.click()}
+          // The clip is the discoverable half; the drop zone is the fast half.
+          // Both, because a person who has never dropped a file into a text box
+          // will not discover that they can.
+          title={
+            limits.data?.suffixes
+              ? `Attach a file — up to ${fileSize(limits.data.max_file_bytes)}, ${limits.data.suffixes.join(", ")}`
+              : "Attach a file"
+          }
+        >
+          📎 attach
+        </button>
+      </div>
+      <input
+        ref={picker}
+        type="file"
+        multiple
+        className="hidden"
+        aria-label="Attach files"
+        // The accept list comes from the API, which composes it from the parsers
+        // that handle each format. A hardcoded list here would eventually differ
+        // from what the pipeline can read — and a file the picker hides that the
+        // system could have read is the worse of the two failures.
+        accept={limits.data?.suffixes?.join(",")}
+        onChange={(event) => {
+          onQueue(Array.from(event.target.files ?? []));
+          event.target.value = "";
+        }}
+      />
       <textarea
         id="chat-input"
-        ref={box}
         // The shell's `/` shortcut focuses whatever carries this, so one key
         // reaches the box on whichever page has one.
         data-search-input
@@ -514,7 +617,11 @@ function Composer({
             submit();
           }
         }}
-        placeholder="postgres full-text search is faster than I expected"
+        placeholder={
+          queued.length > 0
+            ? "say something about these files, or just send them"
+            : "postgres full-text search is faster than I expected"
+        }
         className="field resize-y"
         aria-label="Message"
         spellCheck={false}
@@ -523,7 +630,8 @@ function Composer({
       <p className="meta text-faint">
         <span className="kbd">enter</span> sends, <span className="kbd">shift</span>
         <span className="kbd">enter</span> starts a line. A question is answered
-        and not stored; anything else is kept.
+        and not stored; anything else is kept. Drop a file here and it becomes a
+        memory too — a note beside it is kept as its own.
       </p>
     </form>
   );

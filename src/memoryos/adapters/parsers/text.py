@@ -29,6 +29,14 @@ def decode(data: bytes) -> tuple[str, str]:
     return data.decode("utf-8", errors="replace"), "utf-8/replace"
 
 
+# What this parser is *asked for* by name, as opposed to what it accepts — which
+# is everything, because it is the registry's catch-all. The upload allow-list
+# reads this one: a `.txt` is a file somebody meant to send, and "anything at all"
+# is not a policy a door can have.
+SUFFIXES = (".txt", ".text", ".log")
+MEDIA_TYPES = frozenset({"text/plain"})
+
+
 class TextParser(Parser):
     """Matches anything. Registered last, so it only sees what nothing else took."""
 

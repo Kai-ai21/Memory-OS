@@ -40,6 +40,23 @@ export interface Recorded {
   body: unknown;
 }
 
+/**
+ * A request body a test can assert on.
+ *
+ * JSON where it is JSON, the `FormData` itself where it is multipart, and the raw
+ * value otherwise. Nothing here decides what a body *means* — a test that wants
+ * the fields of a multipart body reads them off the `FormData` it gets back.
+ */
+function readBody(body: BodyInit | null | undefined): unknown {
+  if (!body) return undefined;
+  if (body instanceof FormData) return body;
+  try {
+    return JSON.parse(String(body));
+  } catch {
+    return body;
+  }
+}
+
 export function stubFetch(routes: Route[]): Recorded[] {
   const calls: Recorded[] = [];
 
@@ -50,7 +67,12 @@ export function stubFetch(routes: Route[]): Recorded[] {
       calls.push({
         url,
         method: init?.method ?? "GET",
-        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        // Parsed when it is JSON and kept as-is when it is not. M10.2's upload
+        // sends `FormData`, whose `String()` is "[object FormData]" — and because
+        // the object literal is evaluated before the push, a `JSON.parse` that
+        // threw here lost the *record of the call* as well as its body, so a test
+        // asserting that an upload was posted saw no request at all.
+        body: readBody(init?.body),
       });
 
       const route = routes.find((candidate) => url.includes(candidate.match));
@@ -108,9 +130,21 @@ export const READY = {
  * renders `<App />` for any reason needs these routed or the harness throws on
  * an unstubbed request. Spread it into the route list rather than repeated.
  */
+/** What `/chat/attach/limits` returns: 50MB, and the parsers' own suffixes. */
+export const ATTACH_LIMITS = {
+  max_file_bytes: 50 * 1024 * 1024,
+  suffixes: [".md", ".pdf", ".py", ".txt"],
+};
+
 export const SHELL_ROUTES: Route[] = [
   { match: "/stats", body: STATS },
   { match: "/health/ready", body: READY },
+  // `/` is the chat as of M10.0, so every route test loads the session list and
+  // the upload limits on the way in. Listed before any bare `/chat` match a test
+  // adds, because the stub matcher takes the first route whose string the URL
+  // contains — and `/chat` contains neither of these.
+  { match: "/chat/attach/limits", body: ATTACH_LIMITS },
+  { match: "/chat/sessions", body: [] },
 ];
 
 /** The chunk text used by the fixture, exported so a test can assert on it. */

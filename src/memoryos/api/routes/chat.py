@@ -19,21 +19,42 @@ message — a message links out to its memory detail view, where it sits beside
 everything it connects to regardless of which conversation it was typed in.
 """
 
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, Field
 
 from memoryos.adapters.llm.errors import MissingApiKey
 from memoryos.application import chat as chat_use_case
+from memoryos.application.attachments import (
+    ALLOWED_SUFFIXES,
+    CHUNK_BYTES,
+    MAX_FILE_BYTES,
+    EmptyFile,
+    FileTooLarge,
+    UnsupportedMediaType,
+    Upload,
+)
 from memoryos.application.chat import (
     EmptyMessage,
     Exchange,
     Message,
     NoLanguageModel,
     NoSuchSession,
+    Stage,
 )
 from memoryos.container import Container
 from memoryos.domain.jobs import PermanentError, TransientError
@@ -59,6 +80,21 @@ class MessageIn(BaseModel):
     # The new-conversation button. Ignored when `session_id` is given, because an
     # explicit session is a person having clicked one and outranks a flag.
     new_session: bool = False
+
+
+class AttachmentOut(BaseModel):
+    id: UUID
+    ordinal: int
+    filename: str
+    byte_size: int
+    media_type: str | None
+    external_key: str
+    content_hash: str
+    # True when these bytes were already in the corpus, so this upload linked to
+    # an existing artifact rather than storing new ones. "Already in memory,
+    # linked" is worth saying; a silent success looks identical to a no-op.
+    deduplicated: bool
+    memory_id: UUID | None = None
 
 
 class CitationOut(BaseModel):
@@ -92,6 +128,9 @@ class MessageOut(BaseModel):
     # verification run rather than of the text it checked.
     grounded: bool | None = None
     citations: list[CitationOut] = Field(default_factory=list)
+    # Files dropped with this message. Several is normal: three files dropped
+    # together are three memories and one turn.
+    attachments: list[AttachmentOut] = Field(default_factory=list)
 
 
 class ExchangeOut(BaseModel):
@@ -123,6 +162,14 @@ class StatusOut(BaseModel):
     embedded_chunks: int
     extracted: bool
     searchable: bool
+    # `stored`, `parsing`, `chunking`, `indexed` or `failed`. One word for where
+    # this is, because a PDF is not searchable the moment its upload finishes and
+    # an interface that said "done" would look broken thirty seconds later.
+    stage: Stage
+    # Why normalization gave up, in the parser's own words. Null unless the stage
+    # is `failed`. A dead-lettered attachment nobody hears about is the worst
+    # outcome — they think it worked.
+    failure: str | None = None
     connections: list[ConnectionOut] = Field(default_factory=list)
     connected_memories: int = 0
 
@@ -146,6 +193,96 @@ async def send(body: MessageIn, container: ContainerDep) -> ExchangeOut:
     except PermanentError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     return _exchange_out(exchange)
+
+
+@router.post(
+    "/chat/attach", response_model=ExchangeOut, status_code=status.HTTP_201_CREATED
+)
+async def attach(
+    container: ContainerDep,
+    files: Annotated[list[UploadFile], File()],
+    note: Annotated[str | None, Form()] = None,
+    session_id: Annotated[UUID | None, Form()] = None,
+    new_session: Annotated[bool, Form()] = False,
+) -> ExchangeOut:
+    """Files dropped into the chat, optionally with a note about them.
+
+    **Streamed, never buffered.** Each file is read in `CHUNK_BYTES` pieces and
+    handed to `BlobStore.put_stream`, which hashes as it writes — the single-pass
+    pattern from M1.4. A 50MB PDF costs 64KiB of this process at a time, and the
+    ceiling is enforced mid-stream rather than from `Content-Length`, which a
+    client states and can be wrong about.
+
+    Registered above `/chat/{session_id}` for the reason `/chat/sessions` is:
+    FastAPI matches in registration order, so the parameterised route would claim
+    `/chat/attach` and answer 422 for a path that was never a UUID.
+    """
+    uploads = [
+        Upload(
+            filename=item.filename or "file",
+            media_type=item.content_type,
+            stream=_chunks(item),
+        )
+        for item in files
+    ]
+    try:
+        exchange = await container.chat().attach(
+            uploads, note=note, session_id=session_id, new_session=new_session
+        )
+    except UnsupportedMediaType as exc:
+        # 415, and the body names what *is* supported. A generic 400 makes somebody
+        # guess which of the three things they did wrong.
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, str(exc)
+        ) from exc
+    except FileTooLarge as exc:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, str(exc)
+        ) from exc
+    except (EmptyFile, EmptyMessage) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except NoSuchSession as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except (NoLanguageModel, MissingApiKey) as exc:
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc)) from exc
+    except TransientError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except PermanentError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    return _exchange_out(exchange)
+
+
+class AttachLimitsOut(BaseModel):
+    """What the door accepts, so the interface can say it before a rejection."""
+
+    max_file_bytes: int
+    suffixes: list[str]
+
+
+@router.get("/chat/attach/limits", response_model=AttachLimitsOut)
+async def attach_limits() -> AttachLimitsOut:
+    """The upload limits, served rather than duplicated in the client.
+
+    The allow-list is composed from the parsers that handle each format, so a
+    client that restated it would eventually disagree with the pipeline — and the
+    symptom is a file the interface refuses that the system can read, or worse the
+    reverse.
+    """
+    return AttachLimitsOut(
+        max_file_bytes=MAX_FILE_BYTES, suffixes=sorted(ALLOWED_SUFFIXES)
+    )
+
+
+async def _chunks(item: UploadFile) -> AsyncIterator[bytes]:
+    """One file, in pieces, from the multipart body.
+
+    Starlette has already spooled the part to a temp file for anything large, so
+    this is a read from disk rather than from the socket — but it is still a read
+    that must not become one `bytes` object. `read(-1)` here would undo the whole
+    reason `put_stream` exists.
+    """
+    while chunk := await item.read(CHUNK_BYTES):
+        yield chunk
 
 
 # Registered before `/chat/{session_id}`, and it has to be. FastAPI matches in
@@ -214,6 +351,8 @@ async def message_status(memory_id: UUID, container: ContainerDep) -> StatusOut:
         embedded_chunks=found.embedded_chunks,
         extracted=found.extracted,
         searchable=found.searchable,
+        stage=found.stage,
+        failure=found.failure,
         connections=[
             ConnectionOut(
                 entity_id=connection.entity_id,
@@ -274,5 +413,19 @@ def _message_out(message: Message) -> MessageOut:
                 excerpt=citation.excerpt,
             )
             for citation in message.citations
+        ],
+        attachments=[
+            AttachmentOut(
+                id=attachment.id,
+                ordinal=attachment.ordinal,
+                filename=attachment.filename,
+                byte_size=attachment.byte_size,
+                media_type=attachment.media_type,
+                external_key=attachment.external_key,
+                content_hash=attachment.content_hash,
+                deduplicated=attachment.deduplicated,
+                memory_id=attachment.memory_id,
+            )
+            for attachment in message.attachments
         ],
     )

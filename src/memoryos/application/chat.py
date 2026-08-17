@@ -43,6 +43,7 @@ way to draw the boundary.
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum, auto
 from typing import Any
 from uuid import UUID
 
@@ -59,10 +60,17 @@ from memoryos.application.answering import (
     ConversationTurn,
     GroundedAnswer,
 )
+from memoryos.application.attachments import (
+    Stored,
+    StoreUpload,
+    Upload,
+    attachment_rows,
+)
 from memoryos.application.ingest import ingest_item
 from memoryos.application.ports import BlobStore, ObservedItem
 from memoryos.domain.entities import Source
 from memoryos.domain.ids import new_id
+from memoryos.domain.jobs import JobStatus, JobType
 from memoryos.domain.message_intent import ChatRole, MessageIntent, classify
 from memoryos.domain.sessions import starts_new_session, title_for
 from memoryos.domain.values import ContentHash, SourceKind, TimeProvenance
@@ -114,6 +122,24 @@ class Citation:
 
 
 @dataclass(frozen=True, slots=True)
+class Attachment:
+    """One file on one message, as a reader sees it."""
+
+    id: UUID
+    ordinal: int
+    filename: str
+    byte_size: int
+    media_type: str | None
+    external_key: str
+    content_hash: str
+    # True when these bytes were already in the corpus, so this upload linked to
+    # an existing artifact rather than storing new ones. Said out loud, because a
+    # silent success looks identical to a re-upload that did nothing.
+    deduplicated: bool
+    memory_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Message:
     """One turn as a reader sees it.
 
@@ -143,6 +169,9 @@ class Message:
     # re-derive or contradict.
     grounded: bool | None = None
     citations: list[Citation] = field(default_factory=list)
+    # Files dropped with this message. Several are normal: three files dropped
+    # together are three memories and one turn.
+    attachments: list[Attachment] = field(default_factory=list)
 
     @property
     def stored(self) -> bool:
@@ -183,6 +212,35 @@ class Connection:
     memories: int
 
 
+class Stage(StrEnum):
+    """How far one memory has got, as a word rather than four booleans.
+
+    **Honest about the middle, which is the point.** A PDF is not searchable the
+    moment its upload finishes: the bytes are stored, then a worker parses them,
+    then chunks them, then embeds them, and on a real document that is tens of
+    seconds. An interface that said "done" at upload would look broken thirty
+    seconds later when a search found nothing — so each stage is named and the one
+    it is actually in is reported.
+
+    `FAILED` is a stage rather than a flag because it is terminal in the same way
+    `INDEXED` is, and because the alternative is worse: a dead-lettered attachment
+    nobody hears about is a document the person believes was filed.
+    """
+
+    # The memory and its artifact exist; no worker has touched it.
+    STORED = auto()
+    # A normalization job is pending or running: bytes to text.
+    PARSING = auto()
+    # Chunks exist and are not all embedded. Findable by keyword, not by vector,
+    # which is not "searchable" in the sense anybody means.
+    CHUNKING = auto()
+    # Retrievable by both halves of hybrid search.
+    INDEXED = auto()
+    # Normalization gave up. `MessageStatus.failure` says why, in the parser's
+    # own words.
+    FAILED = auto()
+
+
 @dataclass(frozen=True, slots=True)
 class MessageStatus:
     """How far a stored message has got, and what it turned out to connect to.
@@ -203,10 +261,38 @@ class MessageStatus:
     # entities in it is finished, not pending, and treating the two the same is
     # how a connection line spins forever on a one-line thought about nothing.
     extracted: bool
+    # A normalization job for this memory is pending or running. Distinguishes
+    # "stored, nothing has looked at it" from "a worker has it", which is the
+    # difference between a queue nobody is draining and one that is busy.
+    normalizing: bool = False
     connections: list[Connection] = field(default_factory=list)
     # Distinct earlier memories reached through any shared entity. Not the sum of
     # the per-entity counts, which double-counts every memory sharing two.
     connected_memories: int = 0
+    # Why normalization gave up, in the parser's own words — "no extractable text
+    # (0 of 3 pages)" for a scan. Null unless `stage` is `FAILED`.
+    #
+    # Surfaced rather than logged, and that is the whole of M10.2's step 4: a
+    # scanned PDF is a document somebody dropped in good faith, the pipeline
+    # correctly refuses it, and the only outcome worse than refusing is refusing
+    # silently. They would think it worked.
+    failure: str | None = None
+
+    @property
+    def stage(self) -> Stage:
+        """The one word for where this is.
+
+        Ordered by what a reader needs first: a failure outranks everything,
+        because a document that will never be indexed must not be drawn as one
+        that is still working on it.
+        """
+        if self.failure is not None:
+            return Stage.FAILED
+        if self.searchable:
+            return Stage.INDEXED
+        if self.chunks > 0:
+            return Stage.CHUNKING
+        return Stage.PARSING if self.normalizing else Stage.STORED
 
     @property
     def searchable(self) -> bool:
@@ -244,6 +330,7 @@ class Chat:
         self._answer = answer
         self._k = k
         self._history_turns = history_turns
+        self._uploads = StoreUpload(session_factory, blob_store)
 
     async def __call__(
         self,
@@ -279,6 +366,145 @@ class Chat:
     # ----------------------------------------------------------------------
     # Writing a turn
     # ----------------------------------------------------------------------
+
+    async def attach(
+        self,
+        uploads: Sequence[Upload],
+        *,
+        note: str | None = None,
+        now: datetime | None = None,
+        session_id: UUID | None = None,
+        new_session: bool = False,
+    ) -> Exchange:
+        """Files dropped into the chat, optionally with a note about them.
+
+        **The note is its own memory, linked to the files' memories by the turn
+        they share.** That is not a technicality: "this is the vendor's proposal,
+        the pricing on page 4 is the part that matters" is frequently worth more
+        than the proposal, it is a thought somebody had rather than a document
+        somebody sent, and storing it inside the file's memory would make it
+        unfindable except by reading the file. It is a statement, so it goes
+        through `classify` like any other — a note that happens to ask a question
+        gets answered too.
+
+        Streaming happens first and outside any transaction, because it can take a
+        minute and a held transaction would block the queue. Then one transaction
+        writes the session, the note's memory, every file's memory, every
+        normalization job, the turn and its attachment rows — together or not at
+        all.
+        """
+        if not uploads:
+            raise EmptyMessage("no files were attached")
+
+        at = now or datetime.now(UTC)
+        source = await self._uploads.source()
+
+        # Staged before the transaction opens. A failure here — unsupported type,
+        # too large, empty — has written nothing but a discarded temp file, which
+        # is why validation lives on this side of the boundary.
+        staged = [(upload, *await self._uploads.stage(upload)) for upload in uploads]
+
+        message = (note or "").strip()
+        intent = classify(message) if message else MessageIntent.STATEMENT
+        note_source = (
+            await self._source()
+            if message and intent is not MessageIntent.QUESTION
+            else None
+        )
+        note_item = (
+            None if note_source is None else _message_item(new_id(), message, at)
+        )
+
+        async with self._sessions.begin() as session:
+            record = await self._resolve_session(
+                session, at, session_id=session_id, new_session=new_session
+            )
+
+            external_key: str | None = None
+            memory_id: UUID | None = None
+            if note_source is not None and note_item is not None:
+                recorded = await ingest_item(
+                    session, self._blobs, note_source, note_item
+                )
+                if recorded is None:
+                    raise UnstorableMessage(
+                        f"note produced no memory; its external key "
+                        f"{note_item.external_key!r} was already current"
+                    )
+                external_key = note_item.external_key
+                memory_id = recorded.memory_id
+
+            stored: list[Stored] = [
+                await self._uploads.record(
+                    session, source, upload, content_hash, byte_size, at
+                )
+                for upload, content_hash, byte_size in staged
+            ]
+
+            ordinal = record.message_count
+            row = models.ChatMessage(
+                id=new_id(),
+                session_id=record.id,
+                role=ChatRole.USER.value,
+                # The note, or a description of what arrived. Never empty: the
+                # content column is `NOT NULL` and a blank turn would render as a
+                # gap in the conversation rather than as an upload.
+                content=message or _describe(stored),
+                ordinal=ordinal,
+                external_key=external_key,
+                intent=intent.value,
+                created_at=at,
+            )
+            session.add(row)
+            # Flushed before the attachments, because they hold a foreign key to
+            # it and SQLAlchemy's unit of work has no dependency between two
+            # objects it was handed separately — it inserts in the order it
+            # chooses, and chose the children first.
+            await session.flush()
+            for attachment in attachment_rows(row.id, stored):
+                session.add(attachment)
+
+            record.message_count = ordinal + 1
+            record.last_activity = at
+            if ordinal == 0:
+                record.title = title_for(row.content)
+
+            user = Message(
+                id=row.id,
+                session_id=record.id,
+                role=ChatRole.USER,
+                content=row.content,
+                ordinal=ordinal,
+                created_at=at,
+                intent=intent,
+                external_key=external_key,
+                memory_id=memory_id,
+                attachments=[
+                    Attachment(
+                        id=new_id(),
+                        ordinal=index,
+                        filename=item.filename,
+                        byte_size=item.byte_size,
+                        media_type=item.media_type,
+                        external_key=item.external_key,
+                        content_hash=item.content_hash.value,
+                        deduplicated=item.deduplicated,
+                        memory_id=item.memory_id,
+                    )
+                    for index, item in enumerate(stored)
+                ],
+            )
+
+        logger.info(
+            "chat.attached",
+            session_id=str(user.session_id),
+            files=len(stored),
+            deduplicated=sum(1 for item in stored if item.deduplicated),
+            note=bool(message),
+        )
+        if intent is MessageIntent.STATEMENT:
+            return Exchange(session_id=user.session_id, user=user)
+        return await self._answer_exchange(user)
 
     async def _append_user(
         self,
@@ -606,6 +832,22 @@ def _message_item(turn_id: UUID, message: str, at: datetime) -> ObservedItem:
     )
 
 
+def _describe(stored: Sequence[Stored]) -> str:
+    """Stand-in content for a message that is files and nothing else.
+
+    A filename list, not "1 attachment". The turn's `content` is what the session
+    title is cut from, what the in-session substring filter searches, and what a
+    reader sees in the conversation — and a title reading "1 attachment" tells them
+    nothing about which conversation this was. The names are the only thing
+    available to say, so they are what is said.
+
+    This text is *not* a memory. The note is a memory when there is one; this is
+    the transcript's label for a turn that had no note, and nothing hashes it.
+    """
+    names = ", ".join(item.filename for item in stored)
+    return names if names else "an attachment"
+
+
 def _citations_of(result: GroundedAnswer) -> list[Citation]:
     return [
         Citation(
@@ -692,10 +934,38 @@ async def messages(
 
     async with session_factory() as session:
         rows = (await session.execute(stmt)).scalars().all()
-        resolved = await _memories_by_key(
-            session, [row.external_key for row in rows if row.external_key]
+        attached = await _attachments_by_message(session, [row.id for row in rows])
+        keys = [row.external_key for row in rows if row.external_key]
+        keys += [
+            item.external_key for group in attached.values() for item in group
+        ]
+        resolved = await _memories_by_key(session, keys)
+    return [
+        _message_of(row, resolved, attached.get(row.id, [])) for row in rows
+    ]
+
+
+async def _attachments_by_message(
+    session: AsyncSession, message_ids: Sequence[UUID]
+) -> dict[UUID, list[models.ChatAttachment]]:
+    """Every attachment for these messages, in order, in one query.
+
+    One query for the page rather than one per message. The `defaultdict` shape is
+    what lets a message with no files render without a branch at the call site.
+    """
+    if not message_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(models.ChatAttachment)
+            .where(models.ChatAttachment.message_id.in_(list(message_ids)))
+            .order_by(models.ChatAttachment.message_id, models.ChatAttachment.ordinal)
         )
-    return [_message_of(row, resolved) for row in rows]
+    ).scalars().all()
+    grouped: dict[UUID, list[models.ChatAttachment]] = {}
+    for row in rows:
+        grouped.setdefault(row.message_id, []).append(row)
+    return grouped
 
 
 async def archive(
@@ -735,7 +1005,13 @@ async def _memories_by_key(
         select(models.Memory.external_key, models.Memory.id)
         .join(models.Source, models.Source.id == models.Memory.source_id)
         .where(
-            models.Source.kind == SourceKind.CHAT.value,
+            # Both kinds a turn can point at: a note is a `chat` memory and an
+            # attachment is an `upload` one. Scoped to these two rather than
+            # unscoped, so a filesystem memory that happens to share an external
+            # key with a message cannot be resolved as one.
+            models.Source.kind.in_(
+                [SourceKind.CHAT.value, SourceKind.UPLOAD.value]
+            ),
             models.Memory.external_key.in_(list(keys)),
             models.Memory.is_current.is_(True),
             models.Memory.deleted_at.is_(None),
@@ -767,6 +1043,7 @@ async def status(
             )
         ).one()
 
+        normalizing, failure = await _normalization_state(session, memory_id)
         connections = await _connections(session, memory)
         reached = await _connected_memories(session, memory, connections)
 
@@ -775,9 +1052,45 @@ async def status(
         chunks=int(counts[0]),
         embedded_chunks=int(counts[1]),
         extracted=memory.entity_extractor_version is not None,
+        normalizing=normalizing,
+        failure=failure,
         connections=connections,
         connected_memories=reached,
     )
+
+
+async def _normalization_state(
+    session: AsyncSession, memory_id: UUID
+) -> tuple[bool, str | None]:
+    """Whether a worker has this memory, and why it gave up if it did.
+
+    Read from the queue rather than inferred from the absence of chunks, because
+    those are different states that look identical from the derived tables: a
+    memory with no chunks may be waiting for a worker, may be being parsed right
+    now, or may have dead-lettered on a PDF with no text layer. Only `jobs` knows
+    which, and only the third one is something a person has to be told.
+
+    The error is reported verbatim from `last_error`. It was written by the parser
+    that refused the file — "no extractable text (0 of 3 pages)" — and that
+    sentence is more useful than anything this layer could paraphrase it into.
+    """
+    row = (
+        await session.execute(
+            select(models.Job.status, models.Job.last_error)
+            .where(
+                models.Job.job_type == JobType.NORMALIZE_MEMORY.value,
+                models.Job.payload["memory_id"].astext == str(memory_id),
+            )
+            .order_by(models.Job.created_at.desc())
+            .limit(1)
+        )
+    ).first()
+    if row is None:
+        return False, None
+    status_value, last_error = row
+    if status_value == JobStatus.FAILED.value:
+        return False, last_error or "normalization failed without recording a reason"
+    return status_value in {JobStatus.PENDING.value, JobStatus.RUNNING.value}, None
 
 
 # The entity a mention resolves to after M3.2. `merged_into_id` is followed one
@@ -888,7 +1201,11 @@ async def _connected_memories(
     )
 
 
-def _message_of(row: models.ChatMessage, resolved: dict[str, UUID]) -> Message:
+def _message_of(
+    row: models.ChatMessage,
+    resolved: dict[str, UUID],
+    attachments: Sequence[models.ChatAttachment] = (),
+) -> Message:
     return Message(
         id=row.id,
         session_id=row.session_id,
@@ -912,5 +1229,19 @@ def _message_of(row: models.ChatMessage, resolved: dict[str, UUID]) -> Message:
                 excerpt=str(citation.get("excerpt", "")),
             )
             for citation in row.citations
+        ],
+        attachments=[
+            Attachment(
+                id=item.id,
+                ordinal=item.ordinal,
+                filename=item.filename,
+                byte_size=item.byte_size,
+                media_type=item.media_type,
+                external_key=item.external_key,
+                content_hash=item.content_hash,
+                deduplicated=item.deduplicated,
+                memory_id=resolved.get(item.external_key),
+            )
+            for item in attachments
         ],
     )

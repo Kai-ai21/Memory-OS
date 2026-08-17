@@ -3030,12 +3030,98 @@ class ChatMessage(Base):
             "(role = 'user') = (intent IS NOT NULL)",
             name="ck_chat_messages_user_has_intent",
         ),
-        # A question stores nothing and anything else does.
+        # A question stores nothing.
+        #
+        # **One direction only, as of M10.2, and the milestone is what weakened
+        # it.** M10.1 asserted the biconditional — a statement stores a memory and
+        # a question does not — which was exactly right while the only thing a turn
+        # could contain was typed text. An attachment-only turn breaks it: the
+        # files each become a memory through `chat_attachments`, and the turn
+        # itself has no note, so `external_key` is legitimately null on a
+        # `statement`.
+        #
+        # The reverse direction could be recovered by counting rows in another
+        # table, which a CHECK cannot do, and a trigger that could is a piece of
+        # business logic in a place nobody reads. So what survives here is the
+        # half that matters: a question must never store anything, because that is
+        # the one whose violation would put a question's own words into the
+        # retrieval set.
         CheckConstraint(
-            "intent IS NULL OR (intent = 'question') = (external_key IS NULL)",
+            "intent <> 'question' OR external_key IS NULL",
             name="ck_chat_messages_question_stores_nothing",
         ),
         # The session's own read, in order.
         Index("ix_chat_messages_session", "session_id", "ordinal"),
         Index("ix_chat_messages_created_at", "created_at"),
+    )
+
+
+class ChatAttachment(Base):
+    """One file dropped into one message.
+
+    **A table rather than a column, because a message may carry several files and
+    each one is its own memory.** M10.0's rule holds unchanged: a memory is one
+    thing somebody can point at, and three files dropped together are three
+    documents that happen to share a moment. Merging them would make the content
+    hash a function of the batch, so re-uploading two of the three would produce a
+    fourth artifact nobody has.
+
+    `external_key` rather than a foreign key to `memories`, for the reason
+    `chat_messages` carries one: `memories` is derived, a replay truncates it and
+    mints every id fresh, and `TRUNCATE memories CASCADE` would take this table
+    with it whatever set it is classified in. The key is what the ingestion log
+    records, so the rebuilt memory carries the same one and the join finds it
+    again.
+
+    `content_hash` is stored here as well, and it is not redundant with the
+    memory's. It is what makes "already in memory, linked" answerable *about this
+    upload* after the fact — the artifact is shared by every upload of the same
+    bytes, so the memory cannot say whether this particular drop was the first one.
+    `deduplicated` records the answer at the moment it was known.
+    """
+
+    __tablename__ = "chat_attachments"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    message_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey(
+            "chat_messages.id", name="fk_chat_attachments_message_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    # Position within the message, so several files keep the order they were
+    # dropped in. Dense from zero, assigned by the use case in one transaction.
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The name the browser sent, kept verbatim for display. Never used as a path:
+    # see `attachments.external_key_for` for what is used as identity.
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    external_key: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    media_type: Mapped[str | None] = mapped_column(Text)
+    # True when these bytes were already in the corpus. Recorded rather than
+    # derived, because it stops being derivable the moment a second upload of the
+    # same file exists — and "already in memory, linked" is more useful than a
+    # silent success precisely because it is surprising.
+    deduplicated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id", "ordinal", name="uq_chat_attachments_message_ordinal"
+        ),
+        CheckConstraint("ordinal >= 0", name="ck_chat_attachments_ordinal_non_negative"),
+        CheckConstraint("byte_size >= 0", name="ck_chat_attachments_byte_size"),
+        CheckConstraint(
+            "length(btrim(filename)) > 0", name="ck_chat_attachments_filename_non_empty"
+        ),
+        CheckConstraint(
+            f"content_hash ~ '{HEX64_PATTERN}'", name="ck_chat_attachments_hash_hex"
+        ),
+        Index("ix_chat_attachments_message", "message_id", "ordinal"),
     )

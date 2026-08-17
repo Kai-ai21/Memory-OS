@@ -25,9 +25,18 @@ MIN_EXTRACTED_CHARS = 50
 PAGE_BREAK = "\f"
 
 
+# Public, because the upload allow-list in `application/attachments.py` is composed
+# from these rather than restating them. One definition of "this parser handles
+# it", read by the parser and by the thing that decides what may be uploaded — two
+# lists would let a file be accepted at the door and rejected by the pipeline, or
+# the reverse, which is worse.
+SUFFIXES = (".pdf",)
+MEDIA_TYPES = frozenset({"application/pdf"})
+
+
 class PdfParser(Parser):
     def can_parse(self, media_type: str | None, external_key: str) -> bool:
-        return external_key.lower().endswith(".pdf") or media_type == "application/pdf"
+        return external_key.lower().endswith(SUFFIXES) or media_type in MEDIA_TYPES
 
     def parse(
         self, data: bytes, *, media_type: str | None, external_key: str

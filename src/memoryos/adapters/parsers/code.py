@@ -8,7 +8,7 @@ from memoryos.application.ports import ParsedDocument, Parser, StructureMarker
 from memoryos.domain.normalization import normalize_text
 from memoryos.domain.values import MemoryKind
 
-_SUFFIXES = (
+SUFFIXES = (
     ".py",
     ".js",
     ".jsx",
@@ -44,7 +44,7 @@ _DEFINITION = re.compile(
 
 class CodeParser(Parser):
     def can_parse(self, media_type: str | None, external_key: str) -> bool:
-        return external_key.lower().endswith(_SUFFIXES)
+        return external_key.lower().endswith(SUFFIXES)
 
     def parse(
         self, data: bytes, *, media_type: str | None, external_key: str
@@ -132,4 +132,4 @@ def _line_offsets(text: str) -> list[int]:
 
 def _language_of(external_key: str) -> str:
     suffix = external_key.rsplit(".", 1)[-1].lower()
-    return suffix if f".{suffix}" in _SUFFIXES else "unknown"
+    return suffix if f".{suffix}" in SUFFIXES else "unknown"
