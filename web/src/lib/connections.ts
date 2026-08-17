@@ -19,10 +19,19 @@ import type { MessageStatus } from "../api/client";
 export const NAMED_ENTITIES = 3;
 
 export function describeConnections(status: MessageStatus): string {
-  // Chunks exist but vectors do not, or neither does. Either way the message is
-  // stored and is not yet retrievable, and saying so is the honest version of
-  // the half-second in which somebody might search for what they just typed.
-  if (!status.searchable) return "indexing…";
+  // A failure outranks everything. A document that will never be indexed must not
+  // be drawn as one still working on it, and the parser's own sentence is what is
+  // shown — it names the file, counts what it found, and says what the file
+  // probably is, which is the difference between running OCR and opening a ticket.
+  if (status.stage === "failed") {
+    return status.failure ?? "this could not be read, and no reason was recorded";
+  }
+  // The honest middle. A PDF is not searchable the moment its upload finishes:
+  // bytes, then text, then chunks, then vectors, and on a real document that is
+  // tens of seconds. Each stage says which one it is in rather than "done".
+  if (status.stage === "stored") return "stored · waiting for a worker";
+  if (status.stage === "parsing") return "reading it…";
+  if (status.stage === "chunking") return "chunking and embedding…";
   // Searchable, and extraction has not run. Distinguished from the state below
   // because "we have not looked" and "we looked and found nothing shared" are
   // different facts about the corpus.

@@ -271,6 +271,21 @@ USER_AUTHORED_TABLES: frozenset[str] = frozenset(
         # Its only foreign key is to `chat_sessions`, which is in this set beside
         # it, so the whole conversation graph is outside the truncation.
         "chat_messages",
+        # M10.2's attachments, and the same argument a third time. What is
+        # irreplaceable is not the file — the bytes are in the blob store and the
+        # memory is rebuilt from the log — but the record that *somebody dropped
+        # it here, with this note, in this conversation*. Nothing in the log says
+        # which turn a memory was attached to, because a turn is not an ingestion
+        # event.
+        #
+        # `deduplicated` is the column that settles it: it records whether these
+        # bytes were already in the corpus at the moment of upload, which is not
+        # re-derivable afterwards at all. Once two uploads of one file exist,
+        # every artifact looks like it was always there.
+        #
+        # Keyed on `external_key` and foreign-keyed only to `chat_messages`, so
+        # the cascade from `memories` cannot reach it.
+        "chat_attachments",
     }
 )
 

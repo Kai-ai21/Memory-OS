@@ -33,6 +33,7 @@ dependencies = [
   # urllib would mean either blocking the event loop or hand-rolling a thread
   # pool around it.
   "httpx>=0.27",
+  "python-multipart>=0.0.32",
 ]
 
 [project.scripts]

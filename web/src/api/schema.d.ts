@@ -99,6 +99,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chat/attach": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attach
+         * @description Files dropped into the chat, optionally with a note about them.
+         *
+         *     **Streamed, never buffered.** Each file is read in `CHUNK_BYTES` pieces and
+         *     handed to `BlobStore.put_stream`, which hashes as it writes — the single-pass
+         *     pattern from M1.4. A 50MB PDF costs 64KiB of this process at a time, and the
+         *     ceiling is enforced mid-stream rather than from `Content-Length`, which a
+         *     client states and can be wrong about.
+         *
+         *     Registered above `/chat/{session_id}` for the reason `/chat/sessions` is:
+         *     FastAPI matches in registration order, so the parameterised route would claim
+         *     `/chat/attach` and answer 422 for a path that was never a UUID.
+         */
+        post: operations["attach_chat_attach_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chat/attach/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Attach Limits
+         * @description The upload limits, served rather than duplicated in the client.
+         *
+         *     The allow-list is composed from the parsers that handle each format, so a
+         *     client that restated it would eventually disagree with the pipeline — and the
+         *     symptom is a file the interface refuses that the system can read, or worse the
+         *     reverse.
+         */
+        get: operations["attach_limits_chat_attach_limits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat/messages/{memory_id}/status": {
         parameters: {
             query?: never;
@@ -1318,6 +1373,40 @@ export interface components {
          */
         AssumptionVerdict: "held" | "failed" | "partially";
         /**
+         * AttachLimitsOut
+         * @description What the door accepts, so the interface can say it before a rejection.
+         */
+        AttachLimitsOut: {
+            /** Max File Bytes */
+            max_file_bytes: number;
+            /** Suffixes */
+            suffixes: string[];
+        };
+        /** AttachmentOut */
+        AttachmentOut: {
+            /** Byte Size */
+            byte_size: number;
+            /** Content Hash */
+            content_hash: string;
+            /** Deduplicated */
+            deduplicated: boolean;
+            /** External Key */
+            external_key: string;
+            /** Filename */
+            filename: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Media Type */
+            media_type: string | null;
+            /** Memory Id */
+            memory_id?: string | null;
+            /** Ordinal */
+            ordinal: number;
+        };
+        /**
          * BandOut
          * @description One `occurred_at_source` band of the corpus.
          */
@@ -1330,6 +1419,20 @@ export interface components {
             latest: string | null;
             /** Provenance */
             provenance: string;
+        };
+        /** Body_attach_chat_attach_post */
+        Body_attach_chat_attach_post: {
+            /** Files */
+            files: string[];
+            /**
+             * New Session
+             * @default false
+             */
+            new_session: boolean;
+            /** Note */
+            note?: string | null;
+            /** Session Id */
+            session_id?: string | null;
         };
         /**
          * BreakdownOut
@@ -2237,6 +2340,8 @@ export interface components {
         MessageOut: {
             /** Answer Model */
             answer_model?: string | null;
+            /** Attachments */
+            attachments?: components["schemas"]["AttachmentOut"][];
             /** Citations */
             citations?: components["schemas"]["memoryos__api__routes__chat__CitationOut"][];
             /** Content */
@@ -2755,9 +2860,17 @@ export interface components {
          *     to the timeline, to `--source` on every command, and to the graph's
          *     `FROM_SOURCE` edge. A kind that no connector implements is a smaller
          *     exception than a memory with no source.
+         *
+         *     `UPLOAD` is the second of those and is deliberately *not* `FILESYSTEM`. A
+         *     dropped file has no path this machine can walk back to: the bytes arrived over
+         *     HTTP, the browser's path is meaningless here, and there is nothing for a sync
+         *     to observe a second time. Filing it under `FILESYSTEM` would put rows in a
+         *     source whose `config.root` cannot explain them, and the first full sync of that
+         *     root would find them absent and tombstone every one — a deletion nobody
+         *     performed, arriving by way of the reconciliation that exists to be correct.
          * @enum {string}
          */
-        SourceKind: "filesystem" | "chat";
+        SourceKind: "filesystem" | "chat" | "upload";
         /** SourceOut */
         SourceOut: {
             /**
@@ -2815,6 +2928,23 @@ export interface components {
              */
             truncated: boolean;
         };
+        /**
+         * Stage
+         * @description How far one memory has got, as a word rather than four booleans.
+         *
+         *     **Honest about the middle, which is the point.** A PDF is not searchable the
+         *     moment its upload finishes: the bytes are stored, then a worker parses them,
+         *     then chunks them, then embeds them, and on a real document that is tens of
+         *     seconds. An interface that said "done" at upload would look broken thirty
+         *     seconds later when a search found nothing — so each stage is named and the one
+         *     it is actually in is reported.
+         *
+         *     `FAILED` is a stage rather than a flag because it is terminal in the same way
+         *     `INDEXED` is, and because the alternative is worse: a dead-lettered attachment
+         *     nobody hears about is a document the person believes was filed.
+         * @enum {string}
+         */
+        Stage: "stored" | "parsing" | "chunking" | "indexed" | "failed";
         /** StatsOut */
         StatsOut: {
             /** Cache Entries */
@@ -2859,6 +2989,8 @@ export interface components {
             embedded_chunks: number;
             /** Extracted */
             extracted: boolean;
+            /** Failure */
+            failure?: string | null;
             /**
              * Memory Id
              * Format: uuid
@@ -2866,6 +2998,7 @@ export interface components {
             memory_id: string;
             /** Searchable */
             searchable: boolean;
+            stage: components["schemas"]["Stage"];
         };
         /** StepOut */
         StepOut: {
@@ -3562,6 +3695,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attach_chat_attach_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_attach_chat_attach_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attach_limits_chat_attach_limits_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachLimitsOut"];
                 };
             };
         };

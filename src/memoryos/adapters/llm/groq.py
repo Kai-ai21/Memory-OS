@@ -29,7 +29,11 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from memoryos.adapters.llm.errors import MissingApiKey, RateLimited
+from memoryos.adapters.llm.errors import (
+    MissingApiKey,
+    ModelNotAvailable,
+    RateLimited,
+)
 from memoryos.application.ports import (
     LanguageModel,
     ModelTurn,
@@ -133,7 +137,7 @@ class GroqLanguageModel(LanguageModel):
                 f"{self._model_name} did not respond within {self._timeout}s"
             ) from exc
         except Exception as exc:
-            raise _classify(exc) from exc
+            raise _classify(exc, model=self._model_name) from exc
 
         text = _text_of(response)
         if not text or not text.strip():
@@ -237,7 +241,7 @@ class GroqLanguageModel(LanguageModel):
                 f"{self._model_name} did not respond within {self._timeout}s"
             ) from exc
         except Exception as exc:
-            raise _classify(exc) from exc
+            raise _classify(exc, model=self._model_name) from exc
 
         message = response.choices[0].message
         calls = tuple(
@@ -302,7 +306,7 @@ def _arguments(raw: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _classify(exc: Exception) -> Exception:
+def _classify(exc: Exception, *, model: str) -> Exception:
     """Transient or permanent, from the SDK's own exception types.
 
     Imported here rather than at module scope to keep the SDK off the import
@@ -322,18 +326,21 @@ def _classify(exc: Exception) -> Exception:
         return TransientError(f"language model unreachable: {exc}")
     if isinstance(exc, groq.InternalServerError):
         return TransientError(f"language model unavailable: {exc}")
+    if isinstance(exc, groq.NotFoundError):
+        # A stale model id, which M10.1 hit in production. Its own class rather
+        # than a `PermanentError` beside the others, because the right response is
+        # to stop rather than to step over it — see `errors.ModelNotAvailable`.
+        return ModelNotAvailable(
+            f"language model rejected the request: {exc}",
+            model_id=model,
+            provider="groq",
+        )
     if isinstance(
         exc,
-        groq.AuthenticationError
-        | groq.PermissionDeniedError
-        | groq.NotFoundError
-        | groq.BadRequestError,
+        groq.AuthenticationError | groq.PermissionDeniedError | groq.BadRequestError,
     ):
-        # A bad key, a revoked key, a model that does not exist, a malformed
-        # request. Every one of these returns the same thing on the next attempt.
-        # `NotFoundError` is the one worth naming: it is what a stale model id
-        # looks like, and it is the failure this milestone was told not to
-        # trust a specification about.
+        # A bad key, a revoked key, a malformed request. Every one of these
+        # returns the same thing on the next attempt.
         return PermanentError(f"language model rejected the request: {exc}")
     if isinstance(exc, groq.APIStatusError):
         # A status the SDK has no dedicated class for. Split on the code rather

@@ -37,7 +37,11 @@ export function SessionRail({
   });
 
   return (
-    <aside className="flex flex-col gap-2" aria-label="Conversations">
+    // `min-w-0` on the column and `truncate` on the title are a pair, and only
+    // the pair works: a grid track sized `16rem` still lets its content set a
+    // larger min-content width, so without this the longest session title
+    // overflows the rail and lands on top of the conversation beside it.
+    <aside className="flex min-w-0 flex-col gap-2" aria-label="Conversations">
       <div className="flex items-baseline justify-between border-b border-rule-strong pb-1">
         <h2 className="meta-label text-muted">conversations</h2>
         <button type="button" className="btn" onClick={onNew}>
@@ -92,7 +96,7 @@ function Row({
 
   return (
     <li
-      className={`flex items-baseline gap-2 border-b border-rule/60 py-1.5 ${
+      className={`flex min-w-0 items-baseline gap-2 border-b border-rule/60 py-1.5 ${
         active ? "bg-sunken" : ""
       }`}
       data-testid="session-row"
@@ -103,7 +107,10 @@ function Row({
         aria-current={active ? "true" : undefined}
         onClick={() => onSelect(session.id)}
       >
-        <span className={`truncate text-sm ${active ? "text-ink" : "text-muted"}`}>
+        <span
+          className={`w-full truncate text-sm ${active ? "text-ink" : "text-muted"}`}
+          title={session.title ?? undefined}
+        >
           {/* Null rather than "Conversation 4". A name that says nothing cannot be
               searched for, and the honest version of "we could not derive one" is
               saying so. */}

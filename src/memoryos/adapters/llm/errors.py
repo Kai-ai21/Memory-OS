@@ -12,7 +12,7 @@ The provider-specific taxonomy stays in the adapters, where it belongs:
 of the two a given SDK failure is remains each adapter's job.
 """
 
-from memoryos.domain.jobs import TransientError
+from memoryos.domain.jobs import PermanentError, TransientError
 
 
 class RateLimited(TransientError):
@@ -48,3 +48,45 @@ class MissingApiKey(RuntimeError):
     key keeps working search, ingestion and replay; only answering fails, and it
     fails naming the variable to set.
     """
+
+
+class ModelNotAvailable(PermanentError):
+    """The configured model does not exist, or this key cannot reach it.
+
+    **A distinct class because of what a caller should do differently**, which is
+    stop. Every other `PermanentError` describes one request going wrong — a
+    malformed prompt, a safety block, a document the model refused — and the right
+    response is the one the batch loops already have: count it, report it, step
+    over it, keep going. A withdrawn model is not about the request at all. It will
+    refuse item twenty-seven exactly as it refused item one, so a loop that steps
+    over it does nothing except print the same sentence once per row.
+
+    M10.1 watched that happen. `llama-3.3-70b-versatile` answered questions during
+    M10.0's session and was returning `404 model_not_found` within the hour, on the
+    same key, with nothing in the repository changed — and `extract-entities`
+    reported twenty-six identical failures and exit 0, which reads like twenty-six
+    difficult documents rather than one setting.
+
+    Carries the model id and the provider, because the message has to name the
+    thing to change. "The model does not exist" is the provider's sentence and it
+    is true; "the model *you configured* does not exist, here is the variable"
+    is the one that ends the problem.
+    """
+
+    def __init__(self, message: str, *, model_id: str, provider: str) -> None:
+        super().__init__(message)
+        self.model_id = model_id
+        self.provider = provider
+
+    @property
+    def guidance(self) -> str:
+        """What to do about it, in one line a terminal can print."""
+        variable = (
+            "MEMOS_GROQ_MODEL" if self.provider == "groq" else "MEMOS_LLM_MODEL"
+        )
+        return (
+            f"{self.provider} has no model {self.model_id!r} for this key. "
+            f"Providers withdraw and rename models without notice, so this is "
+            f"usually a stale setting rather than a fault: list what the account "
+            f"can actually reach and set {variable} to one of those."
+        )

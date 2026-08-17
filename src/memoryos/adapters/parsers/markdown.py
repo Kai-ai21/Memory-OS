@@ -10,8 +10,8 @@ from memoryos.application.ports import ParsedDocument, Parser, StructureMarker
 from memoryos.domain.normalization import normalize_text
 from memoryos.domain.values import MemoryKind
 
-_SUFFIXES = (".md", ".markdown", ".mdown", ".mkd")
-_MEDIA_TYPES = {"text/markdown", "text/x-markdown"}
+SUFFIXES = (".md", ".markdown", ".mdown", ".mkd")
+MEDIA_TYPES = {"text/markdown", "text/x-markdown"}
 
 _ATX_HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$", re.MULTILINE)
 # Fences are tracked so that a `#` inside a code block is not mistaken for a
@@ -21,7 +21,7 @@ _FENCE = re.compile(r"^\s*(?:```|~~~)", re.MULTILINE)
 
 class MarkdownParser(Parser):
     def can_parse(self, media_type: str | None, external_key: str) -> bool:
-        return external_key.lower().endswith(_SUFFIXES) or (media_type or "") in _MEDIA_TYPES
+        return external_key.lower().endswith(SUFFIXES) or (media_type or "") in MEDIA_TYPES
 
     def parse(
         self, data: bytes, *, media_type: str | None, external_key: str

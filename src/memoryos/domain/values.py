@@ -92,10 +92,19 @@ class SourceKind(StrEnum):
     to the timeline, to `--source` on every command, and to the graph's
     `FROM_SOURCE` edge. A kind that no connector implements is a smaller
     exception than a memory with no source.
+
+    `UPLOAD` is the second of those and is deliberately *not* `FILESYSTEM`. A
+    dropped file has no path this machine can walk back to: the bytes arrived over
+    HTTP, the browser's path is meaningless here, and there is nothing for a sync
+    to observe a second time. Filing it under `FILESYSTEM` would put rows in a
+    source whose `config.root` cannot explain them, and the first full sync of that
+    root would find them absent and tombstone every one — a deletion nobody
+    performed, arriving by way of the reconciliation that exists to be correct.
     """
 
     FILESYSTEM = auto()
     CHAT = auto()
+    UPLOAD = auto()
 
 
 class MemoryKind(StrEnum):
