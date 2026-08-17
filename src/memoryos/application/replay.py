@@ -232,6 +232,29 @@ USER_AUTHORED_TABLES: frozenset[str] = frozenset(
         # not a foreign key — see the model — so nothing here is reachable by a
         # cascade from anything a replay truncates.
         "surfacing_log",
+        # M10.0's transcript, and the first table in this set that survives a
+        # replay by *schema* rather than by classification or by snapshot.
+        #
+        # What is irreplaceable here is not the message text — that is in the
+        # memory, and the memory comes back from the log — but how the message
+        # was *read* and, for a question, the answer that was given. A rules
+        # classifier will misread things, so the reading that was acted on has to
+        # stay recoverable; recomputing it under a newer rule set would rewrite
+        # history to agree with the present. And an answer is one model's output
+        # on one occasion, which no rebuild reproduces — the same argument
+        # `reflections` makes, and a replay that regenerated them would replace
+        # sentences somebody had already read with different ones.
+        #
+        # It needs no `EVIDENCE_TABLES` snapshot, and that is the interesting
+        # part. The obvious column here was `memory_id`, which would have put
+        # this table in the cascade's path exactly as `decision_evidence` is —
+        # and the snapshot machinery is built for link rows, so protecting a
+        # transcript with it would mean deleting and reinserting the whole thing
+        # on every rebuild. It carries `external_key` instead: the log records
+        # it, so the memory comes back with the same one and the join finds it
+        # again having preserved nothing. The classification decided the schema
+        # rather than the other way round.
+        "chat_messages",
     }
 )
 

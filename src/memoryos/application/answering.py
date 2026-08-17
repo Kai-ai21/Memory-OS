@@ -10,9 +10,24 @@ result of that check rather than a promise.
 that precedes the instruction, and the instruction here is the part that must
 not be forgotten: the request to refuse competes with every passage that looks
 vaguely relevant.
+
+**M10.0 added conversational context and changed nothing else.** `history` lets a
+follow-up resolve what it refers to — "what about the other one?" is
+unanswerable without the turn that named the first one — and it is deliberately
+the weakest possible addition: the system prompt is untouched, the verification
+is untouched, and with an empty history the prompt this builds is byte-identical
+to the one it built before. The turns go into the question slot, labelled as not
+being evidence, which keeps rule 1 governing them: only the numbered passages may
+be cited, and a conversation is not a passage.
+
+The turns reach the *retrieval query* only for a question that cannot stand
+alone. That distinction was measured rather than designed: folding them in
+unconditionally turned a question whose answer sat at ranks one and two into a
+refusal. See `_retrieval_query`.
 """
 
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import structlog
@@ -28,6 +43,7 @@ from memoryos.application.ports import LanguageModel, SearchFilters, TokenCounte
 from memoryos.application.search import FusionWeights, SearchMemories
 from memoryos.domain.fusion import DEFAULT_RRF_K
 from memoryos.domain.grounding import VerificationResult, verify_citations
+from memoryos.domain.message_intent import refers_back
 
 logger = structlog.get_logger(__name__)
 
@@ -64,6 +80,50 @@ REFUSAL_WITHOUT_CONTEXT = (
     "The retrieved passages do not contain anything about this, so there is "
     "nothing here to answer from."
 )
+
+# Turns of conversation carried into a follow-up.
+#
+# Three, and the number is a ceiling rather than a preference. Two turns back is
+# where a pronoun's referent usually lives; five turns back is a different
+# subject, and the cost of including it is not a longer prompt but a *diluted
+# retrieval query* — the extra terms pull results towards a topic the question
+# has moved on from, and the results still look like results. Drift in retrieval
+# is the failure nobody can see.
+DEFAULT_HISTORY_TURNS = 3
+
+# How much of one turn is carried. A pasted page of notes is a legitimate turn
+# and quoting all of it into the next question would spend the context budget on
+# something that is already in the corpus and retrievable on its merits.
+_TURN_CHARS = 400
+
+CONVERSATION_TEMPLATE = """\
+Earlier in this conversation. This is here so you can work out what the question \
+refers to. It is not evidence, it is not a passage, and nothing in it may be \
+cited:
+
+{turns}
+
+The question: {question}"""
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationTurn:
+    """One earlier turn: what was typed, and what came back if anything.
+
+    `answer` is null for a statement, which is most turns. Both halves are
+    carried because both resolve references — a follow-up may point at something
+    the person said or at something the corpus answered — but only `text` reaches
+    the *retrieval* query. See `_retrieval_query`.
+    """
+
+    text: str
+    answer: str | None = None
+
+    def render(self) -> str:
+        lines = [f"- typed: {_clip(self.text)}"]
+        if self.answer:
+            lines.append(f"  answered: {_clip(self.answer)}")
+        return "\n".join(lines)
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,11 +202,13 @@ class AnswerQuestion:
         k: int = 10,
         filters: SearchFilters | None = None,
         max_tokens: int = 1024,
+        history: Sequence[ConversationTurn] = (),
     ) -> GroundedAnswer:
         started = time.monotonic()
+        recent = tuple(history)[-DEFAULT_HISTORY_TURNS:]
 
         retrieve_started = time.monotonic()
-        result = await self._search(question, k=k, filters=filters)
+        result = await self._search(_retrieval_query(question, recent), k=k, filters=filters)
         retrieve_ms = _ms(retrieve_started)
 
         assemble_started = time.monotonic()
@@ -177,7 +239,9 @@ class AnswerQuestion:
         generate_started = time.monotonic()
         answer = await self._model.complete(
             SYSTEM_PROMPT,
-            USER_TEMPLATE.format(passages=context.render(), question=question),
+            USER_TEMPLATE.format(
+                passages=context.render(), question=_asked(question, recent)
+            ),
             max_tokens=max_tokens,
         )
         generate_ms = _ms(generate_started)
@@ -232,6 +296,50 @@ class AnswerQuestion:
         return await explain_hits(
             self._sessions, hits, weights=self._weights, rrf_k=self._rrf_k
         )
+
+
+def _retrieval_query(question: str, history: Sequence[ConversationTurn]) -> str:
+    """What is actually searched for.
+
+    **The conversation is folded in only when the question cannot stand without
+    it**, and that condition was added after measuring the alternative. Folding
+    three turns into every query cost more than it bought: "why did I use
+    external_key instead of a memory id on the transcript?" asked with unrelated
+    turns attached returned passages the model declined to answer from, and the
+    identical question asked alone put the two thoughts that answer it at ranks
+    one and two. See `domain.message_intent.refers_back`.
+
+    When it does fold in, it folds in what was *typed* and never what was
+    answered. That asymmetry is the same rule that keeps answers out of the
+    corpus, applied one step earlier: an answer is generated prose, and letting
+    generated prose steer the next retrieval is how a conversation converges on
+    whatever the model said first rather than on what the corpus holds. The
+    typed turns are a person's own words and are the only thing that can resolve
+    "the other one".
+    """
+    if not history or not refers_back(question):
+        return question
+    return " ".join([*(_clip(turn.text) for turn in history), question])
+
+
+def _asked(question: str, history: Sequence[ConversationTurn]) -> str:
+    """The question as the model sees it.
+
+    Byte-identical to `question` with no history, which is what keeps every
+    existing test and every existing measurement comparable across this change.
+    """
+    if not history:
+        return question
+    return CONVERSATION_TEMPLATE.format(
+        turns="\n".join(turn.render() for turn in history), question=question
+    )
+
+
+def _clip(text: str) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= _TURN_CHARS:
+        return collapsed
+    return collapsed[:_TURN_CHARS].rstrip() + "…"
 
 
 def _ms(started: float) -> int:

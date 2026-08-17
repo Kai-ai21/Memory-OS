@@ -56,6 +56,7 @@ from memoryos.application import (
     temporal,
     user_model,
 )
+from memoryos.application import chat as chat_use_case
 
 # Imported as a module rather than by name: `compare` and `score` both already
 # mean something else in this file, and three functions fighting over two names
@@ -72,6 +73,7 @@ from memoryos.application.backfill import (
     find_unembedded,
     gather_stats,
 )
+from memoryos.application.chat import Chat, ChatTurn, EmptyMessage, NoLanguageModel
 from memoryos.application.citations import ExplainedHit, explain_hits
 from memoryos.application.doctor import GraphStatus, run_doctor
 from memoryos.application.entity_stats import gather_entity_stats
@@ -630,6 +632,174 @@ async def run_ask(
     finally:
         await container.dispose()
     return 0 if verification.grounded else 1
+
+
+async def run_chat(
+    settings: Settings, *, message: str | None, k: int
+) -> int:
+    """The front door, in a terminal.
+
+    One message and exit, or a loop. The classifier is the same one the web
+    interface uses and the behaviour is the same behaviour: a statement is
+    stored, a question is answered, and a message that does both does both.
+
+    Exits non-zero only for an answer that was not fully grounded, matching
+    `ask`. A refusal exits 0 — it is the correct outcome, and a script that
+    treated "the corpus does not cover this" as a failure would be measuring the
+    guardrail as a fault.
+    """
+    container = Container.build(settings)
+    try:
+        chat = container.chat()
+        if message is not None:
+            return await _chat_turn(container, chat, message)
+        return await _chat_session(container, chat)
+    finally:
+        await container.dispose()
+
+
+async def _chat_session(container: Container, chat: Chat) -> int:
+    """The interactive loop.
+
+    Connection lines arrive on the *next* prompt rather than blocking this one.
+    Entity extraction is a background job and a model call; waiting for it would
+    turn an instant send into a several-second one, and the line is worth having
+    late and worthless if it costs that.
+    """
+    print("type a thought to store it, or ask a question. ctrl-d to leave.\n")
+    pending: list[UUID] = []
+
+    while True:
+        await _report_connections(container, pending)
+        try:
+            typed = await asyncio.to_thread(input, "> ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+
+        if not typed.strip():
+            continue
+        try:
+            turn = await chat(typed)
+        except EmptyMessage:
+            continue
+        except (NoLanguageModel, MissingApiKey) as exc:
+            print(f"  {exc}\n")
+            continue
+        except (TransientError, PermanentError) as exc:
+            print(f"  the language model could not answer: {exc}\n")
+            continue
+
+        _print_turn(turn)
+        if turn.memory_id is not None:
+            pending.append(turn.memory_id)
+
+
+async def _chat_turn(container: Container, chat: Chat, message: str) -> int:
+    try:
+        turn = await chat(message)
+    except EmptyMessage as exc:
+        print(str(exc))
+        return 1
+    except (NoLanguageModel, MissingApiKey) as exc:
+        print(str(exc))
+        return 2
+    except (TransientError, PermanentError) as exc:
+        print(f"the language model could not answer: {exc}")
+        return 1
+
+    note: str | None = None
+    if turn.memory_id is not None:
+        # One look, not a poll. In a one-shot command there is no "later" to
+        # show the line in, and blocking on a worker that may not be running
+        # would hang the command rather than inform it. So the line says which
+        # state it is in — including "not yet", which is the usual one here and
+        # is a fact rather than a placeholder.
+        found = await chat_use_case.status(
+            container.database.session_factory, turn.memory_id
+        )
+        if found is not None:
+            note = format_connections(found)
+    _print_turn(turn, note=note)
+    # Non-zero only for an answer that cited badly, matching `ask`. A refusal is
+    # grounded — it makes no factual claims — so it exits 0, and a script that
+    # treated the guardrail firing as a fault would be measuring it as a fault.
+    return 1 if turn.grounded is False else 0
+
+
+def _print_turn(turn: ChatTurn, *, note: str | None = None) -> None:
+    if turn.stored:
+        print(f"  stored · {turn.intent.value} · memory {turn.memory_id}")
+        if note:
+            print(f"  {note}")
+    if turn.answer is None:
+        if turn.stored:
+            print()
+        return
+
+    print()
+    print(textwrap.fill(turn.answer, width=88, initial_indent="  ", subsequent_indent="  "))
+    print()
+    if turn.citations:
+        for citation in turn.citations:
+            print(f"  [{citation.locator}] {citation.excerpt[:120]}")
+    else:
+        print("  citations: none — the answer cited no passage")
+    if turn.refused:
+        # Said in words. A refusal that looks like a short answer is a refusal
+        # nobody notices, and the whole value of the guardrail is that it is
+        # visible when it fires.
+        print("  the corpus did not cover this, so nothing was answered from it")
+    print()
+
+
+async def _report_connections(container: Container, pending: list[UUID]) -> None:
+    """Print connection lines for messages whose extraction has now finished.
+
+    Mutates `pending`, dropping the ones it has reported. A memory that has been
+    extracted and found nothing is finished too — `extracted` records the
+    attempt, not its output — so it leaves the list rather than being asked
+    about forever.
+    """
+    if not pending:
+        return
+    sessions = container.database.session_factory
+    still_waiting: list[UUID] = []
+    for memory_id in pending:
+        found = await chat_use_case.status(sessions, memory_id)
+        if found is None:
+            continue
+        if not found.extracted:
+            still_waiting.append(memory_id)
+            continue
+        print(f"  {format_connections(found)}")
+    pending[:] = still_waiting
+
+
+def format_connections(status: chat_use_case.MessageStatus) -> str:
+    """The line that is the whole product.
+
+    "Stored. Connects to 3 earlier memories via `postgres`, `indexing`." — and
+    every other state said plainly rather than omitted, because a line that only
+    appears when there is something to say leaves the reader unable to tell
+    "nothing connected" from "the line has not arrived yet". Four states, matched
+    to `web/src/lib/connections.ts`, which draws the same sentence.
+    """
+    if not status.searchable:
+        return "indexing — not searchable yet; run `memoryos worker --drain`"
+    if not status.extracted:
+        return "searchable · still looking for what it connects to"
+    if not status.connections:
+        return "searchable · nothing here appears in an earlier memory yet"
+    named = ", ".join(
+        connection.name
+        for connection in status.connections[:chat_use_case.CONNECTION_ENTITIES]
+    )
+    memories = status.connected_memories
+    return (
+        f"connects to {memories} earlier "
+        f"{'memory' if memories == 1 else 'memories'} via {named}"
+    )
 
 
 async def run_eval_answers(
@@ -5928,6 +6098,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="recompute every vector during the rebuild rather than reusing cached ones",
     )
 
+    chat_parser = commands.add_parser(
+        "chat",
+        help="store a thought or ask a question — the same box does both",
+    )
+    chat_parser.add_argument(
+        "message",
+        nargs="?",
+        help="one message. Omitted, this reads messages until ctrl-d.",
+    )
+    chat_parser.add_argument("-k", "--k", dest="k", type=int, default=10)
+
     ask = commands.add_parser(
         "ask", help="answer a question in prose, grounded in retrieved memories"
     )
@@ -6579,6 +6760,9 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(
             run_eval_recall(settings, queries=args.queries, k=args.k, ef_search_values=values)
         )
+
+    if args.command == "chat":
+        return asyncio.run(run_chat(settings, message=args.message, k=args.k))
 
     if args.command == "ask":
         return asyncio.run(

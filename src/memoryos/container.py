@@ -34,6 +34,7 @@ from memoryos.application.agent.planner import MultiHopPlanner
 from memoryos.application.agent.tools import ToolRegistry
 from memoryos.application.agent.verify import VerifiedAgent
 from memoryos.application.answering import AnswerQuestion
+from memoryos.application.chat import Chat
 from memoryos.application.context_engine import (
     AssembleContext,
     ContextRequest,
@@ -320,6 +321,28 @@ class Container:
             weights=self.weights(),
             token_budget=self.settings.answer_token_budget,
         )
+
+    def chat(self, *, with_answers: bool = True) -> Chat:
+        """The front door, wired to the same ingest path and the same answerer.
+
+        `with_answers=False` builds a chat that can only store. That is not a
+        convenience: constructing the answerer constructs a language model, which
+        raises without an API key, and a deployment with no key must still be
+        able to *type into the box*. Storing needs no model at all, so a chat
+        that refuses to be built without one would have made the front door the
+        first thing in this system to require a paid provider.
+
+        The blob store and the session factory are the ones everything else uses,
+        which is what makes a typed message indistinguishable downstream from a
+        file: same artifact table, same event log, same queue.
+        """
+        answer: AnswerQuestion | None = None
+        if with_answers:
+            try:
+                answer = self.answer()
+            except MissingApiKey as exc:
+                logger.warning("container.chat_answers_unavailable", error=str(exc))
+        return Chat(self.database.session_factory, self.blobs, answer)
 
     def language_model(self) -> LanguageModel:
         return build_language_model(self.settings)

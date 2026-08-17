@@ -18,17 +18,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from memoryos.adapters.db import models
 from memoryos.adapters.db.job_queue import enqueue_in
 from memoryos.adapters.db.repositories import (
-    SqlAlchemyArtifactRepository,
     SqlAlchemyEventLog,
     SqlAlchemyMemoryRepository,
     SqlAlchemySourceRepository,
 )
 from memoryos.application.graph_sync import graph_sync_spec
+from memoryos.application.ingest import ingest_item
 from memoryos.application.ports import BlobStore, Connector, ObservedItem
-from memoryos.application.projection import memory_from_event, recorded_at_of
-from memoryos.domain.entities import IngestionEvent, RawArtifact, Source
+from memoryos.application.projection import recorded_at_of
+from memoryos.domain.entities import IngestionEvent, Source
 from memoryos.domain.ids import new_id
-from memoryos.domain.jobs import JobSpec, JobType
 from memoryos.domain.values import EventType, TimeProvenance
 
 logger = structlog.get_logger(__name__)
@@ -139,88 +138,15 @@ class SyncSource:
 
         Returns None if nothing changed, False if the memory is new, True if it
         is a new version of something already known.
+
+        The recording itself moved to `application/ingest.py` in M10.0, when a
+        second writer appeared that has no walk to drive. What stays here is the
+        transaction boundary, which is a property of the loop rather than of the
+        item: one per item, never one per sync.
         """
         async with self._sessions.begin() as session:
-            memories = SqlAlchemyMemoryRepository(session)
-            artifacts = SqlAlchemyArtifactRepository(session)
-
-            current = await memories.get_current(source.id, item.external_key)
-            artifact_known = await artifacts.exists(item.content_hash)
-
-            if (
-                artifact_known
-                and current is not None
-                and current.content_hash == item.content_hash
-                and current.deleted_at is None
-            ):
-                # Unchanged: no blob write, no artifact, no event, no version,
-                # no job. This is the path that makes re-running a sync free,
-                # which is what makes running it often a reasonable thing to do.
-                return None
-
-            if not artifact_known:
-                # Bytes before the row that promises them: an artifact
-                # referencing a blob nobody stored is a dangling promise. A
-                # connector that hashes by streaming into the blob store has
-                # already done this; one that cannot stream leaves it to us.
-                if not await self._blobs.exists(item.content_hash):
-                    await self._blobs.put(item.content_hash, await item.read_bytes())
-                await artifacts.add(
-                    RawArtifact(
-                        content_hash=item.content_hash,
-                        byte_size=item.byte_size,
-                        media_type=item.media_type,
-                    )
-                )
-
-            event = await SqlAlchemyEventLog(session).append(
-                IngestionEvent(
-                    id=new_id(),
-                    event_type=EventType.ARTIFACT_OBSERVED,
-                    source_id=source.id,
-                    external_key=item.external_key,
-                    occurred_at=item.occurred_at,
-                    occurred_at_source=item.occurred_at_source,
-                    content_hash=item.content_hash,
-                    payload={"byte_size": item.byte_size, "media_type": item.media_type},
-                )
-            )
-
-            memory_id = new_id()
-            await memories.add_version(
-                memory_from_event(event, memory_id=memory_id),
-            )
-
-            # In the same transaction as the memory it refers to. This is the
-            # entire reason the queue is a table rather than a broker: there is
-            # no window in which the memory exists and the job that processes it
-            # does not, or the reverse.
-            await enqueue_in(
-                session,
-                JobSpec(
-                    job_type=JobType.NORMALIZE_MEMORY,
-                    payload={"memory_id": str(memory_id)},
-                    # Per memory version, so a re-run cannot queue the same work
-                    # twice while the first attempt is still in flight.
-                    dedupe_key=str(memory_id),
-                ),
-            )
-            # And the graph, in the same transaction and for the same reason.
-            #
-            # The graph projects *every* current memory, not only the ones
-            # extraction has reached, so a new memory is a projection change on
-            # its own — before anything has parsed it, and whether or not this
-            # deployment has an API key to extract entities with. Without this
-            # enqueue the only thing that ever announced a memory to the graph was
-            # extraction, and `graph verify` would report a permanent divergence
-            # for every file nobody had extracted yet.
-            #
-            # It also handles the superseded version implicitly: the projection
-            # reads `is_current`, so re-projecting this memory's neighbourhood
-            # removes the node for the version this one has just replaced.
-            await enqueue_in(session, graph_sync_spec(memory_ids=[memory_id]))
-
-            return current is not None
+            recorded = await ingest_item(session, self._blobs, source, item)
+        return None if recorded is None else recorded.superseded
 
     async def _detect_deletions(
         self, source: Source, observed_keys: set[str], log: structlog.BoundLogger

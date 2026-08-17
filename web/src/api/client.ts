@@ -198,6 +198,14 @@ export type AgentAnswer = Ok<paths["/agent/ask"]["post"]>;
 export type AgentClaim = AgentAnswer["verification"]["claims"][number];
 export type AgentStep = AgentAnswer["steps"][number];
 
+export type ChatTurn = Ok<paths["/chat"]["get"]>[number];
+export type MessageIntent = ChatTurn["intent"];
+export type ChatCitation = ChatTurn["citations"][number];
+export type MessageStatus = Ok<paths["/chat/{memory_id}/status"]["get"]>;
+export type Connection = MessageStatus["connections"][number];
+export type CreateSourceIn =
+  paths["/sources"]["post"]["requestBody"]["content"]["application/json"];
+
 export interface SearchArgs {
   q: string;
   k?: number;
@@ -431,6 +439,38 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ question, max_hops: maxHops ?? null }),
     }),
+
+  /**
+   * The front door.
+   *
+   * One call for both behaviours, because the server decides which one this is
+   * — a client that classified the message itself would be a second classifier,
+   * and the failure of two classifiers is a message stored by one and answered
+   * by the other.
+   */
+  chat: () => request<ChatTurn[]>("/chat"),
+
+  send: (text: string) =>
+    request<ChatTurn>("/chat", { method: "POST", body: JSON.stringify({ text }) }),
+
+  /**
+   * How far a stored message has got, and what it connects to.
+   *
+   * Polled by the chat page until `extracted`, which is the honest end state:
+   * extraction records the *attempt*, so a message that mentions nothing stops
+   * being pending rather than spinning forever.
+   */
+  messageStatus: (memoryId: string) =>
+    request<MessageStatus>(`/chat/${memoryId}/status`),
+
+  createSource: (body: CreateSourceIn) =>
+    request<Source>("/sources", { method: "POST", body: JSON.stringify(body) }),
+
+  syncSource: (id: string, full = false) =>
+    request<{ job_id: string | null; source_id: string; full: boolean }>(
+      `/sources/${id}/sync${full ? "?full=true" : ""}`,
+      { method: "POST" },
+    ),
 };
 
 export interface TimelineArgs {

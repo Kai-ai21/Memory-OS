@@ -86,7 +86,7 @@
           },
           "citations": {
             "items": {
-              "$ref": "#/components/schemas/CitationOut"
+              "$ref": "#/components/schemas/memoryos__api__routes__search__CitationOut"
             },
             "title": "Citations",
             "type": "array"
@@ -282,7 +282,7 @@
           },
           "citations": {
             "items": {
-              "$ref": "#/components/schemas/CitationOut"
+              "$ref": "#/components/schemas/memoryos__api__routes__search__CitationOut"
             },
             "title": "Citations",
             "type": "array"
@@ -1062,93 +1062,6 @@
         "title": "CalibrationOut",
         "type": "object"
       },
-      "CitationOut": {
-        "properties": {
-          "char_end": {
-            "title": "Char End",
-            "type": "integer"
-          },
-          "char_start": {
-            "title": "Char Start",
-            "type": "integer"
-          },
-          "chunk_ordinal": {
-            "title": "Chunk Ordinal",
-            "type": "integer"
-          },
-          "context": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ExcerptOut"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "definition": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Definition"
-          },
-          "excerpt": {
-            "title": "Excerpt",
-            "type": "string"
-          },
-          "external_key": {
-            "title": "External Key",
-            "type": "string"
-          },
-          "memory_id": {
-            "format": "uuid",
-            "title": "Memory Id",
-            "type": "string"
-          },
-          "occurred_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Occurred At"
-          },
-          "prefix_chars": {
-            "title": "Prefix Chars",
-            "type": "integer"
-          },
-          "source_name": {
-            "title": "Source Name",
-            "type": "string"
-          },
-          "version": {
-            "title": "Version",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "memory_id",
-          "source_name",
-          "external_key",
-          "chunk_ordinal",
-          "char_start",
-          "char_end",
-          "prefix_chars",
-          "excerpt",
-          "version"
-        ],
-        "title": "CitationOut",
-        "type": "object"
-      },
       "ClaimOut": {
         "properties": {
           "cited_step": {
@@ -1226,6 +1139,30 @@
           "support"
         ],
         "title": "ClaimOut",
+        "type": "object"
+      },
+      "ConnectionOut": {
+        "properties": {
+          "entity_id": {
+            "format": "uuid",
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "memories": {
+            "title": "Memories",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_id",
+          "name",
+          "memories"
+        ],
+        "title": "ConnectionOut",
         "type": "object"
       },
       "ContextCategory": {
@@ -2537,7 +2474,7 @@
             "anyOf": [
               {
                 "items": {
-                  "$ref": "#/components/schemas/CitationOut"
+                  "$ref": "#/components/schemas/memoryos__api__routes__search__CitationOut"
                 },
                 "type": "array"
               },
@@ -3105,6 +3042,30 @@
         ],
         "title": "MemoryOut",
         "type": "object"
+      },
+      "MessageIn": {
+        "properties": {
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "MessageIn",
+        "type": "object"
+      },
+      "MessageIntent": {
+        "description": "What to do with a message, which is the only question this answers.",
+        "enum": [
+          "statement",
+          "question",
+          "both"
+        ],
+        "title": "MessageIntent",
+        "type": "string"
       },
       "ModelOut": {
         "properties": {
@@ -4097,8 +4058,10 @@
         "type": "object"
       },
       "SourceKind": {
+        "description": "Where a memory came into the system through.\n\n`CHAT` is not a connector and never will be. Every other kind names\nsomething that is *walked* \u2014 a directory now, a mailbox later \u2014 and a walk is\ndriven by `Connector.observe`. A typed message arrives one at a time, pushed,\nwith nothing to enumerate and no cursor to keep; there is no second sync that\ncould observe it again.\n\nIt is a `SourceKind` anyway, and the reason is `memories.source_id`: every\nmemory in this system belongs to a source, every scope in Phase 4 is a source\nid, and a memory whose origin was recorded some other way would be invisible\nto the timeline, to `--source` on every command, and to the graph's\n`FROM_SOURCE` edge. A kind that no connector implements is a smaller\nexception than a memory with no source.",
         "enum": [
-          "filesystem"
+          "filesystem",
+          "chat"
         ],
         "title": "SourceKind",
         "type": "string"
@@ -4292,6 +4255,52 @@
           "model_window"
         ],
         "title": "StatsOut",
+        "type": "object"
+      },
+      "StatusOut": {
+        "properties": {
+          "chunks": {
+            "title": "Chunks",
+            "type": "integer"
+          },
+          "connected_memories": {
+            "default": 0,
+            "title": "Connected Memories",
+            "type": "integer"
+          },
+          "connections": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionOut"
+            },
+            "title": "Connections",
+            "type": "array"
+          },
+          "embedded_chunks": {
+            "title": "Embedded Chunks",
+            "type": "integer"
+          },
+          "extracted": {
+            "title": "Extracted",
+            "type": "boolean"
+          },
+          "memory_id": {
+            "format": "uuid",
+            "title": "Memory Id",
+            "type": "string"
+          },
+          "searchable": {
+            "title": "Searchable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "memory_id",
+          "chunks",
+          "embedded_chunks",
+          "extracted",
+          "searchable"
+        ],
+        "title": "StatusOut",
         "type": "object"
       },
       "StepOut": {
@@ -4792,6 +4801,109 @@
         "title": "TimingOut",
         "type": "object"
       },
+      "TurnOut": {
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "answer_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Model"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/memoryos__api__routes__chat__CitationOut"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "external_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Key"
+          },
+          "grounded": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grounded"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "intent": {
+            "$ref": "#/components/schemas/MessageIntent"
+          },
+          "memory_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Id"
+          },
+          "refused": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refused"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "intent",
+          "created_at"
+        ],
+        "title": "TurnOut",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -4990,6 +5102,37 @@
           "grounded"
         ],
         "title": "VerificationOut",
+        "type": "object"
+      },
+      "memoryos__api__routes__chat__CitationOut": {
+        "properties": {
+          "excerpt": {
+            "title": "Excerpt",
+            "type": "string"
+          },
+          "locator": {
+            "title": "Locator",
+            "type": "string"
+          },
+          "memory_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Id"
+          }
+        },
+        "required": [
+          "memory_id",
+          "locator",
+          "excerpt"
+        ],
+        "title": "CitationOut",
         "type": "object"
       },
       "memoryos__api__routes__context__ContextOut": {
@@ -5487,6 +5630,93 @@
         ],
         "title": "ChunkOut",
         "type": "object"
+      },
+      "memoryos__api__routes__search__CitationOut": {
+        "properties": {
+          "char_end": {
+            "title": "Char End",
+            "type": "integer"
+          },
+          "char_start": {
+            "title": "Char Start",
+            "type": "integer"
+          },
+          "chunk_ordinal": {
+            "title": "Chunk Ordinal",
+            "type": "integer"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExcerptOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "definition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition"
+          },
+          "excerpt": {
+            "title": "Excerpt",
+            "type": "string"
+          },
+          "external_key": {
+            "title": "External Key",
+            "type": "string"
+          },
+          "memory_id": {
+            "format": "uuid",
+            "title": "Memory Id",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "prefix_chars": {
+            "title": "Prefix Chars",
+            "type": "integer"
+          },
+          "source_name": {
+            "title": "Source Name",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "memory_id",
+          "source_name",
+          "external_key",
+          "chunk_ordinal",
+          "char_start",
+          "char_end",
+          "prefix_chars",
+          "excerpt",
+          "version"
+        ],
+        "title": "CitationOut",
+        "type": "object"
       }
     }
   },
@@ -5674,6 +5904,137 @@
         "summary": "Assumption Stats",
         "tags": [
           "decisions"
+        ]
+      }
+    },
+    "/chat": {
+      "get": {
+        "description": "The conversation, oldest first \u2014 newest at the bottom, as it is drawn.",
+        "operationId": "transcript_chat_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TurnOut"
+                  },
+                  "title": "Response Transcript Chat Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Transcript",
+        "tags": [
+          "chat"
+        ]
+      },
+      "post": {
+        "operationId": "send_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Send",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/chat/{memory_id}/status": {
+      "get": {
+        "description": "How far a stored message has got, and what it turned out to connect to.\n\nKeyed by memory id rather than message id, because what it reports is a\nproperty of the memory: the same question is worth asking about a file, and\nan endpoint that only worked for things that were typed would be the first\nchat-shaped special case in this system.",
+        "operationId": "message_status_chat__memory_id__status_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Message Status",
+        "tags": [
+          "chat"
         ]
       }
     },

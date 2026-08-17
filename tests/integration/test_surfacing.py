@@ -46,7 +46,19 @@ from memoryos.domain.surfacing import (
 
 pytestmark = pytest.mark.integration
 
-NOW = datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
+# Relative to the clock rather than a literal date, and the difference is a bug
+# this suite carried for three days without anybody running into it.
+#
+# `GET /surfacing` filters to `PANEL_WINDOW` — twelve hours — because the panel
+# shows what was volunteered *recently*. A fixture that surfaces at a fixed
+# instant therefore passes until the wall clock walks past that window, and then
+# fails permanently, in a test whose subject is the two verdict endpoints and has
+# nothing to do with time. Anchoring here means the rows the API is asked for are
+# always inside the window it queries.
+#
+# The offset keeps the "already surfaced" suppression tests meaningful: several
+# of them surface at `NOW + a minute`, which must still be in the past.
+NOW = datetime.now(UTC) - timedelta(hours=1)
 
 # The routes an item was found by, and where it ranked in each.
 #

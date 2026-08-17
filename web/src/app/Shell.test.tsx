@@ -20,6 +20,9 @@ import { SHELL_ROUTES, renderWithProviders, stubFetch } from "../test/harness";
 function stubEverything() {
   return stubFetch([
     ...SHELL_ROUTES,
+    // M10.0: `/` is the chat, so every route test loads a transcript on the way
+    // in. Listed before `/sources` for no reason other than reading order.
+    { match: "/chat", body: [] },
     { match: "/sources", body: [] },
     { match: "/memories", body: [] },
     { match: "/decisions", body: [] },
@@ -36,9 +39,24 @@ function stubEverything() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("navigation", () => {
-  it("renders the overview at the root, not search", async () => {
+  it("renders the chat at the root, not the overview and not search", async () => {
+    // The M10.0 swap, pinned. `/` is the front door: the thing you land on is
+    // the box that both keeps what you type and answers what you ask.
     stubEverything();
     renderWithProviders(<App />, { route: "/" });
+
+    expect(
+      await screen.findByRole("heading", { name: /say it here/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Message")).toBeInTheDocument();
+  });
+
+  it("keeps the overview, one route along", async () => {
+    stubEverything();
+    renderWithProviders(<App />, { route: "/" });
+
+    const nav = screen.getByRole("navigation");
+    await userEvent.click(within(nav).getByRole("link", { name: "overview" }));
 
     expect(
       await screen.findByRole("heading", { name: /a corpus that remembers why/i }),
@@ -58,6 +76,7 @@ describe("navigation", () => {
     ["surfacing", /^surfacing$/i],
     ["model", /user model/i],
     ["corpus", /health checks/i],
+    ["sources", /where else this reads from/i],
   ])("navigating to %s renders that route", async (label, heading) => {
     stubEverything();
     renderWithProviders(<App />, { route: "/" });

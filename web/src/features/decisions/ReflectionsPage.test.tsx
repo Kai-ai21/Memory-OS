@@ -182,6 +182,7 @@ describe("where reflections are not", () => {
         .getAllByRole("link")
         .map((link) => link.textContent?.replace(/soon$/, "").trim()),
     ).toEqual([
+      "chat",
       "overview",
       "search",
       "graph",
@@ -191,6 +192,7 @@ describe("where reflections are not", () => {
       "model",
       "judgements",
       "surfacing",
+      "sources",
       "corpus",
     ]);
   });

@@ -61,12 +61,15 @@ function Statement() {
     <header className="flex flex-col gap-4">
       <h1 className="display-page">A corpus that remembers why.</h1>
       <p className="prose-lead">
-        Memory OS ingests what you write and work on — notes, documents, code, commits —
-        and keeps it as a searchable corpus that never forgets its provenance. Every chunk
-        knows which document it came from and where in it; every date carries whether
-        anybody actually stated it or the filesystem guessed; every answer it gives cites
-        the passage it came from, and says so when a sentence is not supported by
-        anything retrieved.
+        Memory OS is something you <Link to="/" className="text-amber underline">talk to</Link>,
+        which can also read your files. A thought you type is kept as a memory and connected
+        to everything already here that talks about the same things; a{" "}
+        <Link to="/sources" className="text-amber underline">directory you point it at</Link>{" "}
+        goes through the identical pipeline, which is still the right move for code. Nothing
+        forgets its provenance: every chunk knows which document it came from and where in
+        it, every date carries whether anybody actually stated it or the filesystem guessed,
+        and every answer cites the passage it came from — and says so when a sentence is
+        not supported by anything retrieved.
       </p>
     </header>
   );
@@ -178,7 +181,12 @@ function Figure({
 }
 
 /**
- * The box, prominent.
+ * The search box, still prominent, and no longer the primary act.
+ *
+ * M10.0 moved that to `/`, where the same box both keeps what you type and
+ * answers what you ask. This one is search and only search — a query you want
+ * ranked results for rather than an answer — which is a narrower and still
+ * frequently correct thing to want.
  *
  * A rule and a line of type rather than a bordered control with a filled
  * button. This is the primary act of the application and the only thing on the
