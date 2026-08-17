@@ -28,7 +28,7 @@ from tests.integration.conftest import add_source, build_harness
 pytestmark = pytest.mark.integration
 
 
-class RefusesToBeCalled:
+class RefusesToBeCalled(LanguageModel):
     """A `LanguageModel` that fails the test if anything asks it to complete.
 
     The trivial-diff path must not reach a model. A stub returning a fixed string
@@ -47,8 +47,16 @@ class RefusesToBeCalled:
         )
 
 
-class Echoes:
-    """A model whose output is fixed by the test, to check what happens to it."""
+class Echoes(LanguageModel):
+    """A model whose output is fixed by the test, to check what happens to it.
+
+    Subclasses the port rather than matching it structurally, and M10.3 is why:
+    `stream` was added with a default implementation, which an explicit subclass
+    inherits and a structural match does not. That is the real cost of defaulting
+    a Protocol method and is worth naming — every duck-typed double had to become
+    a nominal one, and mypy said so at each of them rather than any of this
+    failing at run time.
+    """
 
     def __init__(self, reply: str) -> None:
         self.reply = reply

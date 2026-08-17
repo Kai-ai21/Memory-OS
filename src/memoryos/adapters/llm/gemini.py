@@ -24,7 +24,7 @@ misconfigured deployment fails at startup instead of on a user's question.
 """
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -102,6 +102,47 @@ class GeminiLanguageModel(LanguageModel):
     @property
     def model_id(self) -> str:
         return self._model_name
+
+    async def stream(
+        self, system: str, user: str, *, max_tokens: int = 1024
+    ) -> AsyncIterator[str]:
+        """`generate_content_stream`, yielding text as it arrives.
+
+        The timeout is per chunk rather than around the whole call, for the
+        reason `groq.py` gives: a generation that legitimately runs thirty seconds
+        is not unresponsive, and the thing worth timing out on is silence.
+
+        `chunk.text` is `None` for the parts that carry only metadata — a finish
+        reason, a safety rating — and those are skipped rather than yielded as
+        empty strings that an interface would try to render.
+        """
+        client = self._load()
+        try:
+            stream = await client.aio.models.generate_content_stream(
+                model=self._model_name,
+                contents=user,
+                config={
+                    "system_instruction": system,
+                    "max_output_tokens": max_tokens,
+                    "temperature": 0.0,
+                },
+            )
+            iterator = stream.__aiter__()
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        iterator.__anext__(), timeout=self._timeout
+                    )
+                except StopAsyncIteration:
+                    break
+                if text := getattr(chunk, "text", None):
+                    yield text
+        except TimeoutError as exc:
+            raise TransientError(
+                f"{self._model_name} stopped sending for {self._timeout}s"
+            ) from exc
+        except Exception as exc:
+            raise _classify(exc) from exc
 
     async def complete(
         self, system: str, user: str, *, max_tokens: int = 1024

@@ -339,6 +339,7 @@ class Chat:
         now: datetime | None = None,
         session_id: UUID | None = None,
         new_session: bool = False,
+        defer_answer: bool = False,
     ) -> Exchange:
         message = text.strip()
         if not message:
@@ -359,6 +360,17 @@ class Chat:
                 ordinal=user.ordinal,
                 external_key=user.external_key,
             )
+            return Exchange(session_id=user.session_id, user=user)
+
+        if defer_answer:
+            # **The classifier still decided; only the answering moved.** M10.3's
+            # streaming client sends every message here, because a second
+            # classifier in the browser would eventually disagree with this one —
+            # and then a statement stored by the server would be answered by the
+            # client, or the reverse. What it asks for instead is the *decision*
+            # without the several-second model call attached: the turn is stored,
+            # the intent comes back, and a caller that sees a question opens the
+            # stream. `record_answer` writes the assistant turn when it ends.
             return Exchange(session_id=user.session_id, user=user)
 
         return await self._answer_exchange(user)
@@ -705,6 +717,95 @@ class Chat:
                 citations=citations,
             ),
         )
+
+    async def record_answer(
+        self,
+        session_id: UUID,
+        *,
+        content: str,
+        model_id: str,
+        refused: bool,
+        citations: Sequence[Citation] = (),
+        now: datetime | None = None,
+    ) -> Message:
+        """Append the assistant turn for an answer produced elsewhere.
+
+        The streaming path generates outside this class — the tokens go to the
+        browser as they arrive — so the transcript row is written at the end
+        rather than as part of the exchange. Everything the non-streaming path
+        records is recorded here: the same columns, the same ordinal arithmetic
+        under the same `FOR UPDATE`, and the same refusal verdict.
+
+        **Called after verification, never during.** A row written from the draft
+        would put text into the transcript that the check then withdrew, and the
+        transcript is the thing a conversation is resumed from.
+        """
+        at = now or datetime.now(UTC)
+        async with self._sessions.begin() as session:
+            record = await session.get(
+                models.ChatSession, session_id, with_for_update=True
+            )
+            if record is None:
+                raise NoSuchSession(f"no such session: {session_id}")
+            ordinal = record.message_count
+            row = models.ChatMessage(
+                id=new_id(),
+                session_id=session_id,
+                role=ChatRole.ASSISTANT.value,
+                content=content,
+                ordinal=ordinal,
+                answer_model=model_id,
+                answer_refused=refused,
+                citations=[citation.as_dict() for citation in citations],
+                created_at=at,
+            )
+            session.add(row)
+            record.message_count = ordinal + 1
+            record.last_activity = at
+            row_id = row.id
+
+        logger.info(
+            "chat.answer_recorded",
+            session_id=str(session_id),
+            ordinal=ordinal,
+            refused=refused,
+        )
+        return Message(
+            id=row_id,
+            session_id=session_id,
+            role=ChatRole.ASSISTANT,
+            content=content,
+            ordinal=ordinal,
+            created_at=at,
+            answer_model=model_id,
+            refused=refused,
+            citations=list(citations),
+        )
+
+    async def history_for(
+        self, session_id: UUID | None
+    ) -> list[ConversationTurn]:
+        """The conversational context for a question asked outside `__call__`.
+
+        M10.3's streaming endpoint answers without writing a turn first — the
+        answer arrives token by token and the transcript row is written by the
+        caller afterwards, if at all — so it needs the same three turns the
+        non-streaming path assembles, from the same place, without an ordinal to
+        cut at.
+
+        `None` is a question with no conversation behind it, which is a legitimate
+        state rather than an error: a fresh tab has no session until something is
+        typed into one.
+        """
+        if session_id is None:
+            return []
+        # `before` is exclusive and every existing ordinal is below the count, so
+        # the session's own length is "everything in it".
+        async with self._sessions() as session:
+            record = await session.get(models.ChatSession, session_id)
+        if record is None:
+            return []
+        return await self._history(session_id, before=record.message_count)
 
     async def _history(
         self, session_id: UUID, *, before: int

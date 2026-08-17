@@ -19,11 +19,14 @@ import socket
 import traceback
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 import structlog
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.application.jobs.registry import Handler, HandlerRegistry, JobContext
+from memoryos.application.live import memory_ready, notify_sql
 from memoryos.application.ports import JobQueue
 from memoryos.domain.backoff import compute_backoff
 from memoryos.domain.ids import new_id
@@ -243,6 +246,7 @@ class Worker:
             await handler_task
             if await self._queue.complete(job.id, self._worker_id):
                 log.info("job.succeeded")
+                await self._announce(job)
             else:
                 log.warning("job.lease_lost")
         except PermanentError as exc:
@@ -293,6 +297,36 @@ class Worker:
             log.info("job.retrying", delay_seconds=round(delay, 3), run_after=str(run_after))
         else:
             log.warning("job.lease_lost")
+
+    async def _announce(self, job: Job) -> None:
+        """Tell any open page that this memory moved.
+
+        `NOTIFY` through Postgres, which is the boundary the worker and the API
+        already share — the queue is a table for the same reason. Nothing is
+        computed here: the payload is the memory id and what finished, and the API
+        re-reads the status when it arrives, so what reaches a browser is the
+        state at delivery rather than at publication.
+
+        **A failure to announce is logged and swallowed**, and that is deliberate.
+        The job succeeded; its work is committed. Letting a notification failure
+        turn a completed job into a retried one would redo real work — an
+        extraction costs money — to fix a stream that reconnects on its own and
+        whose client polls as a fallback anyway.
+        """
+        memory_id = job.payload.get("memory_id")
+        if not memory_id:
+            return
+        channel, payload = notify_sql(
+            "memory_ready", memory_ready(UUID(str(memory_id)), str(job.job_type))
+        )
+        try:
+            async with self._sessions.begin() as session:
+                await session.execute(
+                    text("SELECT pg_notify(:channel, :payload)"),
+                    {"channel": channel, "payload": payload},
+                )
+        except Exception:
+            logger.warning("worker.announce_failed", job_id=str(job.id), exc_info=True)
 
     async def _dead_letter(
         self,

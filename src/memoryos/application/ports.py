@@ -701,6 +701,38 @@ class LanguageModel(Protocol):
         """
         ...
 
+    def stream(
+        self, system: str, user: str, *, max_tokens: int = 1024
+    ) -> AsyncIterator[str]:
+        """The same completion, in pieces, as they arrive.
+
+        **A default implementation rather than a required method**, and the
+        default is the whole reason this is safe to add. A provider that cannot
+        stream yields one chunk containing the finished answer, so every caller
+        can be written against the streaming shape and nothing has to branch on
+        whether the configured provider supports it. The difference between the
+        two is *when* text appears, never whether it does.
+
+        The pieces are whatever the provider sends and carry no meaning
+        individually — a chunk may be half a word, and a citation marker may
+        arrive split across two. Anything that parses the answer has to
+        accumulate first, which is why M2.6's verification runs on the joined
+        text after the stream ends rather than per chunk.
+
+        Same failure taxonomy as `complete`, raised from inside the iterator: a
+        stream that dies partway is a `TransientError` and the caller has already
+        shown the text that arrived, which is why a partial answer has to be
+        *marked* rather than left looking finished.
+        """
+        return _one_chunk(self, system, user, max_tokens=max_tokens)
+
+
+async def _one_chunk(
+    model: LanguageModel, system: str, user: str, *, max_tokens: int
+) -> AsyncIterator[str]:
+    """`complete`, wearing a stream's shape. The non-streaming fallback."""
+    yield await model.complete(system, user, max_tokens=max_tokens)
+
 
 class ToolCallingModel(Protocol):
     """A model that can be given tools and asked to choose one.

@@ -99,6 +99,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chat/ask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask
+         * @description A grounded answer, streamed as it becomes true.
+         *
+         *     **Not `EventSource`-compatible on purpose.** `EventSource` only issues GET,
+         *     and a question with three turns of conversation behind it does not belong in a
+         *     query string — it is long, it is the user's own words, and it would land in
+         *     every access log between here and the browser. The client reads the body with
+         *     `fetch` and a stream reader instead, which costs it a reconnect loop it has to
+         *     write and buys a request that says what it is.
+         *
+         *     Everything after the first byte is an event, including failure: by the time a
+         *     model call fails the response is a 200 with half a body in flight, so an
+         *     exception here would truncate the stream and leave the client unable to tell a
+         *     finished answer from a broken pipe. `error` is an event.
+         */
+        post: operations["ask_chat_ask_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat/attach": {
         parameters: {
             query?: never;
@@ -146,6 +178,34 @@ export interface paths {
          *     reverse.
          */
         get: operations["attach_limits_chat_attach_limits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chat/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Events
+         * @description Everything a background job finishes, pushed to any open page.
+         *
+         *     This one *is* `EventSource`-shaped: a GET with no body, so the browser's own
+         *     implementation reconnects and replays `Last-Event-ID` without a line of client
+         *     code. The id comes from the header on a reconnect and from the query string
+         *     only as a fallback for clients that cannot set headers.
+         *
+         *     The bus lives on the app rather than the container, because it is one per
+         *     *process* and has nothing to do with the object graph a request assembles.
+         */
+        get: operations["events_chat_events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1228,6 +1288,25 @@ export interface components {
             total_ms: number;
             /** Verify Ms */
             verify_ms: number;
+        };
+        /**
+         * AskIn
+         * @description A question to stream the answer to.
+         *
+         *     No `store` flag and no intent override: whether this is a question is the
+         *     classifier's decision, made once, server-side, exactly as it is for `/chat`.
+         *     A second way to decide would be a second classifier.
+         */
+        AskIn: {
+            /**
+             * K
+             * @default 10
+             */
+            k: number;
+            /** Question */
+            question: string;
+            /** Session Id */
+            session_id?: string | null;
         };
         /** AssessmentOut */
         AssessmentOut: {
@@ -3699,6 +3778,39 @@ export interface operations {
             };
         };
     };
+    ask_chat_ask_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     attach_chat_attach_post: {
         parameters: {
             query?: never;
@@ -3748,6 +3860,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AttachLimitsOut"];
+                };
+            };
+        };
+    };
+    events_chat_events_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Last-Event-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
