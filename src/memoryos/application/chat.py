@@ -73,7 +73,12 @@ from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobStatus, JobType
 from memoryos.domain.message_intent import ChatRole, MessageIntent, classify
 from memoryos.domain.sessions import starts_new_session, title_for
-from memoryos.domain.values import ContentHash, SourceKind, TimeProvenance
+from memoryos.domain.values import (
+    ContentHash,
+    EntityType,
+    SourceKind,
+    TimeProvenance,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -161,6 +166,25 @@ class Message:
     memory_id: UUID | None = None
     answer_model: str | None = None
     refused: bool | None = None
+    # M10.4's two halves of a correction, and both are on the message rather than
+    # one being inferred by the client.
+    #
+    # `corrects` points back at the turn this one replaces. `superseded_by` points
+    # forward, and is *derived* rather than stored — a column would be a second
+    # copy of the same edge, and the two would eventually disagree. It is what lets
+    # the original render as superseded without the interface having to scan the
+    # rest of the conversation for a message that mentions it.
+    #
+    # **Both messages stay in the transcript and both stay legible.** What somebody
+    # believed before they corrected it is exactly the data Phase 5 reasons over,
+    # so the original is dimmed rather than hidden and the corrected text is not a
+    # replacement for it in the record — only in the corpus.
+    corrects: UUID | None = None
+    superseded_by: UUID | None = None
+    # Tags on this message's memory. On the message because that is where they are
+    # read, and keyed to the memory because that is what they are attached to: the
+    # same tags appear on the memory detail view and in the search filter.
+    tags: list[str] = field(default_factory=list)
     # Whether every factual sentence carried a citation and none was invented.
     #
     # Live only — null on a message read back from the transcript, and
@@ -309,6 +333,18 @@ class NoSuchSession(LookupError):
     """A session id nothing has."""
 
 
+class NoSuchMessage(LookupError):
+    """A message id nothing has."""
+
+
+class NotCorrectable(ValueError):
+    """A message a correction would not mean anything for.
+
+    Its own type so a transport answers it as a conflict rather than a missing
+    row: the message exists, and the operation does not apply to it.
+    """
+
+
 class Chat:
     """Classify, then store or answer, inside a session."""
 
@@ -453,7 +489,7 @@ class Chat:
                 for upload, content_hash, byte_size in staged
             ]
 
-            ordinal = record.message_count
+            ordinal = await self._next_ordinal(session, record)
             row = models.ChatMessage(
                 id=new_id(),
                 session_id=record.id,
@@ -476,7 +512,7 @@ class Chat:
             for attachment in attachment_rows(row.id, stored):
                 session.add(attachment)
 
-            record.message_count = ordinal + 1
+            record.message_count += 1
             record.last_activity = at
             if ordinal == 0:
                 record.title = title_for(row.content)
@@ -565,7 +601,7 @@ class Chat:
                 external_key = item.external_key
                 memory_id = recorded.memory_id
 
-            ordinal = record.message_count
+            ordinal = await self._next_ordinal(session, record)
             row = models.ChatMessage(
                 id=new_id(),
                 session_id=record.id,
@@ -578,7 +614,7 @@ class Chat:
             )
             session.add(row)
 
-            record.message_count = ordinal + 1
+            record.message_count += 1
             record.last_activity = at
             if ordinal == 0:
                 # From the first user message only. A title that tracked the
@@ -600,6 +636,167 @@ class Chat:
                 # the model docstring gives.
                 memory_id=memory_id,
             )
+
+    async def correct(
+        self,
+        message_id: UUID,
+        text: str,
+        *,
+        now: datetime | None = None,
+    ) -> Exchange:
+        """Replace what a stored message says, keeping what it used to say.
+
+        **The corpus side is a version bump, not a second memory.** The corrected
+        text is re-ingested under the *same external key*, so `ingest_item` finds a
+        current version, supersedes it and inserts version 2 — one item with a
+        history, which is what `/memories/{id}/evolution` has been able to draw
+        since M4.2 and what the timeline reads. Two memories saying different
+        things about the same thought would both be retrievable, and retrieval
+        would then have to choose between them on similarity, which is precisely
+        the failure `is_current` exists to prevent.
+
+        Everything downstream follows through the ordinary pipeline: a normalization
+        job, then chunks, then embeddings, then extraction. **M1.4's chunk adoption
+        applies unchanged**, and it is what makes a trivial correction nearly free —
+        `normalize` matches the new normalized text against the previous version's
+        `normalized_hash` and moves unchanged chunks across rather than re-embedding
+        them. Fixing a typo in the last line of a long note re-embeds the last
+        chunk.
+
+        **The transcript side is a new row, because M10.0 made these immutable.**
+        The original stays exactly as it was, marked superseded by the link the new
+        row carries; both are visible, and what somebody believed before they
+        corrected it stays readable. Appended at the end rather than inserted beside
+        the original, which is also the truth: the correction happened later, and a
+        conversation is ordered by when things were said.
+
+        The intent is inherited rather than re-classified, and that is deliberate. A
+        correction corrects the words, not the reading — re-classifying could turn a
+        stored statement into a question, which stores nothing, and the corrected
+        thought would be answered and thrown away. Correcting a question is refused
+        for the mirror-image reason: a question stored nothing, so there is nothing
+        to correct.
+        """
+        corrected = text.strip()
+        if not corrected:
+            raise EmptyMessage("a correction must contain something other than whitespace")
+
+        at = now or datetime.now(UTC)
+        async with self._sessions() as session:
+            original = await session.get(models.ChatMessage, message_id)
+            if original is None:
+                raise NoSuchMessage(f"no such message: {message_id}")
+            if original.role != ChatRole.USER.value:
+                raise NotCorrectable(
+                    "an answer cannot be corrected. It is derived from the corpus, "
+                    "so asking again is the operation — and a correction would put "
+                    "words into the transcript that no model produced."
+                )
+            if original.external_key is None:
+                raise NotCorrectable(
+                    "this message stored nothing, so there is no memory to correct. "
+                    "A question is answered rather than stored; ask it again."
+                )
+            if original.content.strip() == corrected:
+                raise NotCorrectable(
+                    "the correction is identical to what is already stored, so "
+                    "there is nothing to change and a version recording no change "
+                    "would be a version nobody could explain."
+                )
+            external_key = original.external_key
+            session_of = original.session_id
+            intent = MessageIntent(original.intent) if original.intent else None
+
+        source = await self._source()
+        # The same key, deliberately. `_message_item` mints a fresh one for a new
+        # thought; a correction is the same thought said better, and the key is the
+        # item's identity.
+        item = _corrected_item(external_key, corrected, at)
+
+        async with self._sessions.begin() as session:
+            record = await session.get(
+                models.ChatSession, session_of, with_for_update=True
+            )
+            if record is None:
+                raise NoSuchSession(f"no such session: {session_of}")
+
+            recorded = await ingest_item(session, self._blobs, source, item)
+            if recorded is None:
+                # Reachable, and worth naming rather than reporting a success: the
+                # bytes are identical to the current version, which means the text
+                # differs only in leading or trailing whitespace that `strip` has
+                # already removed from one side of the comparison.
+                raise NotCorrectable(
+                    "the corrected text hashes to what is already stored, so no "
+                    "version was created"
+                )
+
+            ordinal = await self._next_ordinal(session, record)
+            row = models.ChatMessage(
+                id=new_id(),
+                session_id=session_of,
+                role=ChatRole.USER.value,
+                content=corrected,
+                ordinal=ordinal,
+                external_key=external_key,
+                intent=None if intent is None else intent.value,
+                corrects_message_id=message_id,
+                created_at=at,
+            )
+            session.add(row)
+            record.message_count += 1
+            record.last_activity = at
+            # The title is *not* re-cut, even when the corrected turn is the first
+            # one. A conversation renamed out from under somebody halfway through
+            # reading the list is the failure M10.1 named, and a correction is a
+            # smaller reason to do it than a new message would be.
+            user = Message(
+                id=row.id,
+                session_id=session_of,
+                role=ChatRole.USER,
+                content=corrected,
+                ordinal=ordinal,
+                created_at=at,
+                intent=intent,
+                external_key=external_key,
+                memory_id=recorded.memory_id,
+                corrects=message_id,
+            )
+
+        logger.info(
+            "chat.corrected",
+            session_id=str(session_of),
+            corrects=str(message_id),
+            external_key=external_key,
+        )
+        return Exchange(session_id=session_of, user=user)
+
+    async def _next_ordinal(
+        self, session: AsyncSession, record: models.ChatSession
+    ) -> int:
+        """Where the next turn goes in this conversation.
+
+        **Read from the ordinals, not from `message_count`, and M10.4 is why.**
+        Those were one number until a turn could be permanently deleted. Once it
+        can, they disagree in both directions: decrementing the count would hand
+        the next message an ordinal that already exists and fail on
+        `uq_chat_messages_session_ordinal`, and not decrementing it would make the
+        rail's "12 messages" a count of rows that are no longer there.
+
+        So the count stays a count and this is the sequence. It is exactly as
+        race-free as reading the counter was, for the same reason: every caller
+        holds the session row `FOR UPDATE`, and it is the lock that serializes two
+        sends rather than the arithmetic. One aggregate on an index that already
+        exists, under a lock already held.
+        """
+        highest = (
+            await session.execute(
+                select(func.max(models.ChatMessage.ordinal)).where(
+                    models.ChatMessage.session_id == record.id
+                )
+            )
+        ).scalar_one_or_none()
+        return 0 if highest is None else int(highest) + 1
 
     async def _resolve_session(
         self,
@@ -668,7 +865,7 @@ class Chat:
             )
             if record is None:
                 raise NoSuchSession(f"no such session: {user.session_id}")
-            ordinal = record.message_count
+            ordinal = await self._next_ordinal(session, record)
             row = models.ChatMessage(
                 id=new_id(),
                 session_id=user.session_id,
@@ -690,7 +887,7 @@ class Chat:
                 created_at=user.created_at,
             )
             session.add(row)
-            record.message_count = ordinal + 1
+            record.message_count += 1
             record.last_activity = user.created_at
             row_id = row.id
 
@@ -747,7 +944,7 @@ class Chat:
             )
             if record is None:
                 raise NoSuchSession(f"no such session: {session_id}")
-            ordinal = record.message_count
+            ordinal = await self._next_ordinal(session, record)
             row = models.ChatMessage(
                 id=new_id(),
                 session_id=session_id,
@@ -760,7 +957,7 @@ class Chat:
                 created_at=at,
             )
             session.add(row)
-            record.message_count = ordinal + 1
+            record.message_count += 1
             record.last_activity = at
             row_id = row.id
 
@@ -933,6 +1130,39 @@ def _message_item(turn_id: UUID, message: str, at: datetime) -> ObservedItem:
     )
 
 
+def _corrected_item(external_key: str, message: str, at: datetime) -> ObservedItem:
+    """The corrected text, described as an observation of the *same* item.
+
+    `_message_item` mints a fresh key because a new message is a new thought. This
+    keeps the key it was given, and that one difference is the whole of the
+    correction mechanism: `ingest_item` looks the key up, finds a current version,
+    and `add_version` supersedes it. Nothing else in the pipeline knows a correction
+    happened, which is the property that makes chunk adoption, re-embedding,
+    re-extraction and the evolution view all work without a special case.
+
+    `occurred_at` is the correction's clock rather than the original's. The
+    provenance column reads `DECLARED` either way, and the honest reading of a
+    corrected note is that this is when the person said this — the original version
+    keeps its own timestamp, which is what makes the version history a chronology
+    rather than two rows with one date.
+    """
+    data = message.encode("utf-8")
+
+    async def read() -> bytes:
+        return data
+
+    return ObservedItem(
+        external_key=external_key,
+        content_hash=ContentHash.of(data),
+        byte_size=len(data),
+        media_type=MESSAGE_MEDIA_TYPE,
+        occurred_at=at,
+        occurred_at_source=TimeProvenance.DECLARED,
+        read_bytes=read,
+        fingerprint=None,
+    )
+
+
 def _describe(stored: Sequence[Stored]) -> str:
     """Stand-in content for a message that is files and nothing else.
 
@@ -1014,6 +1244,7 @@ async def messages(
     session_id: UUID,
     *,
     query: str | None = None,
+    tags: Sequence[str] | None = None,
 ) -> list[Message]:
     """One session's turns in order, optionally filtered.
 
@@ -1024,6 +1255,13 @@ async def messages(
     through the embedder would return semantic neighbours from a conversation the
     reader can see all of. Corpus search is a different question with its own
     page, and blurring them would leave neither answerable.
+
+    `tags` filters to turns whose memory carries all of them, which is M10.4's
+    "filter chat by tag". Conjunctive for the reason `tags.items_with` is: a second
+    tag is somebody narrowing. It is applied against the *turn's* key, so an
+    assistant answer never matches — an answer stores nothing and therefore carries
+    no tags, and including it because the question was tagged would put untagged
+    generated text into a tag's results.
     """
     stmt = (
         select(models.ChatMessage)
@@ -1032,6 +1270,18 @@ async def messages(
     )
     if query and query.strip():
         stmt = stmt.where(models.ChatMessage.content.ilike(f"%{query.strip()}%"))
+    wanted = [tag for tag in (tags or []) if tag]
+    if wanted:
+        stmt = stmt.where(
+            models.ChatMessage.external_key.in_(
+                select(models.MemoryTag.external_key)
+                .where(models.MemoryTag.tag.in_(wanted))
+                .group_by(models.MemoryTag.external_key)
+                .having(
+                    func.count(func.distinct(models.MemoryTag.tag)) == len(set(wanted))
+                )
+            )
+        )
 
     async with session_factory() as session:
         rows = (await session.execute(stmt)).scalars().all()
@@ -1041,9 +1291,69 @@ async def messages(
             item.external_key for group in attached.values() for item in group
         ]
         resolved = await _memories_by_key(session, keys)
+        superseded = await _superseded_by(session, [row.id for row in rows])
+        tagged = await _tags_by_key(session, keys)
     return [
-        _message_of(row, resolved, attached.get(row.id, [])) for row in rows
+        _message_of(
+            row,
+            resolved,
+            attached.get(row.id, []),
+            superseded_by=superseded.get(row.id),
+            tags=tagged.get(row.external_key or "", []),
+        )
+        for row in rows
     ]
+
+
+async def _superseded_by(
+    session: AsyncSession, message_ids: Sequence[UUID]
+) -> dict[UUID, UUID]:
+    """Which of these turns a later correction replaced, and by which turn.
+
+    Derived rather than stored. A `superseded_by` column would be a second copy of
+    `corrects_message_id` pointing the other way, and two copies of one edge is two
+    things to keep true — the failure being avoided is a transcript that renders a
+    message as current while another row claims to correct it.
+
+    One query for the page. The partial index on `corrects_message_id` is what makes
+    it cheap, and the column is null on nearly every row.
+    """
+    if not message_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(
+                models.ChatMessage.corrects_message_id, models.ChatMessage.id
+            ).where(models.ChatMessage.corrects_message_id.in_(list(message_ids)))
+        )
+    ).all()
+    return {row[0]: row[1] for row in rows}
+
+
+async def _tags_by_key(
+    session: AsyncSession, keys: Sequence[str]
+) -> dict[str, list[str]]:
+    """Tag labels per external key, for the whole page in one query.
+
+    Keyed on `external_key` alone rather than on `(source_id, external_key)`, and
+    that narrowing is safe here specifically: these keys came from `chat_messages`
+    and `chat_attachments`, whose memories live in the `chat` and `upload` sources,
+    and both key formats carry a UUID minted per message or per upload. A collision
+    would need two sources to independently generate the same v7 id.
+    """
+    if not keys:
+        return {}
+    rows = (
+        await session.execute(
+            select(models.MemoryTag.external_key, models.MemoryTag.label)
+            .where(models.MemoryTag.external_key.in_(list(keys)))
+            .order_by(models.MemoryTag.tag)
+        )
+    ).all()
+    grouped: dict[str, list[str]] = {}
+    for key, label in rows:
+        grouped.setdefault(str(key), []).append(str(label))
+    return grouped
 
 
 async def _attachments_by_message(
@@ -1214,7 +1524,7 @@ async def _connections(
     entity happened to start with an `a`.
     """
     winner = _resolved()
-    mine = (
+    mentioned = (
         select(
             func.coalesce(winner.c.id, models.Entity.id).label("entity_id"),
             func.coalesce(winner.c.name, models.Entity.name).label("name"),
@@ -1223,9 +1533,31 @@ async def _connections(
         .join(models.Entity, models.Entity.id == models.EntityMention.entity_id)
         .outerjoin(winner, winner.c.id == models.Entity.merged_into_id)
         .where(models.EntityMention.memory_id == memory.id)
-        .distinct()
-        .subquery()
     )
+    # **Tags count as this memory's entities, and that union is where a tag earns
+    # its design.** A tag resolves to the same `CONCEPT` row an extracted mention
+    # would, so tagging a note `#postgres` connects it to the eleven documents that
+    # mention Postgres — which is the whole reason tags are not a separate
+    # vocabulary. Joined by canonical name because that is what `memory_tags`
+    # stores, and merges are followed for the same reason they are above.
+    tagged = (
+        select(
+            func.coalesce(winner.c.id, models.Entity.id).label("entity_id"),
+            func.coalesce(winner.c.name, models.Entity.name).label("name"),
+        )
+        .select_from(models.MemoryTag)
+        .join(
+            models.Entity,
+            (models.Entity.canonical_name == models.MemoryTag.tag)
+            & (models.Entity.type == EntityType.CONCEPT.value),
+        )
+        .outerjoin(winner, winner.c.id == models.Entity.merged_into_id)
+        .where(
+            models.MemoryTag.source_id == memory.source_id,
+            models.MemoryTag.external_key == memory.external_key,
+        )
+    )
+    mine = mentioned.union(tagged).subquery()
 
     theirs = (
         select(
@@ -1306,6 +1638,9 @@ def _message_of(
     row: models.ChatMessage,
     resolved: dict[str, UUID],
     attachments: Sequence[models.ChatAttachment] = (),
+    *,
+    superseded_by: UUID | None = None,
+    tags: Sequence[str] = (),
 ) -> Message:
     return Message(
         id=row.id,
@@ -1319,6 +1654,9 @@ def _message_of(
         memory_id=None if row.external_key is None else resolved.get(row.external_key),
         answer_model=row.answer_model,
         refused=row.answer_refused,
+        corrects=row.corrects_message_id,
+        superseded_by=superseded_by,
+        tags=list(tags),
         citations=[
             Citation(
                 memory_id=(

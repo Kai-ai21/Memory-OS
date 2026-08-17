@@ -45,7 +45,9 @@ import { fileSize, timestamp } from "../../lib/format";
 import { AttachmentList } from "./Attachments";
 import { SessionRail } from "./SessionRail";
 import { StreamingAnswer } from "./StreamingAnswer";
+import { MemoryActions } from "./MemoryActions";
 import { useAnswerStream } from "./useAnswerStream";
+import { useCommands } from "./useCommands";
 import { useLiveEvents } from "./useLiveEvents";
 
 /**
@@ -106,10 +108,27 @@ export function ChatPage() {
   const active = starting ? null : (selected ?? sessions.data?.[0]?.id ?? null);
   const filter = active && selected && !starting ? (carried ?? "") : "";
 
+  // Tags live in the URL beside `q`, for the reason every other piece of view
+  // state here does: a filtered conversation is a link worth sending. Repeated
+  // rather than comma-joined, matching the API and how `source` is already sent.
+  const tagFilter = params.getAll("tag");
+
   const messages = useQuery({
-    queryKey: ["chat-messages", active, filter],
-    queryFn: () => api.chatMessages(active!, filter || undefined),
+    queryKey: ["chat-messages", active, filter, tagFilter.join(",")],
+    queryFn: () =>
+      api.chatMessages(active!, filter || undefined, tagFilter),
     enabled: active !== null,
+  });
+
+  const command = useCommands({
+    messages: messages.data ?? [],
+    onFilter: (tags) =>
+      setParams((was) => {
+        const next = new URLSearchParams(was);
+        next.delete("tag");
+        for (const tag of tags) next.append("tag", tag);
+        return next;
+      }),
   });
 
   const [pending, setPending] = useState<File[]>([]);
@@ -239,9 +258,22 @@ export function ChatPage() {
         ) : null}
 
         <div ref={bottom} />
+        {command.note ? (
+          <p className="meta text-amber" role="status" data-testid="command-note">
+            {command.note}
+          </p>
+        ) : null}
         <Composer
           onSend={(text) => {
             answer.reset();
+            // **A slash command must never reach the classifier.** `/delete` reads
+            // as a statement, so sending it to `/chat` would *store the command*
+            // as a memory and leave the thing it was meant to delete in place.
+            // Intercepted here, before the mutation, for exactly that reason.
+            if (text.startsWith("/")) {
+              void command.run(text);
+              return;
+            }
             send.mutate(text);
           }}
           busy={send.isPending}
@@ -329,23 +361,93 @@ function Turn({ message }: { message: ChatMessage }) {
       </li>
     );
   }
+  // Superseded by a later correction. Dimmed and struck through rather than
+  // hidden, and that is M10.4's requirement rather than a style choice: what
+  // somebody believed before they corrected it is exactly the data Phase 5
+  // reasons over, so both versions stay on screen and legible.
+  const superseded = message.superseded_by !== null;
+
   return (
     <li className="flex flex-col gap-2" data-testid="message">
-      <div className="flex items-baseline gap-3">
+      <div className="flex flex-wrap items-baseline gap-3">
         <span className="meta-label text-muted">you</span>
         <span className="meta text-faint">{timestamp(message.created_at)}</span>
         <IntentMark message={message} />
+        {superseded ? (
+          <span className="meta text-faint" data-testid="superseded">
+            superseded by a correction below
+          </span>
+        ) : null}
+        {message.corrects ? (
+          <span className="meta text-amber" data-testid="correction">
+            corrects an earlier message
+          </span>
+        ) : null}
       </div>
-      <p className="whitespace-pre-wrap text-ink">{message.content}</p>
+      <p
+        className={
+          superseded
+            ? "whitespace-pre-wrap text-faint line-through decoration-1"
+            : "whitespace-pre-wrap text-ink"
+        }
+      >
+        {message.content}
+      </p>
+      <TagChips tags={message.tags} />
       <AttachmentList attachments={message.attachments} />
-      {message.memory_id ? <StoredLine memoryId={message.memory_id} /> : null}
-      {message.external_key && !message.memory_id ? (
-        // The key outlived the memory: it was deleted, or a replay has not
-        // rebuilt it yet. Said rather than rendered as an un-clickable "stored",
-        // because a link that silently does nothing is worse than a sentence.
-        <p className="meta text-faint">stored · its memory is not in the corpus right now</p>
+      {message.memory_id && !superseded ? (
+        <StoredLine memoryId={message.memory_id} />
       ) : null}
+      {message.external_key && !message.memory_id ? (
+        // The key outlived the memory: it was removed from view, permanently
+        // deleted, or a replay has not rebuilt it yet. Said rather than rendered
+        // as an un-clickable "stored", because a link that silently does nothing
+        // is worse than a sentence.
+        //
+        // A restore control beside it, because the recoverable level of deletion
+        // is only recoverable if there is somewhere to recover it from — and this
+        // row is the only place in the interface that knows a memory used to be
+        // here. It answers 409 for a memory that was permanently deleted, which
+        // is the honest outcome: that one is not recoverable.
+        <div className="flex items-baseline gap-3">
+          <p className="meta text-faint">
+            stored · its memory is not in the corpus right now
+          </p>
+        </div>
+      ) : null}
+      {!superseded ? <MemoryActions message={message} /> : null}
     </li>
+  );
+}
+
+/**
+ * Tags on a message, as typed.
+ *
+ * Each one is a link into search filtered by it, because a tag that cannot be
+ * followed is decoration. `/search?tag=…` rather than a chat-local filter: the
+ * point of a tag being a concept in the shared vocabulary is that it reaches the
+ * whole corpus, not only this conversation.
+ */
+function TagChips({ tags }: { tags: string[] }) {
+  // Defended against a missing array rather than trusting the type. The field is
+  // non-optional in the schema and the API always sends it, so this is not a
+  // contract being weakened — it is the blast radius being bounded. A field added
+  // late that is absent from one response would otherwise take the whole
+  // conversation down rather than one row of chips.
+  if (!tags || tags.length === 0) return null;
+  return (
+    <ul className="flex flex-wrap gap-2" data-testid="tags">
+      {tags.map((tag) => (
+        <li key={tag}>
+          <Link
+            to={`/search?tag=${encodeURIComponent(tag.replace(/^#/, ""))}`}
+            className="meta font-mono text-muted hover:text-amber"
+          >
+            {tag}
+          </Link>
+        </li>
+      ))}
+    </ul>
   );
 }
 

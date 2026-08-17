@@ -119,8 +119,32 @@ class MemoryKind(StrEnum):
 
 
 class EventType(StrEnum):
+    """What the log records about one item at one moment.
+
+    `ITEM_PURGED` arrives in M10.4 and is the only one of the three that is a
+    *request* rather than an observation. The other two are things the system
+    noticed at a source; this one is somebody having decided that a memory should
+    stop existing, which no walk can discover.
+
+    **It is in the log, and that is the crypto-shredding tension Phase 1 named,
+    written down as an enum member.** The log is append-only, so the row saying
+    these bytes were once observed here is never removed — the corpus keeps a
+    record that something was learned, at a hash, with a size, on a date. What the
+    purge removes is the content: the memory, every version of it, its chunks, its
+    vectors, its mentions, its graph nodes, its transcript rows and the blob
+    itself. So the honest description of a permanent deletion is that the *fact of
+    an observation* survives and the *thing observed* does not, and the
+    confirmation dialog says exactly that rather than promising more.
+
+    A replay reads this event and skips the key entirely — including the
+    observations before it, whose blobs are deliberately gone. That is what keeps
+    the rebuild faithful: a purged item must not come back, and the log is still
+    the thing that decides.
+    """
+
     ARTIFACT_OBSERVED = auto()
     ITEM_DELETED = auto()
+    ITEM_PURGED = auto()
 
 
 class Verdict(StrEnum):
@@ -275,6 +299,22 @@ class EdgeType(StrEnum):
     MENTIONS = "MENTIONS"
     RELATES_TO = "RELATES_TO"
     FROM_SOURCE = "FROM_SOURCE"
+    # No `TAGGED`, and M10.4 considered one. A tag resolves to the same `CONCEPT`
+    # entity an extracted mention would, so the connection exists in Postgres and
+    # `chat.status` reports it — what a graph edge would add is traversal, and it is
+    # not added yet for two reasons worth stating rather than leaving as an absence.
+    #
+    # A tag has no chunk and no offsets: it is an assertion *about* a memory, not a
+    # span of text in it. So it cannot be a `MENTIONS` edge without either a
+    # fabricated offset or a mention with no span, and both weaken the provenance
+    # chain for every real mention. Its own type is the right shape and needs
+    # `graph_sync.expand` to close scopes over tags as well as mentions, or pruning
+    # an entity node silently detaches tag edges from memories the payload never
+    # named.
+    #
+    # Declaring the member without writing it would be worse than the gap: this
+    # enum's own docstring says a relationship type nothing populates is a
+    # traversal that matches nothing, silently.
 
 
 # The property that identifies a node of each label, which is also the property

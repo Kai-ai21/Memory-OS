@@ -70,13 +70,20 @@ function Registered({ sources }: { sources: Source[] }) {
         <table className="w-full border-collapse text-left">
           <thead>
             <tr className="border-b border-rule">
-              {["name", "kind", "memories", "chunks", "last sync", "last full sync", ""].map(
-                (heading) => (
-                  <th key={heading} className="meta-label py-1 pr-4 font-normal">
-                    {heading}
-                  </th>
-                ),
-              )}
+              {[
+                "name",
+                "kind",
+                "memories",
+                "chunks",
+                "last sync",
+                "last full sync",
+                "sync",
+                "manage",
+              ].map((heading) => (
+                <th key={heading} className="meta-label py-1 pr-4 font-normal">
+                  {heading}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -148,7 +155,189 @@ function Row({ source }: { source: Source }) {
           </span>
         ) : null}
       </td>
+      <td className="py-1">
+        <SourceOperations source={source} />
+      </td>
     </tr>
+  );
+}
+
+/**
+ * Re-index, export, and the one destructive operation in this table.
+ *
+ * **Deleting a source is the most destructive thing this product can do**, so it is
+ * not a button beside `sync`. It opens a panel that names the exact counts, states
+ * what the append-only log keeps, and requires the source's own name to be typed —
+ * not `y`, and not a second click, because the name is the only answer that cannot
+ * be given by accident.
+ */
+function SourceOperations({ source }: { source: Source }) {
+  const client = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  const reindex = useMutation({
+    mutationFn: () => api.reindexSource(source.id),
+    onSuccess: (result) =>
+      setNote(
+        `${result.memories} memory(s) queued for re-parsing, re-chunking and ` +
+          `re-embedding — ${result.jobs} new job(s). Run the worker to drain them.`,
+      ),
+  });
+
+  return (
+    <span className="flex flex-col gap-1">
+      <span className="flex gap-2">
+        <button
+          type="button"
+          className="btn"
+          onClick={() => reindex.mutate()}
+          disabled={reindex.isPending}
+          title="Re-parse, re-chunk and re-embed everything from this source. Nothing is re-read and no event is appended."
+        >
+          {reindex.isPending ? "queueing…" : "re-index"}
+        </button>
+        {/* A plain link, not a fetch: the browser's own download is what somebody
+            wants here, and streaming a corpus-sized file through JavaScript to
+            hand it back to the browser would buy nothing and cost memory. */}
+        <a className="btn" href={api.sourceExportUrl(source.id)} download>
+          export
+        </a>
+        <button
+          type="button"
+          className="btn text-deny"
+          onClick={() => setConfirming((was) => !was)}
+        >
+          delete…
+        </button>
+      </span>
+      {reindex.isError ? <Failure error={reindex.error} /> : null}
+      {confirming ? (
+        <DeleteSourcePanel
+          source={source}
+          onCancel={() => setConfirming(false)}
+          onDone={(message) => {
+            setNote(message);
+            setConfirming(false);
+            void client.invalidateQueries({ queryKey: ["sources"] });
+          }}
+        />
+      ) : null}
+      {note ? (
+        <span className="meta text-amber" role="status">
+          {note}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * The counts, the log note, and the typed confirmation.
+ *
+ * The counts are read when the panel opens, and the item count is sent back with
+ * the deletion so the API can refuse if the corpus moved in between — a sync
+ * landing mid-dialog makes this a different operation from the one somebody agreed
+ * to.
+ */
+function DeleteSourcePanel({
+  source,
+  onDone,
+  onCancel,
+}: {
+  source: Source;
+  onDone: (note: string) => void;
+  onCancel: () => void;
+}) {
+  const [typed, setTyped] = useState("");
+  const scope = useQuery({
+    queryKey: ["source-deletion-scope", source.id],
+    queryFn: () => api.sourceDeletionScope(source.id),
+    staleTime: 0,
+    gcTime: 0,
+  });
+  const remove = useMutation({
+    mutationFn: () => api.deleteSource(source.id, scope.data?.items ?? 0),
+    onSuccess: (result) => onDone(result.detail),
+  });
+
+  return (
+    <div
+      className="flex max-w-prose flex-col gap-2 border-l-2 border-deny bg-paper p-3"
+      role="alertdialog"
+      aria-label={`Delete the source ${source.name}`}
+    >
+      <p className="text-ink">
+        Permanently delete <span className="font-mono">{source.name}</span> and
+        everything from it?
+      </p>
+      {scope.isPending ? (
+        <p className="meta text-faint">counting what this would remove…</p>
+      ) : null}
+      {scope.data ? (
+        <ul className="flex flex-col gap-0.5" data-testid="source-deletion-scope">
+          <li className="meta text-ink">{scope.data.items} item(s)</li>
+          <li className="meta text-ink">{scope.data.memories} memory version(s)</li>
+          <li className="meta text-ink">
+            {scope.data.chunks} chunk(s), {scope.data.embedded_chunks} with vectors
+          </li>
+          <li className="meta text-ink">
+            {scope.data.mentions} entity mention(s)
+            {scope.data.orphaned_entities
+              ? `, leaving ${scope.data.orphaned_entities} unreachable`
+              : ""}
+          </li>
+          {scope.data.tags ? (
+            <li className="meta text-ink">{scope.data.tags} tag(s)</li>
+          ) : null}
+          {scope.data.turns ? (
+            <li className="meta text-ink">
+              {scope.data.turns} conversation turn(s)
+            </li>
+          ) : null}
+          {scope.data.evidence ? (
+            <li className="meta text-ink">
+              {scope.data.evidence} decision evidence link(s)
+            </li>
+          ) : null}
+          <li className="meta text-ink">
+            {scope.data.blobs} stored file(s)
+            {scope.data.shared_blobs
+              ? `, and ${scope.data.shared_blobs} kept because something else uses them`
+              : ""}
+          </li>
+        </ul>
+      ) : null}
+      {scope.data ? (
+        <p className="meta text-muted" data-testid="source-log-note">
+          {scope.data.log_note}
+        </p>
+      ) : null}
+      <label htmlFor={`confirm-source-${source.id}`} className="meta-label">
+        type “{source.name}” to confirm
+      </label>
+      <input
+        id={`confirm-source-${source.id}`}
+        className="w-56 border border-deny bg-paper p-2 font-mono text-sm text-ink"
+        value={typed}
+        onChange={(event) => setTyped(event.target.value)}
+        autoComplete="off"
+      />
+      <span className="flex items-baseline gap-3">
+        <button
+          type="button"
+          className="meta text-deny hover:underline disabled:text-faint disabled:no-underline"
+          disabled={typed !== source.name || remove.isPending || !scope.data}
+          onClick={() => remove.mutate()}
+        >
+          {remove.isPending ? "deleting…" : "delete this source"}
+        </button>
+        <button type="button" className="meta text-faint" onClick={onCancel}>
+          cancel
+        </button>
+      </span>
+      {remove.isError ? <Failure error={remove.error} /> : null}
+    </div>
   );
 }
 

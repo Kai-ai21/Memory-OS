@@ -12,7 +12,9 @@ chunks describe text the item no longer says; surfacing them is a correctness
 failure, not a ranking one.
 """
 
-from sqlalchemy import ColumnElement
+from collections.abc import Sequence
+
+from sqlalchemy import ColumnElement, func, select
 
 from memoryos.adapters.db import models
 from memoryos.application.ports import SearchFilters
@@ -36,5 +38,36 @@ def memory_predicates(filters: SearchFilters) -> list[ColumnElement[bool]]:
         clauses.append(models.Memory.occurred_at >= filters.occurred_after)
     if filters.occurred_before is not None:
         clauses.append(models.Memory.occurred_at <= filters.occurred_before)
+    if filters.tags:
+        clauses.append(_carries_every_tag(filters.tags))
 
     return clauses
+
+
+def _carries_every_tag(tags: Sequence[str]) -> ColumnElement[bool]:
+    """The memory's item is tagged with all of these. M10.4.
+
+    A correlated `EXISTS` with a `HAVING` count, rather than a join, and the reason
+    is what this predicate is used for: it is added to *both* retrievers'
+    statements, one of which is an HNSW vector scan. A join to `memory_tags` would
+    multiply that statement's rows by the number of tags per memory before the
+    `LIMIT` applied, which changes what "the fifty nearest chunks" means. An
+    `EXISTS` filters and does not fan out.
+
+    Matched on `(source_id, external_key)` because that is what a tag is attached
+    to — the item, not the version — which is what makes a tag survive a
+    correction. Two sources may hold the same external key, so both halves are
+    required.
+    """
+    tag_rows = models.MemoryTag
+    return (
+        select(func.count(func.distinct(tag_rows.tag)))
+        .where(
+            tag_rows.source_id == models.Memory.source_id,
+            tag_rows.external_key == models.Memory.external_key,
+            tag_rows.tag.in_(list(tags)),
+        )
+        .correlate(models.Memory)
+        .scalar_subquery()
+        == len(set(tags))
+    )

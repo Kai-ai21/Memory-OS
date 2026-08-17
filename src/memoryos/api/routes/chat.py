@@ -43,7 +43,7 @@ from pydantic import BaseModel, Field
 
 from memoryos.adapters.llm.errors import MissingApiKey
 from memoryos.application import chat as chat_use_case
-from memoryos.application import live
+from memoryos.application import deletion, live, tags
 from memoryos.application.answering import EventKind, StreamEvent
 from memoryos.application.attachments import (
     ALLOWED_SUFFIXES,
@@ -59,7 +59,9 @@ from memoryos.application.chat import (
     Exchange,
     Message,
     NoLanguageModel,
+    NoSuchMessage,
     NoSuchSession,
+    NotCorrectable,
     Stage,
 )
 from memoryos.container import Container, ToolsUnsupported
@@ -148,6 +150,17 @@ class MessageOut(BaseModel):
     # Files dropped with this message. Several is normal: three files dropped
     # together are three memories and one turn.
     attachments: list[AttachmentOut] = Field(default_factory=list)
+    # M10.4's correction links, both directions. `corrects` is the earlier turn this
+    # one replaces; `superseded_by` is the later turn that replaced this one, derived
+    # rather than stored so the two edges cannot disagree.
+    #
+    # Both are sent on every turn so the interface can render the original as
+    # superseded *and* keep it on screen — the previous text is not noise, it is what
+    # somebody believed before they corrected it.
+    corrects: UUID | None = None
+    superseded_by: UUID | None = None
+    # Tags on this turn's memory, as typed, `#` included.
+    tags: list[str] = Field(default_factory=list)
 
 
 class ExchangeOut(BaseModel):
@@ -171,6 +184,48 @@ class ConnectionOut(BaseModel):
     entity_id: UUID
     name: str
     memories: int
+
+
+# What the confirmation says about the log, served by the API rather than written in
+# the client.
+#
+# **Here because it is a claim about the system, and the client must not be the place
+# that decides how much erasure to promise.** A sentence hard-coded in the browser
+# would be a sentence nobody reviewing the deletion path would ever read, and it
+# would go stale the moment the log's behaviour changed. This is the honest
+# statement of the crypto-shredding tension Phase 1 named, and it is deliberately not
+# softened: an append-only log cannot forget that it observed something, and every
+# other part of the memory is genuinely destroyed.
+LOG_NOTE = (
+    "The append-only ingestion log keeps its record that something was observed "
+    "here — a hash, a byte size and a date — because deleting from the log would "
+    "rewrite history rather than delete content, and the corpus could no longer be "
+    "rebuilt from it. Everything else goes: the memory and every earlier version of "
+    "it, its chunks and their vectors, its entity mentions, its graph nodes, its "
+    "tags, the conversation turns carrying its text, and the stored file itself. "
+    "This cannot be undone."
+)
+
+
+class DeletionOut(BaseModel):
+    """What a deletion did, and whether it can be taken back.
+
+    `recoverable` is a field rather than something a client infers from
+    `permanent`, because it is the one thing a person needs after the fact and the
+    inference is exactly where a UI would eventually get it backwards.
+    """
+
+    permanent: bool
+    recoverable: bool
+    detail: str
+    external_key: str | None = None
+    source: str | None = None
+    memories: int = 0
+    chunks: int = 0
+    mentions: int = 0
+    tags: int = 0
+    turns: int = 0
+    blobs_shredded: int = 0
 
 
 class StatusOut(BaseModel):
@@ -528,11 +583,283 @@ async def message_status(memory_id: UUID, container: ContainerDep) -> StatusOut:
     )
 
 
+class CorrectionIn(BaseModel):
+    """The corrected text of a stored message.
+
+    No id in the body: the message is the path. And no intent override, for the
+    reason `/chat` has none — the reading was made once, by the classifier, and a
+    correction corrects the words rather than the reading.
+    """
+
+    text: str = Field(min_length=1)
+
+
+@router.post(
+    "/chat/messages/{message_id}/correct",
+    response_model=ExchangeOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def correct_message(
+    message_id: UUID, body: CorrectionIn, container: ContainerDep
+) -> ExchangeOut:
+    """Amend what a stored message says, keeping what it used to say.
+
+    **201, not 200, and the status code is the design.** This creates: a new
+    version of the memory and a new turn in the transcript. A `PATCH` returning 200
+    would describe an edit, and nothing here is edited — M10.0 made turns immutable
+    and the original stays visible, superseded, because what somebody believed
+    before they corrected it is the data Phase 5 reasons over.
+
+    Registered above `/chat/{session_id}` with the rest of the literal segments.
+    """
+    try:
+        exchange = await container.chat().correct(message_id, body.text)
+    except EmptyMessage as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except NoSuchMessage as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except NotCorrectable as exc:
+        # 409: the message exists and the operation does not apply to it, which is
+        # a different thing for a client to render than a missing row.
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except NoSuchSession as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    return _exchange_out(exchange)
+
+
+class TagIn(BaseModel):
+    """Tags to put on a message's memory.
+
+    A string rather than a list, so the API takes what somebody typed —
+    `"#project #idea"` — and the parser that reads a chat command is the same one
+    that reads this. A list would mean two definitions of what a tag looks like,
+    and the one that disagreed would be whichever was not being tested.
+    """
+
+    tags: str = Field(min_length=1)
+
+
+class TagsOut(BaseModel):
+    applied: list[str]
+    already: list[str]
+    entities_created: int
+
+
+@router.post("/chat/messages/{memory_id}/tags", response_model=TagsOut)
+async def tag_memory(
+    memory_id: UUID, body: TagIn, container: ContainerDep
+) -> TagsOut:
+    """File a memory under one or more concepts.
+
+    Keyed by memory id rather than message id, for the reason
+    `/chat/messages/{memory_id}/status` is: a tag is a property of the memory, the
+    same question is worth asking about a file, and an endpoint that only worked
+    for things that were typed would be the first chat-shaped special case in the
+    corpus.
+    """
+    parsed = _parse_tags(body.tags)
+    async with container.database.session_factory() as session:
+        try:
+            item = await deletion.item_of_memory(session, memory_id)
+        except deletion.NoSuchMemory as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+    report = await tags.apply(
+        container.database.session_factory,
+        source_id=item.source_id,
+        external_key=item.external_key,
+        tags=parsed,
+    )
+    return TagsOut(
+        applied=[tag.display for tag in report.applied],
+        already=[tag.display for tag in report.already],
+        entities_created=report.entities_created,
+    )
+
+
+@router.delete("/chat/messages/{memory_id}/tags", response_model=TagsOut)
+async def untag_memory(
+    memory_id: UUID, body: TagIn, container: ContainerDep
+) -> TagsOut:
+    """Remove tags from a memory. The concepts themselves are left alone."""
+    parsed = _parse_tags(body.tags)
+    async with container.database.session_factory() as session:
+        try:
+            item = await deletion.item_of_memory(session, memory_id)
+        except deletion.NoSuchMemory as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+    removed = await tags.remove(
+        container.database.session_factory,
+        source_id=item.source_id,
+        external_key=item.external_key,
+        tags=parsed,
+    )
+    return TagsOut(
+        applied=[tag.display for tag in removed], already=[], entities_created=0
+    )
+
+
+def _parse_tags(text: str) -> list[tags.Tag]:
+    try:
+        return tags.parse_required(text)
+    except (tags.NoTags, tags.TooManyTags) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+
+class TagCountOut(BaseModel):
+    tag: str
+    items: int
+
+
+@router.get("/tags", response_model=list[TagCountOut])
+async def list_tags(container: ContainerDep) -> list[TagCountOut]:
+    """Every tag in use and how many items carry it, most-used first.
+
+    Its own top-level path rather than under `/chat`, because a tag is not a chat
+    concept — it is on the memory, and the search page filters by it.
+    """
+    found = await tags.all_tags(container.database.session_factory)
+    return [TagCountOut(tag=tag.display, items=count) for tag, count in found]
+
+
+class PurgeScopeOut(BaseModel):
+    """What a permanent deletion would remove. The confirmation's contents.
+
+    Every count is here because a person cannot consent to an unspecified amount of
+    loss, and `log_note` is here because they cannot consent to a promise this
+    system does not keep: the append-only log retains the record that something was
+    observed at this key, and the content is what goes. The dialog says so.
+    """
+
+    memories: int
+    chunks: int
+    embedded_chunks: int
+    mentions: int
+    orphaned_entities: int
+    tags: int
+    turns: int
+    attachments: int
+    evidence: int
+    blobs: int
+    shared_blobs: int
+    previews: list[str]
+    log_note: str
+
+
+@router.get("/chat/messages/{memory_id}/deletion", response_model=PurgeScopeOut)
+async def deletion_scope(memory_id: UUID, container: ContainerDep) -> PurgeScopeOut:
+    """Exactly what deleting this memory permanently would take.
+
+    A separate read before the destructive write, so the numbers in the dialog are
+    the numbers the operation will hit. A client that computed them from what it
+    already had on screen would be confirming against a stale count — and the one
+    thing a confirmation must not do is understate.
+    """
+    try:
+        scope = await deletion.scope_of_memory(
+            container.database.session_factory, memory_id
+        )
+    except deletion.NoSuchMemory as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    return _scope_out(scope)
+
+
+@router.delete("/chat/messages/{memory_id}", response_model=DeletionOut)
+async def delete_memory(
+    memory_id: UUID,
+    container: ContainerDep,
+    permanent: Annotated[bool, Query()] = False,
+) -> DeletionOut:
+    """Remove a memory from view, or — with `permanent=true` — delete it.
+
+    **One route with an explicit flag, rather than two routes, and the flag defaults
+    to the recoverable level.** Two endpoints would mean two places for a client to
+    get the destructive one by mistake; a default of `permanent=true` would mean a
+    client that forgot the parameter destroyed something. The dangerous operation is
+    the one you have to ask for by name.
+
+    `DELETE` for both, because both are deletions from the reader's point of view —
+    what differs is whether it can be undone, which is what the response says.
+    """
+    factory = container.database.session_factory
+    try:
+        if not permanent:
+            item = await deletion.tombstone(factory, memory_id)
+            return DeletionOut(
+                permanent=False,
+                recoverable=True,
+                external_key=item.external_key,
+                source=item.source_name,
+                detail=(
+                    "Removed from view. It is excluded from search, answers and the "
+                    "graph, and every version, chunk and byte is still stored — so "
+                    "this can be undone."
+                ),
+            )
+        report = await deletion.purge_memory(factory, container.blobs, memory_id)
+    except deletion.NoSuchMemory as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except deletion.NotDeletable as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except deletion.BlobsSurvived as exc:
+        # 500, and the corpus *is* purged. The content is unreachable through every
+        # read path and some bytes are still on disk — which is a server fault worth
+        # reporting as one rather than a success with a caveat nobody reads.
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)
+        ) from exc
+
+    return DeletionOut(
+        permanent=True,
+        recoverable=False,
+        memories=report.memories,
+        chunks=report.chunks,
+        mentions=report.mentions,
+        tags=report.tags,
+        turns=report.turns,
+        blobs_shredded=report.blobs_shredded,
+        detail=(
+            f"Permanently deleted {report.memories} version(s), {report.chunks} "
+            f"chunk(s) and their vectors, {report.mentions} entity mention(s), "
+            f"{report.turns} transcript row(s) and {report.blobs_shredded} stored "
+            f"file(s). The ingestion log keeps its record that something was "
+            f"observed here; the content is gone."
+        ),
+    )
+
+
+@router.post("/chat/messages/{memory_id}/restore", response_model=DeletionOut)
+async def restore_memory(memory_id: UUID, container: ContainerDep) -> DeletionOut:
+    """Bring a memory removed from view back, as a new version.
+
+    Not an undelete of the row: the corpus is a projection of the log, so this
+    re-observes the same bytes at the same key and lets the ordinary version path
+    record it. A replay reproduces the result without knowing restoration exists.
+    """
+    try:
+        item = await deletion.restore(
+            container.database.session_factory, container.blobs, memory_id
+        )
+    except deletion.NoSuchMemory as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except deletion.NotDeletable as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return DeletionOut(
+        permanent=False,
+        recoverable=True,
+        external_key=item.external_key,
+        source=item.source_name,
+        detail="Restored as a new version. It is searchable again.",
+    )
+
+
 @router.get("/chat/{session_id}", response_model=list[MessageOut])
 async def session_messages(
     session_id: UUID,
     container: ContainerDep,
     q: Annotated[str | None, Query()] = None,
+    tag: Annotated[list[str] | None, Query()] = None,
 ) -> list[MessageOut]:
     """One conversation's turns, in order, oldest first.
 
@@ -541,11 +868,53 @@ async def session_messages(
     "where in this conversation did I say that" over rows the reader has already
     seen, and running it through the embedder would return semantic neighbours
     from a conversation they can see all of. `/search` is the other question.
+
+    `tag` filters to turns whose memory carries all of them — repeat the parameter
+    to narrow. The `#` is optional and stripped, so a client may send what somebody
+    typed.
     """
     found = await chat_use_case.messages(
-        container.database.session_factory, session_id, query=q
+        container.database.session_factory,
+        session_id,
+        query=q,
+        tags=_tag_names(tag),
     )
     return [_message_out(message) for message in found]
+
+
+def _tag_names(raw: list[str] | None) -> list[str]:
+    """Query-string tags as canonical names.
+
+    Parsed through `tags.parse` after re-adding the sigil, so one definition of what
+    a tag looks like serves the chat command, the API body and the query string. A
+    second definition here is how `#Idea` and `idea` end up being two filters.
+    """
+    names: list[str] = []
+    for value in raw or []:
+        stripped = value.strip()
+        if not stripped:
+            continue
+        for tag in tags.parse(stripped if stripped.startswith("#") else f"#{stripped}"):
+            names.append(tag.name)
+    return names
+
+
+def _scope_out(scope: deletion.PurgeScope) -> PurgeScopeOut:
+    return PurgeScopeOut(
+        memories=scope.memories,
+        chunks=scope.chunks,
+        embedded_chunks=scope.embedded_chunks,
+        mentions=scope.mentions,
+        orphaned_entities=scope.orphaned_entities,
+        tags=scope.tags,
+        turns=scope.turns,
+        attachments=scope.attachments,
+        evidence=scope.evidence,
+        blobs=scope.blobs,
+        shared_blobs=scope.shared_blobs,
+        previews=list(scope.previews),
+        log_note=LOG_NOTE,
+    )
 
 
 def _exchange_out(exchange: Exchange) -> ExchangeOut:
@@ -569,6 +938,9 @@ def _message_out(message: Message) -> MessageOut:
         answer_model=message.answer_model,
         refused=message.refused,
         grounded=message.grounded,
+        corrects=message.corrects,
+        superseded_by=message.superseded_by,
+        tags=list(message.tags),
         citations=[
             CitationOut(
                 memory_id=citation.memory_id,

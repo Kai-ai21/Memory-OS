@@ -10,8 +10,10 @@ import contextlib
 import json
 import math
 import signal
+import sys
 import textwrap
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -29,10 +31,12 @@ from memoryos.adapters.connectors.filesystem import (
 )
 from memoryos.adapters.db import models
 from memoryos.adapters.db.engine import Database
+from memoryos.adapters.db.job_queue import enqueue_in
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
 from memoryos.adapters.extraction.llm import ExtractionStats
 from memoryos.adapters.graph.schema import SCHEMA_VERSION
 from memoryos.adapters.llm.errors import MissingApiKey, ModelNotAvailable
+from memoryos.api.routes.chat import LOG_NOTE
 from memoryos.application import (
     assumption_groups,
     assumption_suggest,
@@ -40,8 +44,10 @@ from memoryos.application import (
     context_engine,
     decision_suggest,
     decisions,
+    deletion,
     events,
     evolution,
+    export,
     graph_projection,
     graph_sync,
     graph_verify,
@@ -53,6 +59,7 @@ from memoryos.application import (
     sources,
     surfacing,
     system_report,
+    tags,
     temporal,
     user_model,
 )
@@ -125,7 +132,13 @@ from memoryos.domain.entities import Source
 from memoryos.domain.events import Event, EventKind
 from memoryos.domain.fusion import DEFAULT_RRF_K
 from memoryos.domain.ids import new_id
-from memoryos.domain.jobs import JobStatus, JobType, PermanentError, TransientError
+from memoryos.domain.jobs import (
+    JobSpec,
+    JobStatus,
+    JobType,
+    PermanentError,
+    TransientError,
+)
 from memoryos.domain.missing import GapKind
 from memoryos.domain.patterns import (
     DEFAULT_MIN_SUPPORT,
@@ -248,6 +261,252 @@ async def list_sources(settings: Settings) -> int:
                 f"{'':20} id={row.id} last_sync={row.last_sync_at} "
                 f"last_full_sync={row.last_full_sync_at}"
             )
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_delete_source(
+    settings: Settings,
+    *,
+    name: str,
+    assume_yes: bool = False,
+    keep_registration: bool = False,
+) -> int:
+    """Permanently delete a source and everything that came from it.
+
+    **The most destructive operation in the product**, so it prints the exact
+    counts and waits for the source's own name to be typed back. Not `y`: a
+    single keystroke is what somebody presses to make a prompt go away, and the
+    name is the one answer that cannot be given by accident.
+
+    `--yes` skips the prompt and still prints the counts, because a scripted
+    deletion is legitimate and a silent one is not.
+    """
+    container = Container.build(settings)
+    try:
+        async with container.database.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(models.Source).where(models.Source.name == name)
+                )
+            ).scalar_one_or_none()
+        if row is None:
+            print(f"no source named {name!r}")
+            return 1
+
+        scope = await deletion.scope_of_source(
+            container.database.session_factory, row.id
+        )
+        print()
+        print(f"  Permanently delete the source {name!r} and everything from it?")
+        print()
+        print(f"    {len(scope.items)} item(s)")
+        print(f"    {scope.memories} memory version(s)")
+        print(f"    {scope.chunks} chunk(s), {scope.embedded_chunks} with vectors")
+        print(f"    {scope.mentions} entity mention(s)", end="")
+        if scope.orphaned_entities:
+            print(
+                f", leaving {scope.orphaned_entities} entit"
+                f"{'y' if scope.orphaned_entities == 1 else 'ies'} unreachable"
+            )
+        else:
+            print()
+        if scope.tags:
+            print(f"    {scope.tags} tag(s)")
+        if scope.turns:
+            print(f"    {scope.turns} conversation turn(s)")
+        if scope.evidence:
+            print(f"    {scope.evidence} decision evidence link(s)")
+        print(f"    {scope.blobs} stored file(s)", end="")
+        print(
+            f", and {scope.shared_blobs} kept because something else uses them"
+            if scope.shared_blobs
+            else ""
+        )
+        if scope.previews:
+            print()
+            print("  for example:")
+            for preview in scope.previews:
+                print(f"    {preview}")
+        print()
+        print(
+            textwrap.fill(
+                LOG_NOTE, width=84, initial_indent="  ", subsequent_indent="  "
+            )
+        )
+        print()
+
+        if not assume_yes:
+            typed = await asyncio.to_thread(
+                input, f"  type the source name {name!r} to confirm: "
+            )
+            if typed.strip() != name:
+                print("  nothing was deleted.\n")
+                return 1
+
+        try:
+            report = await deletion.purge_source(
+                container.database.session_factory,
+                container.blobs,
+                row.id,
+                drop_source=not keep_registration,
+            )
+        except deletion.BlobsSurvived as exc:
+            print(f"  {exc}")
+            return 1
+
+        print(
+            f"  deleted · {report.items} item(s), {report.memories} version(s), "
+            f"{report.chunks} chunk(s), {report.mentions} mention(s), "
+            f"{report.turns} turn(s), {report.blobs_shredded} file(s)"
+        )
+        async with container.database.session_factory() as session:
+            still_there = await session.get(models.Source, row.id)
+        if still_there is not None and not keep_registration:
+            # Said rather than left for somebody to discover in `source list`. The
+            # log holds a foreign key to the source for every event it ever
+            # recorded, and those events are the record that this source existed.
+            print(
+                "  the source registration and its config are kept, because the\n"
+                "  ingestion log still records what it observed here"
+            )
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_reindex_source(settings: Settings, *, name: str) -> int:
+    """Re-parse, re-chunk and re-embed everything a source holds.
+
+    Re-normalization rather than re-ingestion: the artifacts are in the blob store
+    and the log already says what was observed, so nothing is re-read and no event
+    is appended. What this is for is a chunker change or a parser fix.
+
+    Tombstoned items are skipped. Re-indexing something removed from view would put
+    its chunks back into the vector index, which is the deletion guardrail being
+    undone by a maintenance command.
+    """
+    container = Container.build(settings)
+    try:
+        async with container.database.session_factory.begin() as session:
+            row = (
+                await session.execute(
+                    select(models.Source).where(models.Source.name == name)
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                print(f"no source named {name!r}")
+                return 1
+            memory_ids = (
+                await session.execute(
+                    select(models.Memory.id).where(
+                        models.Memory.source_id == row.id,
+                        models.Memory.is_current.is_(True),
+                        models.Memory.deleted_at.is_(None),
+                    )
+                )
+            ).scalars().all()
+            queued = 0
+            for memory_id in memory_ids:
+                job_id = await enqueue_in(
+                    session,
+                    JobSpec(
+                        job_type=JobType.NORMALIZE_MEMORY,
+                        payload={"memory_id": str(memory_id)},
+                        dedupe_key=str(memory_id),
+                    ),
+                )
+                queued += int(job_id is not None)
+        print(
+            f"{name}: {len(memory_ids)} current memory(s), {queued} normalization "
+            f"job(s) queued"
+        )
+        if queued < len(memory_ids):
+            print(
+                f"{len(memory_ids) - queued} already had a pending job and were "
+                f"not queued twice"
+            )
+        print("run `memoryos worker` to drain them")
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_export(
+    settings: Settings,
+    *,
+    fmt: str,
+    source: str | None,
+    out: Path | None,
+) -> int:
+    """Everything you wrote, in a portable form.
+
+    Streamed to stdout or to a file, a chunk at a time, because a corpus does not
+    fit in memory and an export that died on a real corpus would fail exactly when
+    somebody was trying to leave.
+
+    The count goes to stderr when the document goes to stdout, so that
+    `memoryos export | jq` receives JSON and not JSON with a sentence after it.
+    """
+    container = Container.build(settings)
+    try:
+        stats = export.ExportStats()
+        renderer = export.to_json if fmt == "json" else export.to_markdown
+        try:
+            if out is None:
+                async for piece in renderer(
+                    container.database.session_factory, source=source, stats=stats
+                ):
+                    print(piece, end="")
+            else:
+                # Written directly rather than accumulated. Same reason as the
+                # streaming: the file may be larger than this process.
+                with out.open("w", encoding="utf-8") as handle:
+                    async for piece in renderer(
+                        container.database.session_factory, source=source, stats=stats
+                    ):
+                        handle.write(piece)
+        except export.UnknownSource as exc:
+            print(str(exc))
+            return 1
+
+        summary = (
+            f"{stats.items} item(s), {stats.versions} version(s) across "
+            f"{len(stats.sources)} source(s)"
+            + (f", {stats.tagged} tagged" if stats.tagged else "")
+            + (
+                f", {stats.tombstoned} removed from view"
+                if stats.tombstoned
+                else ""
+            )
+        )
+        if out is None:
+            print(summary, file=sys.stderr)
+        else:
+            print(f"wrote {out}: {summary}")
+    finally:
+        await container.dispose()
+    return 0
+
+
+async def run_tags(settings: Settings, *, reconcile: bool = False) -> int:
+    """Every tag in use, and how many items carry it."""
+    container = Container.build(settings)
+    try:
+        if reconcile:
+            created = await tags.reconcile(container.database.session_factory)
+            print(
+                f"re-created {created} concept entit{'y' if created == 1 else 'ies'} "
+                f"behind existing tags"
+                if created
+                else "every tag already has its concept"
+            )
+        found = await tags.all_tags(container.database.session_factory)
+        if not found:
+            print("no tags yet")
+        for tag, count in found:
+            print(f"{tag:<28} {count} item{'s' if count != 1 else ''}")
     finally:
         await container.dispose()
     return 0
@@ -696,6 +955,16 @@ async def _chat_session(
 
         if not typed.strip():
             continue
+        if typed.lstrip().startswith("/"):
+            # Handled here rather than sent to `chat`, and the ordering matters:
+            # a line beginning with `/` must never reach the classifier, because
+            # `/delete` reads as a statement and would be *stored* — a command
+            # filed as a thought, and the thought it was meant to delete still
+            # there.
+            session_id = await _slash(
+                container, chat, typed.strip(), session_id, pending
+            )
+            continue
         try:
             exchange = await chat(typed, session_id=session_id, new_session=opening)
         except EmptyMessage:
@@ -718,6 +987,400 @@ async def _chat_session(
         _print_exchange(exchange)
         if exchange.user.memory_id is not None:
             pending.append(exchange.user.memory_id)
+
+
+_SLASH_HELP = """  /correct <text>          replace what the last stored message says
+  /delete                  remove the last stored message from view (recoverable)
+  /delete --permanent      destroy it: memory, chunks, vectors, mentions, bytes
+  /restore                 bring back a message removed from view
+  /tag #project #idea       file the last stored message under these concepts
+  /untag #idea             remove tags from it
+  /tags                    every tag in use, and how many items carry it
+  /filter #idea            show this conversation's turns carrying a tag
+  /help                    this list
+
+  Each command acts on the last message in this conversation that stored
+  something. Add a memory id to act on a different one: /delete <uuid>.
+"""
+
+
+async def _slash(
+    container: Container,
+    chat: Chat,
+    typed: str,
+    session_id: UUID | None,
+    pending: list[UUID],
+) -> UUID | None:
+    """One slash command, inside the conversation it was typed in.
+
+    **The whole of M10.4's objective is that these do not require leaving the
+    chat**, so they run against the same use cases the API routes call — not a
+    parallel implementation that happens to agree today.
+
+    Returns the session id, unchanged, so the caller's loop keeps its pin. A
+    command never starts a session: there is nothing to correct or delete in a
+    conversation that has no messages, and creating one to hold a failed command
+    would leave an empty conversation in the rail.
+    """
+    parts = typed.split()
+    command = parts[0].lower()
+    rest = typed[len(parts[0]) :].strip()
+
+    if command in {"/help", "/?"}:
+        print(_SLASH_HELP)
+        return session_id
+    if command == "/tags":
+        found = await tags.all_tags(container.database.session_factory)
+        if not found:
+            print("  no tags yet. /tag #something on a message you have stored.\n")
+        for tag, count in found:
+            print(f"  {tag:<24} {count} item{'s' if count != 1 else ''}")
+        print()
+        return session_id
+    # **The conversation a command acts on, which is not always the pinned one, and
+    # the live run is why.**
+    #
+    # The REPL pins a session on the *first message*, so nothing is pinned yet when
+    # a command is the first thing typed — which is exactly how somebody reaches for
+    # one: open the chat, delete the thing you just realised was wrong. Refusing
+    # there made every command unusable in that case, and the refusal did worse than
+    # fail: the confirmation line typed after it was no longer being read by a
+    # prompt, so it fell through to the message path and was *stored as a memory*.
+    # `delete`, filed as a thought.
+    #
+    # The latest conversation is where a message with no session would have landed
+    # anyway — `_resolve_session` reads the same row — so this is the command
+    # agreeing with the send rather than inventing a rule.
+    #
+    # Resolved into a local, and the pin is returned untouched: `chat --new` and then
+    # a command means "manage what I said before, then start something new", and
+    # pinning here would silently cancel the `--new`.
+    acting_on = session_id or await chat_use_case.latest_session(
+        container.database.session_factory
+    )
+    if acting_on is None:
+        print("  there are no conversations yet, so there is nothing to manage.\n")
+        return session_id
+    if command == "/filter":
+        await _print_filtered(container, acting_on, rest)
+        return session_id
+
+    # Every remaining command needs a target. An explicit memory id wins; failing
+    # that, the last turn in this conversation that stored something — which is
+    # what "the message" means to somebody who has just typed one.
+    target, rest = await _resolve_target(container, acting_on, rest)
+    if target is None:
+        return session_id
+
+    if command == "/correct":
+        if not rest:
+            print("  /correct needs the corrected text.\n")
+            return session_id
+        if target.message_id is None:
+            # A correction appends a turn beside the one it supersedes, so it needs
+            # a turn to supersede. A memory with no transcript row — a file, or a
+            # message from a conversation this REPL is not in — is corrected where
+            # it lives.
+            print(
+                "  that memory has no turn in this conversation, so there is no\n"
+                "  message to correct. Open its conversation, or edit the file.\n"
+            )
+            return session_id
+        try:
+            exchange = await chat.correct(target.message_id, rest)
+        except (chat_use_case.NotCorrectable, EmptyMessage) as exc:
+            print(f"  {exc}\n")
+            return session_id
+        except chat_use_case.NoSuchMessage as exc:
+            print(f"  {exc}\n")
+            return session_id
+        memory_id = exchange.user.memory_id
+        print(f"  corrected · version 2 · memory {memory_id}")
+        print("  the previous version is kept and marked superseded\n")
+        if memory_id is not None:
+            pending.append(memory_id)
+        return session_id
+
+    if command in {"/delete", "/rm"}:
+        await _delete_from_chat(
+            container, target, permanent="--permanent" in rest.split()
+        )
+        return session_id
+
+    if command == "/restore":
+        try:
+            item = await deletion.restore(
+                container.database.session_factory, container.blobs, target.memory_id
+            )
+        except (deletion.NoSuchMemory, deletion.NotDeletable) as exc:
+            print(f"  {exc}\n")
+            return session_id
+        print(f"  restored · {item.external_key} is searchable again\n")
+        return session_id
+
+    if command in {"/tag", "/untag"}:
+        await _tag_from_chat(container, target, rest, removing=command == "/untag")
+        return session_id
+
+    print(f"  unknown command {command!r}. /help lists them.\n")
+    return session_id
+
+
+@dataclass(frozen=True, slots=True)
+class _Target:
+    """The message and memory a slash command is about.
+
+    `message_id` is optional because a memory reached by an explicit id may have no
+    turn in this conversation — or no turn anywhere, if it came from a file. Only
+    `/correct` needs one, since it is the only command that appends to a transcript.
+    """
+
+    message_id: UUID | None
+    memory_id: UUID
+    external_key: str
+    preview: str
+
+
+async def _resolve_target(
+    container: Container, session_id: UUID, rest: str
+) -> tuple[_Target | None, str]:
+    """Which message a command means, and what is left of the arguments.
+
+    Two ways, in priority order. A leading memory id is explicit and wins. Failing
+    that it is the last turn in this conversation that stored something — the one
+    somebody has just typed, which is the case `/correct` exists for.
+
+    Assistant turns and questions are skipped rather than refused: they stored
+    nothing, so "the last stored message" is unambiguous even when the last message
+    is an answer.
+
+    **An explicit id is looked up in the corpus, not in this conversation**, and the
+    difference matters for the operation somebody is most likely to want: deleting a
+    memory they found on the search page, whose id they pasted, typed in a
+    conversation from three weeks ago. Only `/correct` needs the transcript row —
+    that is the one that appends a turn — so `message_id` is optional and `/correct`
+    is the only command that refuses without one.
+    """
+    words = rest.split()
+    explicit: UUID | None = None
+    if words:
+        try:
+            explicit = UUID(words[0])
+        except ValueError:
+            explicit = None
+    if explicit is not None:
+        rest = rest[len(words[0]) :].strip()
+
+    found = await chat_use_case.messages(container.database.session_factory, session_id)
+    stored = [
+        message
+        for message in found
+        if message.memory_id is not None and message.external_key is not None
+    ]
+
+    if explicit is not None:
+        # The transcript row for it, if there is one in this conversation. Absent for
+        # a memory from another conversation or from a file, which is a legitimate
+        # target for everything except a correction.
+        turn = next(
+            (
+                message
+                for message in stored
+                if message.memory_id == explicit or message.id == explicit
+            ),
+            None,
+        )
+        if turn is not None:
+            return (
+                _Target(
+                    message_id=turn.id,
+                    memory_id=turn.memory_id or explicit,
+                    external_key=turn.external_key or "",
+                    preview=turn.content[:60],
+                ),
+                rest,
+            )
+        async with container.database.session_factory() as session:
+            try:
+                item = await deletion.item_of_memory(session, explicit)
+            except deletion.NoSuchMemory:
+                print(f"  no memory with id {explicit}.\n")
+                return None, rest
+            row = await session.get(models.Memory, explicit)
+        preview = (row.title if row else None) or item.external_key
+        return (
+            _Target(
+                message_id=None,
+                memory_id=explicit,
+                external_key=item.external_key,
+                preview=preview[:60],
+            ),
+            rest,
+        )
+
+    if not stored:
+        print("  nothing in this conversation has been stored yet.\n")
+        return None, rest
+    last = stored[-1]
+    assert last.memory_id is not None
+    return (
+        _Target(
+            message_id=last.id,
+            memory_id=last.memory_id,
+            external_key=last.external_key or "",
+            preview=last.content[:60],
+        ),
+        rest,
+    )
+
+
+async def _delete_from_chat(
+    container: Container, target: _Target, *, permanent: bool
+) -> None:
+    """The two levels, and the confirmation that separates them.
+
+    **The permanent one names what will be lost and waits for a typed answer**,
+    because it is the one operation in this product that cannot be undone. The
+    recoverable one does not ask at all: it is reversible by design, and a
+    confirmation on a reversible action trains somebody to click through the one
+    that matters.
+    """
+    factory = container.database.session_factory
+    if not permanent:
+        try:
+            item = await deletion.tombstone(factory, target.memory_id)
+        except deletion.NoSuchMemory as exc:
+            print(f"  {exc}\n")
+            return
+        print(f"  removed from view · {item.external_key}")
+        print(
+            "  excluded from search, answers and the graph. Every version, chunk\n"
+            "  and byte is still stored, so /restore brings it back.\n"
+        )
+        return
+
+    scope = await deletion.scope_of_memory(factory, target.memory_id)
+    print()
+    print(f"  Permanently delete {target.preview!r}?")
+    print()
+    print(f"    {scope.memories} version(s) of this memory")
+    print(f"    {scope.chunks} chunk(s), {scope.embedded_chunks} with vectors")
+    print(f"    {scope.mentions} entity mention(s)", end="")
+    if scope.orphaned_entities:
+        print(
+            f", leaving {scope.orphaned_entities} entit"
+            f"{'y' if scope.orphaned_entities == 1 else 'ies'} the corpus will no "
+            f"longer know about"
+        )
+    else:
+        print()
+    if scope.tags:
+        print(f"    {scope.tags} tag(s)")
+    if scope.turns:
+        print(f"    {scope.turns} conversation turn(s) carrying its text")
+    if scope.evidence:
+        print(
+            f"    {scope.evidence} decision evidence link(s) — a decision will lose "
+            f"what it rested on"
+        )
+    print(f"    {scope.blobs} stored file(s)", end="")
+    print(f", and {scope.shared_blobs} kept because something else uses them"
+          if scope.shared_blobs else "")
+    print()
+    # The honest statement, and it is the API's own sentence rather than a second
+    # one written here. Two wordings of how much erasure this delivers is one
+    # wording too many, and the one that drifted would be whichever nobody read.
+    print(textwrap.fill(LOG_NOTE, width=84, initial_indent="  ", subsequent_indent="  "))
+    print()
+    answer = await asyncio.to_thread(input, "  type 'delete' to confirm: ")
+    if answer.strip().lower() != "delete":
+        print("  nothing was deleted.\n")
+        return
+
+    try:
+        report = await deletion.purge_memory(factory, container.blobs, target.memory_id)
+    except deletion.NoSuchMemory as exc:
+        print(f"  {exc}\n")
+        return
+    except deletion.BlobsSurvived as exc:
+        # The corpus *is* purged. Reported as the partial success it is rather than
+        # as a failure, because retrying would find nothing left to delete.
+        print(f"  {exc}\n")
+        return
+    print(
+        f"  deleted · {report.memories} version(s), {report.chunks} chunk(s), "
+        f"{report.mentions} mention(s), {report.turns} turn(s), "
+        f"{report.blobs_shredded} file(s)\n"
+    )
+
+
+async def _tag_from_chat(
+    container: Container, target: _Target, rest: str, *, removing: bool
+) -> None:
+    try:
+        parsed = tags.parse_required(rest)
+    except (tags.NoTags, tags.TooManyTags) as exc:
+        print(f"  {exc}\n")
+        return
+
+    factory = container.database.session_factory
+    async with factory() as session:
+        item = await deletion.item_of_memory(session, target.memory_id)
+
+    if removing:
+        removed = await tags.remove(
+            factory,
+            source_id=item.source_id,
+            external_key=item.external_key,
+            tags=parsed,
+        )
+        print(
+            f"  untagged · {' '.join(tag.display for tag in removed)}\n"
+            if removed
+            else "  none of those tags were on it\n"
+        )
+        return
+
+    report = await tags.apply(
+        factory, source_id=item.source_id, external_key=item.external_key, tags=parsed
+    )
+    if report.applied:
+        print(f"  tagged · {' '.join(tag.display for tag in report.applied)}")
+    if report.already:
+        print(f"  already had · {' '.join(tag.display for tag in report.already)}")
+    # The interesting half. A tag that joined an existing concept connects this
+    # memory to everything that concept already reaches; one that created a concept
+    # connects it to nothing yet, and saying so is the difference between organising
+    # and filing into the void.
+    joined = len(report.applied) - report.entities_created
+    if joined > 0:
+        print(f"  {joined} of them joined concepts the corpus already knew")
+    if report.entities_created:
+        print(f"  {report.entities_created} new concept(s)")
+    print()
+
+
+async def _print_filtered(
+    container: Container, session_id: UUID, rest: str
+) -> None:
+    """This conversation's turns carrying every named tag."""
+    parsed = tags.parse(rest)
+    if not parsed:
+        print("  /filter needs a tag, like /filter #idea.\n")
+        return
+    found = await chat_use_case.messages(
+        container.database.session_factory,
+        session_id,
+        tags=[tag.name for tag in parsed],
+    )
+    label = " ".join(tag.display for tag in parsed)
+    if not found:
+        print(f"  nothing in this conversation is tagged {label}.\n")
+        return
+    print(f"  {len(found)} turn(s) tagged {label}:")
+    for message in found:
+        print(f"    #{message.ordinal}  {message.content[:66]}")
+    print()
 
 
 async def _chat_turn(container: Container, chat: Chat, message: str) -> int:
@@ -5171,6 +5834,55 @@ def build_parser() -> argparse.ArgumentParser:
 
     source_commands.add_parser("list", help="list registered sources")
 
+    source_delete = source_commands.add_parser(
+        "delete", help="permanently delete a source and everything from it"
+    )
+    source_delete.add_argument("--name", required=True)
+    source_delete.add_argument(
+        "--yes",
+        action="store_true",
+        help="skip the confirmation. The counts are still printed.",
+    )
+    source_delete.add_argument(
+        "--keep-registration",
+        action="store_true",
+        help="delete the memories, keep the source and its config for a fresh sync",
+    )
+
+    source_reindex = source_commands.add_parser(
+        "reindex", help="re-parse, re-chunk and re-embed everything a source holds"
+    )
+    source_reindex.add_argument("--name", required=True)
+
+    source_export = source_commands.add_parser(
+        "export", help="write one source as JSON, with every version"
+    )
+    source_export.add_argument("--name", required=True)
+    source_export.add_argument("--out", type=Path, help="a file, or stdout if omitted")
+
+    export_parser = commands.add_parser(
+        "export",
+        help="everything you wrote, in a portable form, version history included",
+    )
+    export_parser.add_argument(
+        "--format",
+        choices=["json", "markdown"],
+        default="json",
+        help="json round-trips; markdown is for reading without this program",
+    )
+    export_parser.add_argument("--source", help="one source rather than the corpus")
+    export_parser.add_argument("--out", type=Path, help="a file, or stdout if omitted")
+
+    tags_parser = commands.add_parser("tags", help="every tag in use")
+    tags_parser.add_argument(
+        "--reconcile",
+        action="store_true",
+        help=(
+            "re-create the concept entity behind each tag. Needed after a replay, "
+            "which keeps tags and truncates entities."
+        ),
+    )
+
     sync = commands.add_parser("sync", help="sync a source now")
     sync.add_argument("--source", required=True, help="source name")
     sync.add_argument(
@@ -6328,7 +7040,32 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(
                 add_source(settings, kind=args.kind, name=args.name, root=args.root)
             )
+        if args.source_command == "delete":
+            return asyncio.run(
+                run_delete_source(
+                    settings,
+                    name=args.name,
+                    assume_yes=args.yes,
+                    keep_registration=args.keep_registration,
+                )
+            )
+        if args.source_command == "reindex":
+            return asyncio.run(run_reindex_source(settings, name=args.name))
+        if args.source_command == "export":
+            return asyncio.run(
+                run_export(settings, fmt="json", source=args.name, out=args.out)
+            )
         return asyncio.run(list_sources(settings))
+
+    if args.command == "export":
+        return asyncio.run(
+            run_export(
+                settings, fmt=args.format, source=args.source, out=args.out
+            )
+        )
+
+    if args.command == "tags":
+        return asyncio.run(run_tags(settings, reconcile=args.reconcile))
 
     if args.command == "sync":
         return asyncio.run(run_sync(settings, name=args.source, full=args.full))

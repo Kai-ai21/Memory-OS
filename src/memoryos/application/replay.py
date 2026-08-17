@@ -286,6 +286,23 @@ USER_AUTHORED_TABLES: frozenset[str] = frozenset(
         # Keyed on `external_key` and foreign-keyed only to `chat_messages`, so
         # the cascade from `memories` cannot reach it.
         "chat_attachments",
+        # M10.4's tags, and the least arguable member of this set since
+        # `query_judgements`. Nothing in the ingestion log says how somebody filed a
+        # thought. A tag is an assertion *about* an item, made by a person, and no
+        # rebuild produces one.
+        #
+        # Its schema was decided by that classification rather than the other way
+        # round, and twice. The obvious columns were `memory_id` and `entity_id`, and
+        # each would have destroyed the table on the next rebuild: `memories` is
+        # truncated, so the first is a cascade; `entities` is truncated *and* refilled
+        # only by extraction, which costs money, so the second is a cascade that
+        # would not even be repaired by re-running the pipeline. It carries
+        # `(source_id, external_key)` and a canonical name instead — the durable
+        # identity on both ends — so a replay leaves it entirely alone and
+        # `tags.reconcile` re-upserts the concepts from the names it kept.
+        #
+        # `sources` is its only foreign key, and that table is source of truth.
+        "memory_tags",
     }
 )
 
@@ -592,6 +609,12 @@ class ReplayReport:
     events: int = 0
     observed: int = 0
     deleted: int = 0
+    # M10.4. Purge events found in the log, and the events they caused this rebuild
+    # to skip. The second number is the one worth reporting: it says how much of the
+    # log deliberately did not become a corpus, which is otherwise indistinguishable
+    # from a rebuild that lost rows.
+    purged: int = 0
+    skipped_purged: int = 0
     memories: int = 0
     normalized: int = 0
     embedded: int = 0
@@ -618,6 +641,8 @@ class ReplayReport:
             "events": self.events,
             "observed": self.observed,
             "deleted": self.deleted,
+            "purged": self.purged,
+            "skipped_purged": self.skipped_purged,
             "memories": self.memories,
             "normalized": self.normalized,
             "embedded": self.embedded,
@@ -655,7 +680,7 @@ class PartialShadowReplay(ValueError):
 # rebuild silently omits that fact forever. A unit test asserts this set covers
 # the enum, so the omission fails the build instead.
 REPLAYABLE_EVENT_TYPES: frozenset[EventType] = frozenset(
-    {EventType.ARTIFACT_OBSERVED, EventType.ITEM_DELETED}
+    {EventType.ARTIFACT_OBSERVED, EventType.ITEM_DELETED, EventType.ITEM_PURGED}
 )
 
 
@@ -1071,13 +1096,29 @@ class ReplayCorpus:
         distinct artifact.
 
         Only for scopes that rebuild memories; the downstream stages read no blobs.
+
+        **Purged keys are exempt, as of M10.4, and the exemption is the feature
+        rather than a hole in the check.** A permanent deletion shreds the bytes on
+        purpose; the log keeps the observation that they existed. So an artifact that
+        is missing *because somebody deleted it* is the system working, and refusing
+        to start would mean the first permanent deletion made the corpus
+        unrebuildable — turning the guarantee this milestone delivers into one that
+        costs replay. The rebuild skips those events entirely, so it never asks for
+        the bytes.
+
+        The check is otherwise unchanged, and still fails first. An artifact missing
+        for any other reason is a blob store that lost a write, which is exactly
+        what this exists to catch before the truncate.
         """
         if self._blobs is None:
             return
 
+        purged = await self._purged_keys(scope, source_id)
         seen: set[str] = set()
         missing: list[tuple[str, str]] = []
         async for event in self._stream_events(scope, source_id):
+            if (event.source_id, event.external_key) in purged:
+                continue
             if event.content_hash is None or event.content_hash.value in seen:
                 continue
             seen.add(event.content_hash.value)
@@ -1281,9 +1322,28 @@ class ReplayCorpus:
         """
         normalize = self._make_normalize(sessions)
         embed = self._make_embed(sessions)
+        # Read before the first event is applied, because a purge at the end of the
+        # log has to suppress observations at the beginning of it. Streaming the log
+        # once and reacting to the purge when it arrives would rebuild the memory,
+        # chunk it, embed it and then delete it — which works, costs the full
+        # pipeline for content nobody kept, and requires the blob that was
+        # deliberately shredded. Two passes over one indexed column is the cheaper
+        # and the only correct order.
+        purged = await self._purged_keys(scope, source_id)
 
         async for event in self._stream_events(scope, source_id):
             report.events += 1
+
+            if (event.source_id, event.external_key) in purged:
+                # Everything about this key, not only the purge itself. The item was
+                # permanently deleted, so a faithful rebuild is one that does not
+                # contain it — and the log still says it was here, which is exactly
+                # the record a purge keeps and this loop reads.
+                if event.event_type is EventType.ITEM_PURGED:
+                    report.purged += 1
+                else:
+                    report.skipped_purged += 1
+                continue
 
             if event.event_type is EventType.ARTIFACT_OBSERVED:
                 memory_id = new_id()
@@ -1302,6 +1362,20 @@ class ReplayCorpus:
 
             if event.event_type is EventType.ITEM_DELETED:
                 await self._tombstone(sessions, event, report)
+                continue
+
+            if event.event_type is EventType.ITEM_PURGED:
+                # Unreachable: the pre-scan above catches every purge, including
+                # this one, so a purge reaching here means the two disagree about
+                # which keys were purged. Counted rather than raised, because the
+                # rebuild is still correct — the key simply was not skipped — and
+                # named so the branch is not mistaken for one nothing produces.
+                report.purged += 1
+                logger.warning(
+                    "replay.purge_outside_prescan",
+                    key=event.external_key,
+                    seq=event.seq,
+                )
                 continue
 
             # An event type this projection does not know how to apply. Silently
@@ -1364,6 +1438,37 @@ class ReplayCorpus:
         report.embedded += 1
         report.vectors_computed += outcome.cache_misses
         report.cache_hits += outcome.cache_hits
+
+    async def _purged_keys(
+        self, scope: ReplayScope, source_id: UUID | None
+    ) -> set[tuple[UUID, str]]:
+        """Every item a purge event names, within this scope.
+
+        **The set, not a stream, and that asymmetry is the point.** Everything else
+        about a replay is streamed because the log does not fit in memory; this is
+        one row per permanently deleted item, which is bounded by how much somebody
+        has deliberately deleted rather than by the size of the corpus. A corpus
+        with a million events and forty purges holds forty pairs here.
+
+        Scoped identically to `_stream_events`, so a source-scoped replay does not
+        suppress a key in another source that happens to share an external key —
+        `notes/queue.md` exists in more than one source, and the pair is the
+        identity for exactly that reason.
+        """
+        stmt = select(
+            models.IngestionEvent.source_id, models.IngestionEvent.external_key
+        ).where(
+            models.IngestionEvent.event_type == EventType.ITEM_PURGED.value,
+            models.IngestionEvent.seq > scope.after_seq,
+        )
+        if source_id is not None:
+            stmt = stmt.where(models.IngestionEvent.source_id == source_id)
+        async with self._sessions() as session:
+            rows = (await session.execute(stmt.distinct())).all()
+        keys = {(row[0], str(row[1])) for row in rows}
+        if keys:
+            logger.info("replay.purged_keys", items=len(keys))
+        return keys
 
     async def _stream_events(
         self, scope: ReplayScope, source_id: UUID | None

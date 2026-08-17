@@ -427,6 +427,14 @@ class SearchFilters:
     # the exact failure the ON DELETE CASCADE and the deletion guardrail exist
     # to prevent.
     include_deleted: bool = False
+    # M10.4. Canonical tag names — no `#` — that a memory must carry *all* of.
+    #
+    # Conjunctive, like `tags.items_with`, because two tags is somebody narrowing.
+    # Names rather than entity ids, for the reason `memory_tags` stores names: the
+    # entity behind a tag is derived and may be absent after a replay, and a filter
+    # that silently returned nothing whenever extraction had not been re-run would
+    # look exactly like a filter that works and a corpus that is empty.
+    tags: Sequence[str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
