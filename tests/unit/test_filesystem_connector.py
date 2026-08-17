@@ -254,6 +254,11 @@ async def test_the_walk_reports_hash_size_and_provenance(tmp_path: Path) -> None
 async def test_read_bytes_is_lazy_and_returns_the_content(tmp_path: Path) -> None:
     (tmp_path / "notes.md").write_text("hello")
     (item,) = await observe_all(make_source(tmp_path))
+    # A *walked* source always supplies one — the field is optional only for
+    # pushed sources, whose bytes are in the blob store before an item exists.
+    # Asserted rather than narrowed with a cast, because a connector that stopped
+    # supplying a reader would otherwise fail somewhere far from here.
+    assert item.read_bytes is not None
     assert await item.read_bytes() == b"hello"
 
 
