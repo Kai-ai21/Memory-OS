@@ -19,6 +19,11 @@ is untouched, and with an empty history the prompt this builds is byte-identical
 to the one it built before. The turns go into the question slot, labelled as not
 being evidence, which keeps rule 1 governing them: only the numbered passages may
 be cited, and a conversation is not a passage.
+
+The turns reach the *retrieval query* only for a question that cannot stand
+alone. That distinction was measured rather than designed: folding them in
+unconditionally turned a question whose answer sat at ranks one and two into a
+refusal. See `_retrieval_query`.
 """
 
 import time
@@ -38,6 +43,7 @@ from memoryos.application.ports import LanguageModel, SearchFilters, TokenCounte
 from memoryos.application.search import FusionWeights, SearchMemories
 from memoryos.domain.fusion import DEFAULT_RRF_K
 from memoryos.domain.grounding import VerificationResult, verify_citations
+from memoryos.domain.message_intent import refers_back
 
 logger = structlog.get_logger(__name__)
 
@@ -295,18 +301,23 @@ class AnswerQuestion:
 def _retrieval_query(question: str, history: Sequence[ConversationTurn]) -> str:
     """What is actually searched for.
 
-    The question, plus what was *typed* in the recent turns — never what was
-    answered. That asymmetry is the point and it is the same rule that keeps
-    answers out of the corpus, applied one step earlier: an answer is generated
-    prose, and letting generated prose steer the next retrieval is how a
-    conversation converges on whatever the model said first rather than on
-    what the corpus holds. The typed turns are a person's own words and are the
-    only thing that can resolve "the other one".
+    **The conversation is folded in only when the question cannot stand without
+    it**, and that condition was added after measuring the alternative. Folding
+    three turns into every query cost more than it bought: "why did I use
+    external_key instead of a memory id on the transcript?" asked with unrelated
+    turns attached returned passages the model declined to answer from, and the
+    identical question asked alone put the two thoughts that answer it at ranks
+    one and two. See `domain.message_intent.refers_back`.
 
-    Returns the question unchanged when there is no history, so a first question
-    embeds exactly what was asked.
+    When it does fold in, it folds in what was *typed* and never what was
+    answered. That asymmetry is the same rule that keeps answers out of the
+    corpus, applied one step earlier: an answer is generated prose, and letting
+    generated prose steer the next retrieval is how a conversation converges on
+    whatever the model said first rather than on what the corpus holds. The
+    typed turns are a person's own words and are the only thing that can resolve
+    "the other one".
     """
-    if not history:
+    if not history or not refers_back(question):
         return question
     return " ".join([*(_clip(turn.text) for turn in history), question])
 

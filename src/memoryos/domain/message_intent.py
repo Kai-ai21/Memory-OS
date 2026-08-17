@@ -196,6 +196,130 @@ _SUBJECT = (
 _SUBSTANTIAL_WORDS = 4
 
 
+# Words that point at something already said rather than naming it. A question
+# built only out of these cannot be retrieved on: there is nothing in it for an
+# embedding to be about.
+_DEICTIC = frozenset(
+    {
+        "it",
+        "its",
+        "that",
+        "this",
+        "those",
+        "these",
+        "them",
+        "they",
+        "one",
+        "ones",
+        "other",
+        "others",
+        "another",
+        "same",
+        "previous",
+        "latter",
+        "former",
+        "second",
+        "third",
+        "last",
+        "next",
+        "above",
+        "below",
+        "instead",
+        "again",
+        "more",
+        "else",
+    }
+)
+
+# Function words. Not a general stoplist — only what is needed to tell a question
+# that names something from one that points at something.
+_FUNCTION = frozenset(
+    {
+        *_INTERROGATIVE,
+        *_AUXILIARY,
+        "a",
+        "an",
+        "and",
+        "about",
+        "at",
+        "be",
+        "been",
+        "but",
+        "by",
+        "for",
+        "from",
+        "i",
+        "if",
+        "in",
+        "into",
+        "me",
+        "my",
+        "no",
+        "not",
+        "of",
+        "on",
+        "or",
+        "our",
+        "so",
+        "than",
+        "the",
+        "then",
+        "there",
+        "to",
+        "too",
+        "us",
+        "was",
+        "we",
+        "with",
+        "you",
+        "your",
+    }
+)
+
+# How many words a question has to name before it is judged able to stand alone.
+#
+# Two, and the number is doing something specific. One content word — "what about
+# latency?" — is a question that means much more in context than out of it, and
+# folding the conversation in costs little because the one word still dominates
+# the query. Three would start folding the conversation into questions that
+# clearly name their own subject.
+_STANDALONE_WORDS = 2
+
+_WORD = re.compile(r"[a-z0-9_]+")
+
+
+def refers_back(text: str) -> bool:
+    """Whether this question needs the conversation to be retrievable at all.
+
+    **Measured rather than assumed, and the measurement is why this exists.**
+    M10.0 first folded the last three turns into every retrieval query, on the
+    argument that "what about the other one?" is unanswerable without them. That
+    is true, and the cost of applying it unconditionally was larger than the
+    benefit: asked "why did I use external_key instead of a memory id on the
+    transcript?" with three turns of unrelated conversation attached, retrieval
+    returned passages the model declined to answer from — and the identical
+    question asked alone put the two thoughts that answer it at ranks one and
+    two. The conversation did not add context; it diluted a query that already
+    had all the context it needed.
+
+    So the rule is narrow: a question that *names* things is retrieved on its own
+    words, and only one that points at something without naming it borrows the
+    conversation. The prompt gets the turns either way — that is free, and it is
+    where a reference gets resolved for the model reading the passages.
+
+    Deliberately conservative in the same direction `classify` is. A false
+    "stands alone" costs a follow-up its context, which is visible immediately as
+    a bad answer to an obviously referential question. A false "refers back"
+    quietly degrades a query that was fine, which is the failure nobody sees.
+    """
+    named = [
+        word
+        for word in _WORD.findall(text.lower())
+        if word not in _FUNCTION and word not in _DEICTIC
+    ]
+    return len(named) < _STANDALONE_WORDS
+
+
 def classify(text: str) -> MessageIntent:
     """What to do with `text`.
 

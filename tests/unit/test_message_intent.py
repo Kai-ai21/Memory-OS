@@ -8,7 +8,7 @@ question-shaped verbs, or an unlucky full stop, and asserts they are stored.
 
 import pytest
 
-from memoryos.domain.message_intent import MessageIntent, classify
+from memoryos.domain.message_intent import MessageIntent, classify, refers_back
 
 STATEMENTS = [
     "postgres full-text search is faster than I expected",
@@ -122,3 +122,56 @@ def test_an_empty_message_is_not_a_question() -> None:
     """
     assert classify("") is MessageIntent.STATEMENT
     assert classify("   \n  ") is MessageIntent.STATEMENT
+
+
+# --------------------------------------------------------------------------
+# Whether a question can be retrieved on its own words
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The case conversational context exists for. Nothing here names
+        # anything; retrieval on these words alone returns the corpus.
+        "what about the other one?",
+        "why that?",
+        "and the second one?",
+        "what about it",
+        "is that the same?",
+        "why not the previous one",
+    ],
+)
+def test_a_question_that_points_needs_the_conversation(text: str) -> None:
+    assert refers_back(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The measured regression. Asked with three turns of unrelated
+        # conversation folded into the retrieval query, this returned passages
+        # the model declined to answer from; asked alone, the two thoughts that
+        # answer it came back at ranks one and two.
+        "why did I use external_key instead of a memory id on the transcript?",
+        "what did I say about postgres?",
+        "what have I said about the connection line?",
+        "why does the worker use SKIP LOCKED",
+        "show me what I said about indexing",
+    ],
+)
+def test_a_question_that_names_things_stands_alone(text: str) -> None:
+    assert refers_back(text) is False
+
+
+def test_the_bias_here_runs_the_opposite_way_to_classify() -> None:
+    """And the asymmetry is deliberate in both directions.
+
+    `classify` prefers storing, because losing a thought is unrecoverable. This
+    prefers *not* borrowing the conversation, because a query diluted by an
+    unrelated turn degrades silently — the results still look like results —
+    while a follow-up that lost its context is obviously wrong the moment it is
+    read. So a single named word is enough to stand alone.
+    """
+    assert refers_back("what about latency?") is True
+    assert refers_back("what about retrieval latency?") is False

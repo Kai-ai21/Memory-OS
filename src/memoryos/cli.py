@@ -708,21 +708,30 @@ async def _chat_turn(container: Container, chat: Chat, message: str) -> int:
         print(f"the language model could not answer: {exc}")
         return 1
 
-    _print_turn(turn)
+    note: str | None = None
     if turn.memory_id is not None:
         # One look, not a poll. In a one-shot command there is no "later" to
         # show the line in, and blocking on a worker that may not be running
-        # would hang the command rather than inform it.
-        await _report_connections(container, [turn.memory_id])
+        # would hang the command rather than inform it. So the line says which
+        # state it is in — including "not yet", which is the usual one here and
+        # is a fact rather than a placeholder.
+        found = await chat_use_case.status(
+            container.database.session_factory, turn.memory_id
+        )
+        if found is not None:
+            note = format_connections(found)
+    _print_turn(turn, note=note)
     # Non-zero only for an answer that cited badly, matching `ask`. A refusal is
     # grounded — it makes no factual claims — so it exits 0, and a script that
     # treated the guardrail firing as a fault would be measuring it as a fault.
     return 1 if turn.grounded is False else 0
 
 
-def _print_turn(turn: ChatTurn) -> None:
+def _print_turn(turn: ChatTurn, *, note: str | None = None) -> None:
     if turn.stored:
         print(f"  stored · {turn.intent.value} · memory {turn.memory_id}")
+        if note:
+            print(f"  {note}")
     if turn.answer is None:
         if turn.stored:
             print()
@@ -771,12 +780,17 @@ def format_connections(status: chat_use_case.MessageStatus) -> str:
     """The line that is the whole product.
 
     "Stored. Connects to 3 earlier memories via `postgres`, `indexing`." — and
-    the negative case said plainly rather than omitted, because a line that only
-    ever appears when there is something to say leaves the reader unable to tell
-    "nothing connected" from "the line has not arrived yet".
+    every other state said plainly rather than omitted, because a line that only
+    appears when there is something to say leaves the reader unable to tell
+    "nothing connected" from "the line has not arrived yet". Four states, matched
+    to `web/src/lib/connections.ts`, which draws the same sentence.
     """
+    if not status.searchable:
+        return "indexing — not searchable yet; run `memoryos worker --drain`"
+    if not status.extracted:
+        return "searchable · still looking for what it connects to"
     if not status.connections:
-        return "connects to nothing yet — no entity here appears in an earlier memory"
+        return "searchable · nothing here appears in an earlier memory yet"
     named = ", ".join(
         connection.name
         for connection in status.connections[:chat_use_case.CONNECTION_ENTITIES]

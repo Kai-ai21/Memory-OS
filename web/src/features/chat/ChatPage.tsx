@@ -209,6 +209,14 @@ function StoredLine({ memoryId }: { memoryId: string }) {
     // records the attempt, so a one-line thought that mentions nothing settles
     // rather than polling for an entity that is never coming.
     refetchInterval: (query) => (query.state.data?.extracted ? false : POLL_MS),
+    // And it keeps polling while the tab is in the background, which the
+    // default does not. The connection line is the thing this milestone is for,
+    // and it arrives seconds late by design; somebody who sends a thought and
+    // switches away is the normal case rather than the edge one, and
+    // `refetchOnWindowFocus` alone leaves the line stale until they come back.
+    // Safe because the interval above already terminates itself — this widens
+    // *when* it polls, never *for how long*.
+    refetchIntervalInBackground: true,
   });
 
   if (status.isError) return null;
@@ -322,7 +330,12 @@ function Composer({
 
   return (
     <form
-      className="sticky bottom-0 flex flex-col gap-1 bg-page pt-2"
+      // `bg-paper` and not `bg-page`: the page background token is `--color-paper`,
+      // and a class naming a token that does not exist compiles to nothing — which
+      // makes a sticky element transparent, so the messages scroll visibly through
+      // the box you are typing into. The rule above it is what separates the
+      // composer from the last message now that it sits over them.
+      className="sticky bottom-0 flex flex-col gap-1 border-t border-rule-strong bg-paper pt-2 pb-3"
       onSubmit={(event) => {
         event.preventDefault();
         submit();
