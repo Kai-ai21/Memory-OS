@@ -94,6 +94,25 @@ export function useAnswerStream() {
       for await (const frame of ask({ question, sessionId, signal: controller.signal })) {
         setState((was) => reduce(was, frame));
       }
+      // **A stream can end without saying anything**, and that is what killing
+      // the API mid-answer actually looks like: the socket closes, the body is
+      // incomplete, and the reader reports a clean end-of-stream with no error to
+      // catch. Measured — SIGKILL during retrieval produced zero tokens, no
+      // `done`, and no exception.
+      //
+      // So the absence of `done` is itself the signal. Without this the state
+      // would sit at `running: true` forever with no mark on it, which is
+      // precisely the "left looking complete" failure this milestone forbids.
+      setState((was) =>
+        was.done || was.interrupted
+          ? was
+          : {
+              ...was,
+              running: false,
+              searching: false,
+              interrupted: "the connection to the server closed before the answer finished",
+            },
+      );
     } catch (error) {
       if (controller.signal.aborted) return;
       // The fetch itself failed — the API is gone, or the socket dropped before

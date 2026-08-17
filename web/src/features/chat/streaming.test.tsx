@@ -132,6 +132,43 @@ describe("how it ends", () => {
   });
 });
 
+describe("a stream that just stops", () => {
+  it("is interrupted, because the absence of `done` is the only signal", async () => {
+    // What killing the API mid-answer actually looks like, measured rather than
+    // imagined: the socket closes, the body is incomplete, and the reader reports
+    // a clean end with no error to catch. Without treating a missing `done` as an
+    // interruption the state sits at `running: true` forever with no mark — the
+    // "left looking complete" failure this milestone forbids.
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            'event: token\ndata: {"text": "Postgres full-text "}\n\n',
+          ),
+        );
+        // No `done`, no `error`. Just the end.
+        controller.close();
+      },
+    });
+
+    const seen = [];
+    for await (const frame of frames(stream)) seen.push(frame);
+
+    expect(seen.map((frame) => frame.event)).toEqual(["token"]);
+    expect(seen.some((frame) => frame.event === "done")).toBe(false);
+  });
+
+  it("draws the partial text with a mark, not as an answer", () => {
+    draw({
+      text: "Postgres full-text ",
+      interrupted: "the connection to the server closed before the answer finished",
+    });
+    expect(screen.getByTestId("answer-text")).toHaveTextContent("Postgres full-text");
+    expect(screen.getByTestId("interrupted")).toHaveTextContent(/incomplete/i);
+    expect(screen.getByText("interrupted")).toBeInTheDocument();
+  });
+});
+
 describe("frame parsing", () => {
   async function collect(chunks: string[]) {
     const stream = new ReadableStream<Uint8Array>({

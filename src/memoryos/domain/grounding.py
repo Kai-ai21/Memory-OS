@@ -33,7 +33,18 @@ from dataclasses import dataclass, field
 
 # `[3]` or `[1, 2]` or `[1][2]`. Bare digits so ordinary prose brackets do not
 # register — a passage number is the only thing this system puts in brackets.
-_CITATION = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+#
+# **Fullwidth brackets count too**, and that was measured rather than anticipated.
+# `openai/gpt-oss-120b` cites with `\u30101\u3011` — CJK lenticular brackets — however
+# firmly the prompt writes `[1]`, and against a pattern that knew only ASCII every
+# one of those answers scored 0% cited. Which is the worst possible direction for
+# this check to fail in: a correctly-cited answer reported as ungrounded trains a
+# reader to ignore the mark, and the mark is the only thing standing between them
+# and a fabrication.
+#
+# The prompt still asks for `[1]`. This is the verifier being able to read what
+# the model actually sent, which is not the same thing as approving of it.
+_CITATION = re.compile(r"[\[\u3010](\d+(?:\s*,\s*\d+)*)[\]\u3011]")
 
 # Sentence boundaries: terminal punctuation followed by whitespace, or a line
 # break. Deliberately simple. A full sentence splitter would be more accurate
