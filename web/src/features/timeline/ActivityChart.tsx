@@ -92,12 +92,46 @@ export function ActivityChart({
       {/* The plot. `items-end` so bars grow from the axis upward. */}
       <div
         ref={bars}
-        className="flex h-44 items-end gap-px border-b border-rule-strong"
+        className="relative flex h-44 items-end gap-px border-b border-rule-strong"
         onKeyDown={onKeyDown}
         role="group"
         aria-label="activity per period"
         data-testid="activity-chart"
       >
+        {/* The gap band, over the plot rather than in a lane under it.
+            **This is the most important element on the timeline.** M4.0's whole
+            argument is that absence is the signal, and a thin hatched strip
+            below the axis makes it a footnote to the bars — the opposite of
+            that argument. Drawn at full chart height, in magenta, dashed, it is
+            the first thing the eye lands on, which is correct: a month with
+            nothing in it is more interesting than a month with forty things.
+            Dashed because a dashed boundary is the drawing convention for a
+            region that is inferred rather than measured, and magenta because
+            that is this palette's colour for what the system does not have. */}
+        {gaps.map((gap) => {
+          const from = clamp((Date.parse(gap.start) - windowStart) / span);
+          const to = clamp((Date.parse(gap.end) - windowStart) / span);
+          const width = Math.max(to - from, 0.01);
+          return (
+            <span
+              key={`${gap.source_name}-${gap.start}`}
+              className="gap-band pointer-events-none absolute inset-y-0 z-10 flex items-center justify-center"
+              style={{ left: `${from * 100}%`, width: `${width * 100}%` }}
+              title={`gap of ${gap.days.toFixed(1)} days — ${gap.before.external_key} then nothing until ${gap.after.external_key}`}
+              data-testid="gap-marker"
+              data-days={gap.days}
+            >
+              {/* Labelled inside the band when there is room for the words, and
+                  only then: a label wider than the region it names points at
+                  the wrong part of the chart. */}
+              {width > 0.12 ? (
+                <span className="meta-label whitespace-nowrap text-magenta">
+                  {Math.round(gap.days)} day gap
+                </span>
+              ) : null}
+            </span>
+          );
+        })}
         {buckets.map((bucket) => {
           const isSelected = bucket.start === selected;
           const empty = bucket.count === 0;
@@ -113,7 +147,7 @@ export function ActivityChart({
               data-bucket={bucket.start}
               data-count={bucket.count}
               className={`group relative flex h-full min-w-1.5 flex-1 cursor-pointer flex-col justify-end ${
-                isSelected ? "bg-accent/12" : "hover:bg-sunken"
+                isSelected ? "bg-cyan/12" : "hover:bg-glass"
               }`}
             >
               {/* The count sits directly above its own bar rather than at the
@@ -148,7 +182,7 @@ export function ActivityChart({
                       // and this interface spends its one accent on the matched
                       // -span highlight. 70% puts the bars back in the register
                       // of ink on paper without losing the categorical read.
-                      className="opacity-70"
+                      className="opacity-90 shadow-[0_0_10px_currentColor]"
                       style={{
                         height: `${((bucket.by_kind?.[kind] ?? 0) / bucket.count) * 100}%`,
                         backgroundColor: kindColor(kind),
@@ -159,24 +193,6 @@ export function ActivityChart({
                 </span>
               )}
             </button>
-          );
-        })}
-      </div>
-
-      {/* The gap lane. Positioned in real time across the same window as the
-          bars above it, so a gap lines up with the hollow it explains. */}
-      <div className="relative h-5 border-b border-rule" data-testid="gap-lane">
-        {gaps.map((gap) => {
-          const from = clamp((Date.parse(gap.start) - windowStart) / span);
-          const to = clamp((Date.parse(gap.end) - windowStart) / span);
-          return (
-            <span
-              key={`${gap.source_name}-${gap.start}`}
-              className="hatch absolute top-1 h-3 border-x border-deny/50 opacity-70"
-              style={{ left: `${from * 100}%`, width: `${Math.max(to - from, 0.004) * 100}%` }}
-              title={`gap of ${gap.days.toFixed(1)} days — ${gap.before.external_key} then nothing until ${gap.after.external_key}`}
-              data-testid="gap-marker"
-            />
           );
         })}
       </div>
