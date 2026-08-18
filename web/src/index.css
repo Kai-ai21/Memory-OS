@@ -126,6 +126,26 @@
     box-shadow: inset 2px 0 0 0 var(--color-ink);
   }
 
+  /* The one raised object in the application, and it lives on the landing page.
+   *
+   * Everything inside the app is a hairline on a flat ground — see the header
+   * of this file — and that rule holds because nothing competes with it. The
+   * landing page is the one screen where a panel is not sitting on paper but
+   * floating over a moving canvas, and a 1px rule against drifting ink reads as
+   * a shape the background happens to be making rather than as an object in
+   * front of it. A shadow is what says "this is nearer to you than that is".
+   *
+   * **Ink at low alpha, not black.** A neutral-black drop shadow on a warm
+   * white ground goes grey and dirty; the same shadow in the ink the type is
+   * drawn in stays the same temperature as the rest of the page. Two layers: a
+   * tight one for the edge and a wide, lifted one for the float.
+   */
+  .panel-raised {
+    box-shadow:
+      0 1px 2px 0 rgb(15 23 42 / 5%),
+      0 16px 40px -12px rgb(15 23 42 / 12%);
+  }
+
   /* --- The one glass element ----------------------------------------------
    * NEW CONVERSATION, and nothing else, ever, until we decide otherwise
    * deliberately.

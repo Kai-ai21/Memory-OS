@@ -24,7 +24,7 @@ import { BackgroundLayer } from ".";
 import { AMBIENT_ALPHA_MAX, AMBIENT_COUNT, AmbientLayer } from "./ambient";
 import { CURSOR_ALPHA_MAX, CursorLayer, EMIT_DISTANCE, MAX_PARTICLES } from "./cursor";
 import { INK_FALLBACK } from "./field";
-import { noise3 } from "./noise";
+import { noise3 } from "../../lib/noise";
 
 /* --- The environment the component reads ---------------------------------- */
 
@@ -280,6 +280,9 @@ describe("the ambient layer", () => {
 
 describe("the flow field both layers ride", () => {
   it("is deterministic and stays in range", () => {
+    // The noise moved to `lib` in M9.4 so the landing page could sample it
+    // without importing from this directory. Asserted from here as well as
+    // there: this is the caller whose look depends on it being reproducible.
     // Seeded from a constant so "why does it look like that" has an answer. A
     // random seed would make the field unreproducible between two loads of the
     // same page.

@@ -9,45 +9,17 @@
  */
 
 /**
- * The particle colour, read off `--color-ink` at sprite time.
- *
- * **Ink, not black.** Pure black on a warm white ground reads as a hole punched
- * in the paper rather than as smoke over it; the ink token is the same darkness
- * the type is, so the field looks like it belongs to the same document.
+ * The particle colour.
  *
  * Read from the stylesheet rather than written here, because a canvas cannot
  * take a `var()` and a copied literal is a colour that stays behind when the
- * palette is revised — which this palette has now been twice. The fallback is
- * the token's current value, kept in channel form so it is one string to
- * update and not a second definition of the colour.
+ * palette is revised. The reader moved to `lib/tokens` in M9.4 when the landing
+ * page needed the same trick for `--color-ground`; it is re-exported here so
+ * the tests in this directory still name their own module.
  */
-export const INK_FALLBACK = "15, 23, 42";
+import { INK_FALLBACK, readInk } from "../../lib/tokens";
 
-export function readInk(): string {
-  if (typeof window === "undefined" || typeof getComputedStyle !== "function") {
-    return INK_FALLBACK;
-  }
-  const declared = getComputedStyle(document.documentElement)
-    .getPropertyValue("--color-ink")
-    .trim();
-
-  // Hex in the token file today, but a browser may hand back `rgb(...)` and a
-  // future revision may declare one; both are cheap to accept and the cost of
-  // not accepting them is a silently wrong colour.
-  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(declared);
-  if (hex) {
-    const digits =
-      hex[1].length === 3
-        ? hex[1].split("").map((digit) => digit + digit)
-        : [hex[1].slice(0, 2), hex[1].slice(2, 4), hex[1].slice(4, 6)];
-    return digits.map((pair) => parseInt(pair, 16)).join(", ");
-  }
-
-  const channels = declared.match(/\d+(\.\d+)?/g);
-  if (channels && channels.length >= 3) return channels.slice(0, 3).join(", ");
-
-  return INK_FALLBACK;
-}
+export { INK_FALLBACK, readInk };
 
 /** Anything with a position, a size and an opacity. Both layers draw as these. */
 export interface Drawable {
