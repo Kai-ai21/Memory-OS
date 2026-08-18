@@ -159,7 +159,7 @@ export function ResultRow({
         {hidden > 0 ? (
           <button
             type="button"
-            className="meta text-amber hover:text-amber-bright"
+            className="meta text-accent hover:text-accent-bright"
             onClick={() => setShowAllChunks(true)}
           >
             + {hidden} more matched {hidden === 1 ? "chunk" : "chunks"} in this memory
@@ -217,7 +217,7 @@ function ChunkBlock({
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
         <button
           type="button"
-          className="meta text-amber hover:text-amber-bright"
+          className="meta text-accent hover:text-accent-bright"
           onClick={onToggle}
           aria-expanded={expanded}
         >
@@ -229,7 +229,7 @@ function ChunkBlock({
             the function it came from rather than only the file. */}
         {definition ? (
           <span
-            className="meta min-w-0 max-w-full truncate text-amber"
+            className="meta min-w-0 max-w-full truncate text-accent"
             data-testid="definition"
             title={`${definition}()`}
           >

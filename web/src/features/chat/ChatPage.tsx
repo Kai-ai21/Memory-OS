@@ -234,7 +234,7 @@ export function ChatPage() {
         {active !== null && messages.data?.length === 0 && filter ? (
           <Empty title="Nothing in this conversation matches">
             This is a substring filter over the messages in front of you.{" "}
-            <Link to={`/search?q=${encodeURIComponent(filter)}`} className="text-amber underline">
+            <Link to={`/search?q=${encodeURIComponent(filter)}`} className="text-accent underline">
               Search the whole corpus
             </Link>{" "}
             instead — that one is semantic and reaches everything, not just this
@@ -259,7 +259,7 @@ export function ChatPage() {
 
         <div ref={bottom} />
         {command.note ? (
-          <p className="meta text-amber" role="status" data-testid="command-note">
+          <p className="meta text-accent" role="status" data-testid="command-note">
             {command.note}
           </p>
         ) : null}
@@ -321,7 +321,7 @@ function Filter({ sessionId }: { sessionId: string }) {
           setParams(next, { replace: true });
         }}
       />
-      <Link to="/search" className="meta shrink-0 text-faint hover:text-amber">
+      <Link to="/search" className="meta shrink-0 text-faint hover:text-accent">
         search the corpus
       </Link>
     </div>
@@ -337,7 +337,7 @@ function Preamble() {
         everything else that talks about the same things. Ask a question and it
         is answered from all of it, citing the passages it used. This is
         something you talk to, which can also{" "}
-        <Link to="/sources" className="text-amber underline">
+        <Link to="/sources" className="text-accent underline">
           read your files
         </Link>
         .
@@ -379,7 +379,7 @@ function Turn({ message }: { message: ChatMessage }) {
           </span>
         ) : null}
         {message.corrects ? (
-          <span className="meta text-amber" data-testid="correction">
+          <span className="meta text-accent" data-testid="correction">
             corrects an earlier message
           </span>
         ) : null}
@@ -441,7 +441,7 @@ function TagChips({ tags }: { tags: string[] }) {
         <li key={tag}>
           <Link
             to={`/search?tag=${encodeURIComponent(tag.replace(/^#/, ""))}`}
-            className="meta font-mono text-muted hover:text-amber"
+            className="meta font-mono text-muted hover:text-accent"
           >
             {tag}
           </Link>
@@ -480,7 +480,7 @@ function IntentMark({ message }: { message: ChatMessage }) {
     <span className="relative">
       <button
         type="button"
-        className="meta text-faint underline decoration-dotted underline-offset-2 hover:text-amber"
+        className="meta text-faint underline decoration-dotted underline-offset-2 hover:text-accent"
         aria-expanded={open}
         onClick={() => setOpen((was) => !was)}
       >
@@ -490,7 +490,7 @@ function IntentMark({ message }: { message: ChatMessage }) {
         <span className="meta mt-1 block max-w-prose text-muted">
           {why[message.intent]}{" "}
           {message.memory_id ? (
-            <Link to={`/memory/${message.memory_id}`} className="text-amber underline">
+            <Link to={`/memory/${message.memory_id}`} className="text-accent underline">
               open the memory
             </Link>
           ) : null}
@@ -532,7 +532,7 @@ function StoredLine({ memoryId }: { memoryId: string }) {
 
   return (
     <p className="meta text-faint" data-testid="connection-line">
-      <Link to={`/memory/${memoryId}`} className="hover:text-amber hover:underline">
+      <Link to={`/memory/${memoryId}`} className="hover:text-accent hover:underline">
         stored
       </Link>
       {" · "}
@@ -574,7 +574,7 @@ function Answer({ message }: { message: ChatMessage }) {
               {citation.memory_id ? (
                 <Link
                   to={`/memory/${citation.memory_id}`}
-                  className="meta font-mono text-ink hover:text-amber hover:underline"
+                  className="meta font-mono text-ink hover:text-accent hover:underline"
                 >
                   {citation.locator}
                 </Link>
@@ -653,12 +653,12 @@ function Composer({
 
   return (
     <form
-      // `bg-paper` and not `bg-page`: the page background token is `--color-paper`,
+      // `bg-void` and not `bg-page`: the page background token is `--color-void`,
       // and a class naming a token that does not exist compiles to nothing — which
       // makes a sticky element transparent, so the messages scroll visibly through
       // the box you are typing into.
-      className={`sticky bottom-0 flex flex-col gap-1 border-t bg-paper pt-2 pb-3 ${
-        over ? "border-amber-bright" : "border-rule-strong"
+      className={`sticky bottom-0 flex flex-col gap-1 border-t bg-void pt-2 pb-3 ${
+        over ? "border-accent-bright" : "border-rule-strong"
       }`}
       onSubmit={(event) => {
         event.preventDefault();
@@ -706,7 +706,7 @@ function Composer({
         </label>
         <button
           type="button"
-          className="meta text-faint hover:text-amber"
+          className="meta text-faint hover:text-accent"
           onClick={() => picker.current?.click()}
           // The clip is the discoverable half; the drop zone is the fast half.
           // Both, because a person who has never dropped a file into a text box

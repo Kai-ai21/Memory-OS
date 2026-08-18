@@ -82,7 +82,7 @@ export function OutcomeQueue() {
     <div className="flex flex-col gap-4">
       <SectionHeading
         right={
-          <Link className="text-amber underline" to="/decisions">
+          <Link className="text-accent underline" to="/decisions">
             decisions
           </Link>
         }
@@ -94,7 +94,7 @@ export function OutcomeQueue() {
         <div className="meta flex flex-wrap gap-4 text-faint">
           <span className="text-affirm">{rate.data.worked} worked</span>
           <span className="text-deny">{rate.data.failed} failed</span>
-          <span className="text-amber">{rate.data.mixed} mixed</span>
+          <span className="text-accent">{rate.data.mixed} mixed</span>
           {/* Outside the rate, and said so. A decision it is too soon to judge
               and a decision nobody has looked at are different facts, and
               neither is a failure. */}
@@ -116,7 +116,7 @@ export function OutcomeQueue() {
               type="button"
               onClick={() => setStatus(value)}
               className={
-                value === status ? "text-amber underline" : "text-muted hover:text-ink"
+                value === status ? "text-accent underline" : "text-muted hover:text-ink"
               }
             >
               {value}
@@ -124,7 +124,7 @@ export function OutcomeQueue() {
           ))}
         </span>
         {byTime > 0 ? (
-          <span className="text-amber">
+          <span className="text-accent">
             {byTime} found by time alone — nothing extracted for that decision&apos;s
             evidence
           </span>
@@ -179,7 +179,7 @@ function CandidateRow({
         <div className="flex flex-col gap-2">
           <p className="meta-label text-muted">the decision</p>
           <Link
-            className="prose-content text-sm text-amber"
+            className="prose-content text-sm text-accent"
             to={`/decisions/${row.decision_id}`}
           >
             {row.decision_question}
@@ -205,14 +205,14 @@ function CandidateRow({
           </span>
           {/* The whole basis of the claim, in one line, before the passage. */}
           <p className="meta text-ink">
-            <span className="text-amber">{describeGap(row.gap_days)} later</span>
+            <span className="text-accent">{describeGap(row.gap_days)} later</span>
             <span className="text-faint">
               {" "}
               · window {Math.round(row.window_days)}d ·{" "}
               {row.entity_filter === "applied" ? (
                 <>shares {row.shared_entities.join(", ") || "—"}</>
               ) : (
-                <span className="text-amber">
+                <span className="text-accent">
                   entity filter unavailable: found by time alone
                 </span>
               )}

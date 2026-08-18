@@ -1,140 +1,286 @@
 /* The design system, as values. Nothing in this file draws anything.
  *
- * Every colour, face and step the interface uses is declared here and nowhere
- * else. A colour hardcoded in a component is a colour that will not change when
- * the palette is revised, and this project has enough surface — fourteen views —
- * that "revise the palette" has to be one edit rather than fourteen.
+ * Every colour, face, radius and step the interface uses is declared here and
+ * nowhere else. A colour hardcoded in a component is a colour that will not
+ * change when the palette is revised, and this project has enough surface —
+ * fifteen views — that "revise the palette" has to be one edit rather than
+ * fifteen. Checked mechanically: there is not one hex literal under `src/`.
  *
- * THE CHARACTER: a well-made reading application. Not a dashboard. The corpus is
- * prose and code that somebody reads and judges, so the interface is built like
- * a printed reference — ruled sheets, generous margins, strong typographic
- * hierarchy, one accent — rather than like a control panel of cards and pills.
+ * THE CHARACTER: **Luminous Architecture** — a HUD suspended in deep space.
+ * Depth comes from refraction rather than from shadow: a dark, coloured void,
+ * soft radial glows drifting behind everything, and panels of translucent glass
+ * that blur what is behind them. The glow is not decoration. It is the only
+ * thing a translucent panel has to be translucent *of*; remove it and every
+ * `backdrop-filter` in the application becomes an expensive no-op and the
+ * panels read as flat grey boxes. See `.glass` and `--glow-*` below.
  *
- * GROUND — warm, and committed to throughout. `paper` is a bone white rather
- * than #fff, `ink` is a warm near-black rather than #000. Pure white behind
- * small dense text is glary under a lamp, and warm neutrals make the single
- * accent read as ink on paper instead of as a UI colour. Every neutral in the
- * scale carries the same hue, so nothing on screen reads as cool by accident.
+ * This replaced Archival Precision — warm paper, Fraunces, Source Serif, one
+ * amber accent — wholesale at M9. The two share no value. What survived is the
+ * *shape* of this file: role names rather than colour names, so that `text-ink`
+ * meant near-black on bone and now means white on void without a component
+ * knowing either. That is why the swap touched thirty files and not three
+ * hundred.
+ *
+ * GROUND — a five-step scale from the void up. `void` is the page itself, and
+ * is the one surface that is fully opaque; everything above it is white at a
+ * low alpha so that the glows behind show through and the stack reads as
+ * stacked. Alpha rather than mixed opaque values, because the same panel sits
+ * over a cyan glow in one corner and a magenta one in the other and has to be
+ * tinted by whichever it is over.
  *
  * TYPE — three faces, three jobs, distinguishable at a glance:
- *   display   Fraunces. Page titles and the wordmark only. It has real character
- *             — soft terminals, a slight wonk — which is what keeps the
- *             interface from reading as generic, and it is confined to a dozen
- *             elements so that character never becomes noise.
- *   content   Source Serif 4. The thing being *read*: chunk text, statements,
- *             answers. A serif because it is content rather than instrument.
- *   mono      JetBrains Mono. Paths, scores, offsets, hashes, labels, code.
- *             Tabular figures, so a column of scores compares vertically.
+ *   display   Space Grotesk. Page titles and the wordmark. Geometric and a
+ *             little technical, which is what keeps the headings from reading
+ *             as a generic dashboard.
+ *   prose     Inter. The thing being *read*: chunk text, answers, statements.
+ *             Chosen by the design system for legibility through translucency,
+ *             which is a real constraint here — body text sits on glass over a
+ *             moving gradient.
+ *   mono      JetBrains Mono. Paths, scores, offsets, labels, code, and every
+ *             uppercase micro-label in the interface. Tabular figures, so a
+ *             column of scores compares vertically.
  *
- * ACCENT — one amber, spent almost entirely on the matched-span highlight and on
- * interaction. That highlight is the most important element in the product: it
- * is what makes a search result legible without reading it. Everything else
- * stays neutral so the amber never has to compete for attention with a button.
+ * ACCENT — two, and they are not interchangeable. Cyan is the system speaking
+ * about *what it found*: matches, active nav, scores, primary actions. Magenta
+ * is the system speaking about *what it does not have*: a refusal, a gap in the
+ * timeline, a signal that is switched off. Learning that distinction once makes
+ * several screens readable at a glance, so nothing is allowed to blur it — a
+ * magenta button, or a cyan gap band, would cost more than it looks like.
  */
 
 /* Self-hosted, because this is a local-first tool that has to work with no
- * network. One file rather than the package's whole subset set: the corpus and
- * the interface are English, and shipping Cyrillic and Vietnamese to a browser
- * that will never request them is dead weight in `dist`. */
+ * network. The design's own export links Google Fonts; that is a CDN request
+ * per page load and a blank heading on a train.
+ *
+ * Latin only, declared by hand rather than by importing the packages' index
+ * files. `@fontsource-variable/inter` ships fourteen subsets — Cyrillic, Greek,
+ * Vietnamese — and Vite emits every one it sees into `dist`. The corpus and the
+ * interface are English, and shipping alphabets no browser here will request is
+ * dead weight measured in hundreds of kilobytes. */
 @font-face {
-  font-family: "Fraunces Variable";
+  font-family: "Space Grotesk Variable";
   font-style: normal;
   font-display: swap;
-  font-weight: 100 900;
-  src: url("@fontsource-variable/fraunces/files/fraunces-latin-wght-normal.woff2")
+  font-weight: 300 700;
+  src: url("@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2")
     format("woff2-variations");
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
     U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191,
     U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
-@import "@fontsource/jetbrains-mono/400.css";
-@import "@fontsource/jetbrains-mono/500.css";
-@import "@fontsource/jetbrains-mono/700.css";
-@import "@fontsource-variable/source-serif-4";
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("@fontsource-variable/inter/files/inter-latin-wght-normal.woff2")
+    format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
 
+/* Three weights rather than a variable face: JetBrains Mono ships static files,
+ * and the interface uses exactly 400 for text, 500 for labels and 700 for the
+ * wordmark. Declared by hand for the same subset reason as above — the
+ * package's own CSS pulls latin-ext and a `.woff` fallback for every weight,
+ * which was six files nothing asked for. */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2")
+    format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url("@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2")
+    format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 700;
+  src: url("@fontsource/jetbrains-mono/files/jetbrains-mono-latin-700-normal.woff2")
+    format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* Tailwind v4 has no `tailwind.config.js`. `@theme` *is* the config: every
+ * custom property declared here both exists as a CSS variable and generates the
+ * matching utility, so `--color-cyan` gives `text-cyan`, `bg-cyan`,
+ * `border-cyan` and the rest for free. One declaration, both consumers, and no
+ * way for a JavaScript config and a stylesheet to drift apart. */
 @theme {
-  /* --- Ground ------------------------------------------------------------
-   * A four-step surface scale and two rules. Four rather than the two this
-   * had before Phase 9, because the shell introduced a persistent sidebar and
-   * a modal, and both need to sit *behind* or *above* the page without a drop
-   * shadow doing the work. `sunken` is the sidebar and code blocks; `raised`
-   * is anything the reader is meant to act on; `float` is the command palette,
-   * the only surface that overlaps another.
+  /* --- The void ----------------------------------------------------------
+   * The one opaque surface. Everything else is white at an alpha over this, so
+   * the radial glows painted on the shell tint the whole stack.
    */
-  --color-paper: #f6f3ec;
-  --color-raised: #fffdf7;
-  --color-sunken: #efeae0;
-  --color-float: #fffdf7;
-  /* The sidebar. Between `paper` and `sunken`, and opaque rather than an alpha
-   * of either: the same element is the mobile drawer, where anything
-   * translucent shows the article through the navigation. */
-  --color-nav: #f2eee6;
-  --color-rule: #ded6c6;
-  --color-rule-strong: #c8bda7;
-  /* The scrim behind the palette. Warm and weak: a black 50% wash would put a
-   * cool grey over every neutral on the page and break the temperature rule
-   * the moment the dialog opens. */
-  --color-scrim: color-mix(in oklab, #24211b 34%, transparent);
+  --color-void: #101415;
+  /* One step below the void, for anything recessed *into* the page rather than
+   * floating over it: code blocks, the inside of an input, the explanation
+   * panel's well. The design draws these as `bg-black/20` over glass. */
+  --color-sunken: #0b0f10;
+
+  /* --- The glass stack ---------------------------------------------------
+   * Three levels, matching the design system's elevation model. Level 2 is
+   * every panel; level 3 is the two things that overlap another surface (the
+   * command palette, the mobile drawer) and is brighter and more blurred to
+   * read as closer. `nav` is the sidebar, which is glass over the void at the
+   * screen edge.
+   */
+  --color-glass: rgb(255 255 255 / 3%);
+  --color-glass-bright: rgb(255 255 255 / 6%);
+  --color-float: rgb(30 36 38 / 82%);
+  --color-nav: rgb(16 20 21 / 40%);
+  /* Kept as a role name from the ruled-sheet era: "the surface a reader is
+   * meant to act on". Under Luminous that is a glass card. */
+  --color-raised: rgb(255 255 255 / 4%);
+
+  /* Borders. `rule` is the 1px translucent white the design system specifies on
+   * every panel; `rule-strong` is the same edge where it has to survive being
+   * the only thing separating two adjacent surfaces. */
+  --color-rule: rgb(255 255 255 / 10%);
+  --color-rule-strong: rgb(255 255 255 / 20%);
+
+  /* Behind the palette. Deep and slightly indigo rather than neutral black, so
+   * the dimmed page keeps the temperature of the void instead of going grey. */
+  --color-scrim: rgb(6 8 12 / 66%);
 
   /* --- Ink ---------------------------------------------------------------
    * `ink` for content, `muted` for metadata being read, `faint` for metadata
-   * that is present but not being read. Three levels, not five: a fourth grey
-   * is a level nobody can identify without holding two of them side by side.
+   * that is present but not being read. White at three alphas rather than three
+   * greys: the same three values then hold their relationship over the sidebar,
+   * over a glass card, and over the explanation panel's darker well, which
+   * opaque greys would not.
    */
-  --color-ink: #24211b;
-  --color-muted: #6a6357;
-  --color-faint: #9a9284;
+  --color-ink: #ffffff;
+  --color-muted: rgb(255 255 255 / 70%);
+  --color-faint: rgb(255 255 255 / 45%);
 
-  /* --- The one accent ----------------------------------------------------
-   * `amber` for interactive text and active state, `wash` for the highlight
-   * behind matched text, `edge` for its underline. The wash is translucent so
-   * it multiplies over paper and over the code surface without needing a
-   * second value per background.
+  /* --- The two accents ---------------------------------------------------
+   * Cyan: what the system found. Magenta: what it does not have. See the file
+   * header — the distinction carries real meaning on the timeline, in chat and
+   * in the explanation panel, and is not a palette convenience.
    */
-  --color-amber: #96570b;
-  --color-amber-bright: #c8791a;
-  --color-wash: color-mix(in oklab, #e8a63c 42%, transparent);
-  --color-edge: #c8791a;
+  --color-cyan: #22d3ee;
+  /* The same hue held back, for a second cyan element in one panel that must
+   * not compete with the first — a bar behind a value, an inactive tab. */
+  --color-cyan-dim: rgb(34 211 238 / 55%);
+  --color-magenta: #d946ef;
+  --color-magenta-dim: rgb(217 70 239 / 55%);
 
-  /* Verdicts. Muted on purpose — these annotate data, they are not status
-   * badges, and three saturated pills in a result row would out-shout the
-   * highlight that row exists to show. */
-  --color-affirm: #2f6b3f;
-  --color-deny: #8f3222;
+  /* Kept for the code that still calls the interactive colour `accent`. It is
+   * cyan; the alias exists so that "the accent" has a name that does not
+   * presume which hue it is. */
+  --color-accent: var(--color-cyan);
+  --color-accent-bright: #67e8f9;
+
+  /* The matched span. The most important element in the product: it is what
+   * makes a search result legible without reading it. A cyan wash with a solid
+   * cyan underline, exactly as the reference draws it — the wash alone is too
+   * quiet through a blurred panel, and the underline is what survives a
+   * screenshot. */
+  --color-wash: rgb(34 211 238 / 20%);
+  --color-edge: #22d3ee;
+
+  /* Verdicts. These annotate data rather than announce status, so they stay
+   * one step down in saturation from the accents — three saturated pills in a
+   * result row would out-shout the highlight the row exists to show. */
+  --color-affirm: #5eead4;
+  --color-deny: #ffb4ab;
+  /* The one amber left in the system, for "degraded": a state that is neither
+   * a verdict nor an accent and must not be mistaken for either. */
+  --color-warn: #fbbf24;
 
   /* Kind colours, for the timeline's stacked bars.
    *
-   * The one place the single-accent rule bends, and it bends because here the
+   * The one place the two-accent rule bends, and it bends because here the
    * categorical encoding *is* the content: a bar that does not say what it is
-   * made of is a count, which the CLI already prints. Kept in the same warm,
-   * desaturated register as everything else, and dark enough to hold contrast
-   * against `paper` at 2px tall. The highlight still owns the amber everywhere
-   * text is read, and the two never appear in the same view. */
-  --color-kind-code: #b8791a;
-  --color-kind-note: #47657a;
-  --color-kind-document: #63558a;
-  --color-kind-email: #2b7466;
-  --color-kind-commit: #8a5730;
-  --color-kind-meeting: #2f6b3f;
-  --color-kind-bookmark: #8f3222;
-  --color-kind-other: #8b8376;
+   * made of is a count, which the CLI already prints. Pitched bright enough to
+   * hold against the void at 2px tall, and kept away from magenta so that no
+   * bar can be mistaken for the gap band drawn beside it. */
+  --color-kind-code: #22d3ee;
+  --color-kind-note: #a78bfa;
+  --color-kind-document: #d1bcff;
+  --color-kind-email: #5eead4;
+  --color-kind-commit: #38bdf8;
+  --color-kind-meeting: #7dd3fc;
+  --color-kind-bookmark: #fbbf24;
+  --color-kind-other: rgb(255 255 255 / 35%);
 
   /* --- Faces ------------------------------------------------------------- */
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-prose: "Source Serif 4 Variable", "Source Serif 4", Charter, Georgia, serif;
-  --font-display: "Fraunces Variable", "Fraunces", Charter, Georgia, serif;
+  --font-prose: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk Variable", "Space Grotesk", ui-sans-serif,
+    system-ui, sans-serif;
 
-  --text-meta: 0.6875rem;
-  --text-meta--line-height: 1.45;
+  /* The type scale, from the design system's `typography` block. Named for the
+   * job rather than the size, so a heading that needs to shrink on mobile
+   * changes here and not in nine components. */
+  --text-headline-xl: 3rem; /* 48px */
+  --text-headline-xl--line-height: 1.1;
+  --text-headline-xl--letter-spacing: -0.02em;
+  --text-headline-xl--font-weight: 700;
+
+  --text-headline-lg: 2rem; /* 32px */
+  --text-headline-lg--line-height: 1.2;
+  --text-headline-lg--letter-spacing: -0.01em;
+  --text-headline-lg--font-weight: 600;
+
+  --text-headline-md: 1.375rem; /* 22px */
+  --text-headline-md--line-height: 1.4;
+  --text-headline-md--font-weight: 500;
+
+  --text-body-md: 1rem; /* 16px */
+  --text-body-md--line-height: 1.6;
+
+  --text-body-sm: 0.875rem; /* 14px */
+  --text-body-sm--line-height: 1.5;
+
+  /* The mono micro-label, which is most of the text in this interface. */
+  --text-meta: 0.75rem; /* 12px */
+  --text-meta--line-height: 1.4;
+  --text-meta--letter-spacing: 0.05em;
+  /* The smaller caps label the design uses for nav items and section headings. */
+  --text-label: 0.6875rem; /* 11px */
+  --text-label--line-height: 1;
+  --text-label--letter-spacing: 0.08em;
+  --text-label--font-weight: 500;
+
+  /* --- Radius ------------------------------------------------------------
+   * From the design system's `rounded` block. Panels are `md`; the large
+   * architectural containers — the chat input, a dashboard region — are `xl`.
+   * Nothing in this interface is square any more, which is the single biggest
+   * visible difference from the ruled-sheet era.
+   */
+  --radius-sm: 0.25rem;
+  --radius-DEFAULT: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
 
   /* --- Space -------------------------------------------------------------
-   * 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64. This is Tailwind's own 4px scale
-   * (`p-1` … `p-16`) named, so the two cannot drift: utilities and custom
-   * properties resolve to the same eight numbers.
-   *
-   * Density here comes from hierarchy — type size, weight, and rules — not
-   * from removing space. A cramped row is not dense, it is just hard to read.
+   * The design system's 8px vertical rhythm, and the three layout constants
+   * that more than one component references. `--space-*` mirrors Tailwind's own
+   * 4px scale so that a utility and a custom property cannot resolve to
+   * different numbers.
    */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -145,9 +291,25 @@
   --space-12: 3rem;
   --space-16: 4rem;
 
-  /* The width of the sidebar, and the measure of the reading column. Both are
-   * layout constants referenced from more than one component, which is what
-   * makes them tokens rather than numbers in a class. */
-  --width-sidebar: 15rem;
-  --width-reading: 46rem;
+  /* 280px, from the reference's sidebar. Wider than the 15rem the ruled nav
+   * used, because the nav items now carry an icon and an uppercase label. */
+  --width-sidebar: 17.5rem;
+  --width-reading: 75ch;
+
+  /* --- The glow ----------------------------------------------------------
+   * The two radial gradients the shell paints behind everything. Declared as
+   * tokens rather than written into the shell because they are the reason the
+   * glass reads as glass, and a future screen that needs its own glow should
+   * spend these rather than invent a third colour.
+   */
+  --glow-cyan: radial-gradient(
+    circle,
+    rgb(34 211 238 / 22%) 0%,
+    rgb(34 211 238 / 0%) 70%
+  );
+  --glow-magenta: radial-gradient(
+    circle,
+    rgb(160 40 200 / 26%) 0%,
+    rgb(160 40 200 / 0%) 70%
+  );
 }

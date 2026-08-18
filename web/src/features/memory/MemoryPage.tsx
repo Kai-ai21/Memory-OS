@@ -119,7 +119,7 @@ export function MemoryPage() {
                 <td className="meta py-1 pr-4">
                   {chunk.embedded ? timestamp(chunk.embedded_at) : "not embedded"}
                 </td>
-                <td className="meta py-1 pr-4 text-amber">
+                <td className="meta py-1 pr-4 text-accent">
                   {typeof chunk.metadata?.definition === "string"
                     ? chunk.metadata.definition
                     : "—"}
@@ -150,7 +150,7 @@ export function MemoryPage() {
                 <Link
                   key={version.id}
                   to={`/memory/${version.id}`}
-                  className="meta text-amber underline"
+                  className="meta text-accent underline"
                 >
                   open v{version.version}
                 </Link>
@@ -229,7 +229,7 @@ function BoundedContent({
           key={piece.from}
           id={`offset-${piece.from}`}
           className={`${index > 0 ? "border-t border-dashed border-edge/45" : ""}${
-            cited ? " bg-amber/10" : ""
+            cited ? " bg-accent/10" : ""
           }`}
           data-testid="boundary-slice"
           data-cited={cited ? "true" : undefined}

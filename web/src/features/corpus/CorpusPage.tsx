@@ -77,7 +77,7 @@ export function CorpusPage() {
           on is a page somebody edits and then wonders why nothing changed. */}
       <p className="meta text-faint">
         Sources moved to{" "}
-        <Link to="/sources" className="text-amber underline">
+        <Link to="/sources" className="text-accent underline">
           sources
         </Link>
         , where they can be registered and synced rather than only counted.
@@ -122,7 +122,7 @@ export function CorpusPage() {
                   <div className="flex items-baseline gap-3">
                     <span
                       className={`meta ${
-                        note ? "text-amber" : finding.healthy ? "text-affirm" : "text-deny"
+                        note ? "text-accent" : finding.healthy ? "text-affirm" : "text-deny"
                       }`}
                     >
                       {note ? "note" : finding.healthy ? "ok" : "FAIL"}

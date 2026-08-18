@@ -182,7 +182,7 @@ export function DecisionPage() {
 const ASSUMPTION_TONE: Record<string, string> = {
   held: "text-affirm",
   failed: "text-deny",
-  partially: "text-amber",
+  partially: "text-accent",
 };
 
 function AssumptionRow({ assumption }: { assumption: DecisionAssumption }) {
@@ -214,7 +214,7 @@ function AssumptionRow({ assumption }: { assumption: DecisionAssumption }) {
 const VERDICT_TONE: Record<string, string> = {
   worked: "text-affirm",
   failed: "text-deny",
-  mixed: "text-amber",
+  mixed: "text-accent",
   // Neutral on purpose. `too_early` is not a lukewarm result, it is the absence
   // of one, and giving it a verdict colour would make a corpus of unresolved
   // decisions read as a corpus of middling ones.
@@ -235,7 +235,7 @@ function OutcomeRow({ outcome }: { outcome: Outcome }) {
             rendering them identically asserts they are not. */}
         <span
           className={`meta border px-1 ${
-            inferred ? "border-rule text-faint" : "border-edge text-amber"
+            inferred ? "border-rule text-faint" : "border-edge text-accent"
           }`}
           title={
             inferred
@@ -256,7 +256,7 @@ function OutcomeRow({ outcome }: { outcome: Outcome }) {
       {outcome.evidence.map((item) => (
         <Link
           key={item.id}
-          className="meta text-amber underline"
+          className="meta text-accent underline"
           to={`/memory/${item.memory_id}`}
         >
           {item.source_name}:{item.external_key}
@@ -276,7 +276,7 @@ function EvidenceRow({ item }: { item: DecisionEvidence }) {
       {/* `informed` and `records` are kept apart on screen because they are
           different claims: one existed before the decision, one after it. */}
       <span className="meta-label w-24 shrink-0 text-muted">{item.relation}</span>
-      <Link className="meta flex-1 text-amber underline" to={`/memory/${item.memory_id}`}>
+      <Link className="meta flex-1 text-accent underline" to={`/memory/${item.memory_id}`}>
         {item.source_name}:{where}
       </Link>
     </li>

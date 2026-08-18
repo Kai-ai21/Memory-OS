@@ -82,7 +82,7 @@ export function TimelinePage() {
                 title={explain(band.provenance)}
               >
                 {band.provenance}
-                <span className="text-amber">{marker(band.provenance)}</span>
+                <span className="text-accent">{marker(band.provenance)}</span>
               </span>
               <span className="meta text-faint">
                 {count(band.count)} ({total ? ((band.count / total) * 100).toFixed(1) : "0.0"}%)
@@ -92,7 +92,7 @@ export function TimelinePage() {
           {undated ? (
             <span className="inline-flex items-baseline gap-1.5">
               <span className="meta text-faint" title={explain("unknown")}>
-                undated<span className="text-amber">?</span>
+                undated<span className="text-accent">?</span>
               </span>
               <span className={`meta ${undated.count ? "text-deny" : "text-faint"}`}>
                 {count(undated.count)}
@@ -233,11 +233,11 @@ export function TimelinePage() {
               </span>
               <span className="meta flex-1 truncate text-faint">
                 after{" "}
-                <Link to={`/memory/${gap.before.id}`} className="text-amber underline">
+                <Link to={`/memory/${gap.before.id}`} className="text-accent underline">
                   {gap.before.external_key}
                 </Link>
                 , next{" "}
-                <Link to={`/memory/${gap.after.id}`} className="text-amber underline">
+                <Link to={`/memory/${gap.after.id}`} className="text-accent underline">
                   {gap.after.external_key}
                 </Link>
               </span>
@@ -316,7 +316,7 @@ function PeriodDetail({
             <Tag>{memory.kind}</Tag>
             <Link
               to={`/memory/${memory.id}`}
-              className="meta flex-1 truncate text-ink hover:text-amber hover:underline"
+              className="meta flex-1 truncate text-ink hover:text-accent hover:underline"
             >
               {memory.external_key}
             </Link>

@@ -61,7 +61,7 @@ export function MemoryActions({ message }: { message: ChatMessage }) {
       <div className="flex items-baseline gap-3">
         <button
           type="button"
-          className="meta text-faint underline decoration-dotted underline-offset-2 hover:text-amber"
+          className="meta text-faint underline decoration-dotted underline-offset-2 hover:text-accent"
           aria-expanded={open}
           onClick={() => {
             setOpen((was) => !was);
@@ -74,14 +74,14 @@ export function MemoryActions({ message }: { message: ChatMessage }) {
           <>
             <button
               type="button"
-              className="meta text-muted hover:text-amber"
+              className="meta text-muted hover:text-accent"
               onClick={() => setMode(mode === "correct" ? "none" : "correct")}
             >
               correct
             </button>
             <button
               type="button"
-              className="meta text-muted hover:text-amber"
+              className="meta text-muted hover:text-accent"
               onClick={() => setMode(mode === "tag" ? "none" : "tag")}
             >
               tag
@@ -124,7 +124,7 @@ export function MemoryActions({ message }: { message: ChatMessage }) {
         />
       ) : null}
       {note ? (
-        <p className="meta text-amber" role="status">
+        <p className="meta text-accent" role="status">
           {note}
         </p>
       ) : null}
@@ -159,7 +159,7 @@ function CorrectForm({
 
   return (
     <form
-      className="flex flex-col gap-2 border-l-2 border-amber pl-3"
+      className="flex flex-col gap-2 border-l-2 border-accent pl-3"
       onSubmit={(event) => {
         event.preventDefault();
         const next = text.trim();
@@ -172,7 +172,7 @@ function CorrectForm({
       </label>
       <textarea
         id={`correct-${message.id}`}
-        className="min-h-20 w-full resize-y border border-rule bg-paper p-2 text-ink"
+        className="min-h-20 w-full resize-y border border-rule bg-void p-2 text-ink"
         value={text}
         onChange={(event) => setText(event.target.value)}
       />
@@ -183,7 +183,7 @@ function CorrectForm({
       <div className="flex items-baseline gap-3">
         <button
           type="submit"
-          className="meta text-amber hover:underline"
+          className="meta text-accent hover:underline"
           disabled={correct.isPending}
         >
           {correct.isPending ? "correcting…" : "save the correction"}
@@ -258,7 +258,7 @@ function TagForm({
       </label>
       <input
         id={`tag-${memoryId}`}
-        className="w-full border border-rule bg-paper p-2 font-mono text-sm text-ink"
+        className="w-full border border-rule bg-void p-2 font-mono text-sm text-ink"
         placeholder="#project #idea"
         value={text}
         onChange={(event) => setText(event.target.value)}
@@ -275,7 +275,7 @@ function TagForm({
             <button
               key={entry.tag}
               type="button"
-              className="meta font-mono text-muted hover:text-amber"
+              className="meta font-mono text-muted hover:text-accent"
               onClick={() =>
                 setText((was) => (was ? `${was} ${entry.tag}` : entry.tag))
               }
@@ -286,7 +286,7 @@ function TagForm({
         </div>
       ) : null}
       <div className="flex items-baseline gap-3">
-        <button type="submit" className="meta text-amber hover:underline">
+        <button type="submit" className="meta text-accent hover:underline">
           {tag.isPending ? "tagging…" : "apply"}
         </button>
         <button type="button" className="meta text-faint" onClick={onCancel}>
@@ -323,7 +323,7 @@ function RemoveFromView({
   return (
     <button
       type="button"
-      className="meta text-muted hover:text-amber"
+      className="meta text-muted hover:text-accent"
       onClick={() => remove.mutate()}
       disabled={remove.isPending}
     >
@@ -370,7 +370,7 @@ export function DeleteDialog({
 
   return (
     <div
-      className="flex flex-col gap-3 border-l-2 border-deny bg-paper p-3"
+      className="flex flex-col gap-3 border-l-2 border-deny bg-void p-3"
       role="alertdialog"
       aria-label="Delete this memory permanently"
     >
@@ -395,7 +395,7 @@ export function DeleteDialog({
       </label>
       <input
         id={`confirm-${memoryId}`}
-        className="w-40 border border-deny bg-paper p-2 font-mono text-sm text-ink"
+        className="w-40 border border-deny bg-void p-2 font-mono text-sm text-ink"
         value={typed}
         onChange={(event) => setTyped(event.target.value)}
         autoComplete="off"
@@ -486,7 +486,7 @@ export function RestoreControl({
   return (
     <button
       type="button"
-      className="meta text-amber hover:underline"
+      className="meta text-accent hover:underline"
       onClick={() => restore.mutate()}
       disabled={restore.isPending}
     >

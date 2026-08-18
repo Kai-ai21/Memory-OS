@@ -50,7 +50,7 @@ export function DateStamp({
       data-provenance={provenance ?? "unknown"}
     >
       {utc ? timestampUtc(value) : timestamp(value)}
-      {mark ? <span className="text-amber">{mark}</span> : null}
+      {mark ? <span className="text-accent">{mark}</span> : null}
       {showProvenance ? <span className="ml-1.5 text-faint">{provenance}</span> : null}
     </span>
   );

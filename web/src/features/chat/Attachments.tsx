@@ -74,7 +74,7 @@ function Row({ attachment }: { attachment: Attachment }) {
           // in. A session is a view; the memory is the thing.
           <Link
             to={`/memory/${attachment.memory_id}`}
-            className="font-mono text-sm text-ink hover:text-amber hover:underline"
+            className="font-mono text-sm text-ink hover:text-accent hover:underline"
           >
             {attachment.filename}
           </Link>

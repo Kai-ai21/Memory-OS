@@ -113,7 +113,7 @@ export function ActivityChart({
               data-bucket={bucket.start}
               data-count={bucket.count}
               className={`group relative flex h-full min-w-1.5 flex-1 cursor-pointer flex-col justify-end ${
-                isSelected ? "bg-amber/12" : "hover:bg-sunken"
+                isSelected ? "bg-accent/12" : "hover:bg-sunken"
               }`}
             >
               {/* The count sits directly above its own bar rather than at the

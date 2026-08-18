@@ -150,7 +150,7 @@ function Citations({ state }: { state: AnswerStream }) {
         <li key={`${citation.locator}-${citation.excerpt.slice(0, 24)}`}>
           <Link
             to={`/memory/${citation.memory_id}`}
-            className="meta font-mono text-ink hover:text-amber hover:underline"
+            className="meta font-mono text-ink hover:text-accent hover:underline"
           >
             {citation.locator}
           </Link>

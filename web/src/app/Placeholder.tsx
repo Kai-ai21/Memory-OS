@@ -109,7 +109,7 @@ export function GraphPlaceholder({ route }: { route: ViewRoute }) {
       }
       next={
         <>
-          <Link className="text-amber underline" to="/corpus">
+          <Link className="text-accent underline" to="/corpus">
             Corpus
           </Link>{" "}
           counts what extraction has covered, and{" "}

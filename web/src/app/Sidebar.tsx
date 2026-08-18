@@ -157,7 +157,7 @@ function Health() {
       ? { tone: "bg-affirm", label: "healthy", detail: "database and graph reachable" }
       : ready.data
         ? {
-            tone: "bg-amber-bright",
+            tone: "bg-accent-bright",
             label: "degraded",
             detail: ready.data.database
               ? "graph unreachable — search and ingest still work"

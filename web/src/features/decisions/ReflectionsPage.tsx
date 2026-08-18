@@ -67,13 +67,13 @@ export function ReflectionsPage() {
             <button
               type="button"
               className={
-                includeDismissed ? "text-amber underline" : "text-muted hover:text-ink"
+                includeDismissed ? "text-accent underline" : "text-muted hover:text-ink"
               }
               onClick={() => setIncludeDismissed((current) => !current)}
             >
               show dismissed
             </button>
-            <Link className="text-amber underline" to="/decisions/patterns">
+            <Link className="text-accent underline" to="/decisions/patterns">
               patterns
             </Link>
           </span>
@@ -98,7 +98,7 @@ export function ReflectionsPage() {
           than a failure: an unfalsifiable claim about your own judgement is the most
           damaging thing this system can produce, so it is refused before a model is
           called rather than hedged afterwards. The{" "}
-          <Link className="text-amber underline" to="/decisions/patterns">
+          <Link className="text-accent underline" to="/decisions/patterns">
             patterns view
           </Link>{" "}
           shows the evidence as it stands.
@@ -162,7 +162,7 @@ function ReflectionRow({
 
       <p className="meta mt-3 max-w-prose text-faint">
         from the pattern: {reflection.pattern_statement}{" "}
-        <Link className="text-amber underline" to="/decisions/patterns">
+        <Link className="text-accent underline" to="/decisions/patterns">
           evidence
         </Link>
       </p>
@@ -259,7 +259,7 @@ function renderMarkers(
               {position > 0 ? ", " : ""}
               {citation ? (
                 <Link
-                  className="text-amber underline"
+                  className="text-accent underline"
                   to={`/decisions/${citation.decision_id}`}
                   title={`${
                     citation.relation === "supports" ? "argues for" : "argues against"

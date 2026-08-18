@@ -32,7 +32,7 @@ export function ExplanationPanel({ explanation, citations, code }: Props) {
     <div className="mt-2 lg:pl-25" data-testid="explanation">
       <button
         type="button"
-        className="meta text-amber hover:text-amber-bright"
+        className="meta text-accent hover:text-accent-bright"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
       >
@@ -79,7 +79,7 @@ export function ExplanationPanel({ explanation, citations, code }: Props) {
                         two signals is the point, and a bar is read faster than
                         two percentages. */}
                     <span
-                      className="inline-block h-1.5 bg-amber align-middle"
+                      className="inline-block h-1.5 bg-accent align-middle"
                       style={{ width: `${Math.max(2, item.share * 100)}%` }}
                       aria-hidden
                     />
@@ -143,13 +143,13 @@ function CitationBlock({ citation, code }: { citation: Citation; code: boolean }
       <div className="flex flex-wrap items-baseline gap-2">
         <Link
           to={`/memory/${citation.memory_id}?offset=${citation.char_start}`}
-          className="meta text-amber underline decoration-rule-strong underline-offset-2 hover:decoration-edge"
+          className="meta text-accent underline decoration-rule-strong underline-offset-2 hover:decoration-edge"
         >
           #{citation.chunk_ordinal} @{citation.char_start}–{citation.char_end}
         </Link>
         <span className="meta text-faint">v{citation.version}</span>
         {citation.definition ? (
-          <span className="meta text-amber" data-testid="citation-definition">
+          <span className="meta text-accent" data-testid="citation-definition">
             {citation.definition}()
           </span>
         ) : null}

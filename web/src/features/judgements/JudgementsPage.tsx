@@ -50,7 +50,7 @@ export function JudgementsPage() {
           <div className="meta flex gap-4 text-faint">
             <span className="text-affirm">{count(totals.relevant)} relevant</span>
             <span className="text-deny">{count(totals.not_relevant)} not relevant</span>
-            <span className="text-amber">{count(totals.missing)} missing</span>
+            <span className="text-accent">{count(totals.missing)} missing</span>
           </div>
 
           <table className="w-full border-collapse text-left">
@@ -73,13 +73,13 @@ export function JudgementsPage() {
                   </td>
                   <td className="meta py-1.5 pr-4 text-affirm">{row.relevant}</td>
                   <td className="meta py-1.5 pr-4 text-deny">{row.not_relevant}</td>
-                  <td className="meta py-1.5 pr-4 text-amber">{row.missing}</td>
+                  <td className="meta py-1.5 pr-4 text-accent">{row.missing}</td>
                   <td className="meta py-1.5 pr-4 text-faint">
                     {timestamp(row.last_judged_at)}
                   </td>
                   <td className="py-1.5">
                     <Link
-                      className="meta text-amber underline"
+                      className="meta text-accent underline"
                       to={`/search?q=${encodeURIComponent(row.query_text)}`}
                     >
                       re-run

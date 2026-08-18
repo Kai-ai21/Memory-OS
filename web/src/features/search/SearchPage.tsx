@@ -181,7 +181,7 @@ export function SearchPage() {
             {count(results.data.hits.reduce((sum, hit) => sum + hit.matched_chunks.length, 0))}{" "}
             chunks matched
           </span>
-          {state.exact ? <span className="text-amber">exact scan</span> : null}
+          {state.exact ? <span className="text-accent">exact scan</span> : null}
         </div>
       ) : null}
 
