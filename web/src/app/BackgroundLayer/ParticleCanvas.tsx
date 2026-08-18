@@ -1,39 +1,69 @@
 /**
- * The canvas, the frame loop, and the rule that the loop is usually not running.
+ * One canvas, one frame loop, two layers, and a buffer that does not fully
+ * clear.
  *
- * **Canvas rather than elements.** A hundred and fifty absolutely-positioned
- * divs with a transform and an opacity each is a hundred and fifty composited
- * layers for an effect nobody is supposed to consciously see. One canvas, one
- * paint, one `drawImage` per particle.
+ * **The trail buffer is the whole reason the cursor layer reads as a stroke.**
+ * Clearing outright and redrawing gives you whatever is alive this instant —
+ * two hundred discrete blobs — and no matter how you tune them they stay two
+ * hundred discrete blobs. Fading the previous frame instead leaves every
+ * position a particle has occupied in the last second still faintly on screen,
+ * and the overlap of a moving particle with its own recent past is what turns a
+ * row of dots into a smear.
  *
- * **The loop stops.** This is the part worth reading. A `requestAnimationFrame`
- * loop that runs forever is a wakeup sixty times a second, in perpetuity,
- * behind a page that is not moving — on a laptop that is measurable battery for
- * literally nothing. So: no frame is scheduled until the mouse moves, and the
- * loop cancels itself two seconds after the last movement *and* the last
- * particle. The next `mousemove` starts it again. On a page being read rather
- * than pointed at, this component costs one idle event listener.
+ * **It is erased, not painted over, and that is a deviation worth reading.**
+ * The obvious implementation of a fading buffer is to fill each frame with the
+ * page colour at low alpha. That cannot be done here. This canvas sits *over*
+ * the two wash radials — same stacking level, later sibling — and a repeated
+ * translucent fill converges on a fully opaque rectangle in about forty frames,
+ * so the wash would disappear underneath it. The wash exists for exactly one
+ * element, the NEW CONVERSATION button, which is the only frosted glass in the
+ * application and stops reading as glass the moment there is nothing behind it
+ * to frost; `theme.test.ts` has a test whose entire job is to prevent that.
+ * `destination-out` gets the identical decay by removing alpha instead of
+ * adding colour, and leaves the canvas genuinely transparent between the marks.
  *
- * Nothing here is reachable by the pointer or by a screen reader, and the
- * canvas sits at the same negative z-index as the wash it draws over — behind
- * every element in the application, including the ones it appears to pass
- * beneath.
+ * **The decay is per millisecond, not per frame.** A fixed per-frame alpha
+ * makes the trail half as long on a 120Hz display as on a 60Hz one, for the
+ * same gesture — the kind of bug that only ever reproduces on somebody else's
+ * machine.
+ *
+ * **The idle stop is gone, and it had to be.** Step 1a could cancel the loop
+ * two seconds after the last movement because there was nothing on screen that
+ * was not a response to the cursor. An ambient layer is by definition always
+ * moving, so the loop now runs whenever the document is visible and stops when
+ * it is not. `visibilitychange` is belt and braces — browsers already stop
+ * serving frames to a hidden tab — but it also releases the trail buffer, so a
+ * backgrounded tab is not holding a viewport of pixels it will never show.
  */
 
 import { useEffect, useRef } from "react";
 
-import { ParticleField, buildSprite } from "./field";
-
-/** Silence for this long, with nothing still alive, and the loop shuts down. */
-export const IDLE_MS = 2000;
+import { AmbientLayer } from "./ambient";
+import { CursorLayer } from "./cursor";
+import { buildSprite } from "./field";
 
 /**
- * The largest step a single frame may claim, in milliseconds.
+ * How much of the buffer is erased per 60fps frame. **Settled at 0.14.**
  *
- * A backgrounded tab hands back a delta of minutes on its first frame. Without
- * a clamp, every live particle ages out at once and the field blinks empty the
- * moment you switch back to the window.
+ * The brief's starting point was 0.08 and it is too slow on a light ground —
+ * measurably, not as a matter of taste. The ambient layer lays ink down every
+ * frame and this number is the only thing taking it away, so the layer's
+ * *composited* darkness is roughly its per-particle alpha divided by this
+ * value. At 0.08 the field reaches a steady state covering **41% of the
+ * viewport** in visible ink: eight hundred particles tracing the flow field's
+ * contour lines onto the page and leaving them there, which reads as scratched
+ * paper rather than as weather. At 0.14 the same layer settles at **1.1%**.
+ *
+ * The trail survives the change, which is the other half of the test. A 2px/ms
+ * sweep still peaks at a composited 0.47 — a smear you can plainly see — and is
+ * back to the ambient baseline about 1.2 seconds later. Below roughly 0.10 the
+ * page silts up; above roughly 0.20 the tail is gone before the eye follows it.
+ *
+ * Read the other way: this is the knob for trail *length*. Lower is longer.
  */
+const CLEAR_ALPHA = 0.14;
+
+/** The largest step one frame may claim, in milliseconds. */
 const MAX_STEP = 64;
 
 export function ParticleCanvas() {
@@ -46,19 +76,21 @@ export function ParticleCanvas() {
     const sprite = buildSprite();
     if (!context || !sprite) return;
 
-    const field = new ParticleField();
+    const ambient = new AmbientLayer();
+    const cursor = new CursorLayer();
     let frameId: number | null = null;
     let lastFrameAt = 0;
-    let lastMoveAt = 0;
     let width = 0;
     let height = 0;
 
     /**
      * Size the backing store to device pixels and the element to CSS pixels.
      *
-     * Without the `devicePixelRatio` multiply the whole field is drawn at half
-     * resolution on a retina display and upscaled — which on a soft gradient
-     * sprite does not read as "blurry", it reads as banding.
+     * Without the `devicePixelRatio` multiply the field is drawn at half
+     * resolution on a retina display and upscaled, which on a soft gradient
+     * sprite does not read as "blurry" — it reads as banding. Capped at 2:
+     * a 3x phone would triple the fill cost of the trail buffer for a
+     * difference nobody can see on a 0.08 alpha smear.
      */
     function resize() {
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
@@ -68,9 +100,10 @@ export function ParticleCanvas() {
       canvas!.height = Math.round(height * ratio);
       canvas!.style.width = `${width}px`;
       canvas!.style.height = `${height}px`;
-      // Set rather than scaled: `resize` runs many times during a drag, and a
+      // Set rather than scaled: `resize` fires many times during a drag, and a
       // relative `scale` would compound.
       context!.setTransform(ratio, 0, 0, ratio, 0, 0);
+      ambient.resize(width, height);
     }
 
     function frame(now: number) {
@@ -78,57 +111,80 @@ export function ParticleCanvas() {
       const dt = Math.min(now - lastFrameAt, MAX_STEP);
       lastFrameAt = now;
 
-      field.step(dt);
-      context!.clearRect(0, 0, width, height);
-      field.draw(context!, sprite!);
+      // Fade the previous frame. `destination-out` scales the alpha already in
+      // the buffer; the colour of the fill is irrelevant, only its alpha counts.
+      const decay = 1 - Math.pow(1 - CLEAR_ALPHA, dt / (1000 / 60));
+      context!.globalCompositeOperation = "destination-out";
+      context!.fillStyle = `rgba(0, 0, 0, ${decay})`;
+      context!.fillRect(0, 0, width, height);
+      context!.globalCompositeOperation = "source-over";
 
-      // The whole idle rule, in one condition. Both halves are needed: quitting
-      // on silence alone would delete a field mid-fade, and quitting on an
-      // empty field alone would quit between two particles.
-      if (now - lastMoveAt > IDLE_MS && field.particles.length === 0) {
-        field.breakTrail();
-        return;
-      }
+      ambient.step(dt, now);
+      cursor.step(dt, now);
+      ambient.draw(context!, sprite!);
+      cursor.draw(context!, sprite!);
+
       frameId = requestAnimationFrame(frame);
     }
 
-    function start(now: number) {
-      if (frameId !== null) return;
+    function start() {
+      if (frameId !== null || document.hidden) return;
       // Seeded from the clock the loop is about to be handed, so the first
-      // frame after an idle stretch is a step of ~16ms and not of ten seconds.
-      lastFrameAt = now;
+      // frame after a hidden stretch is a step of ~16ms and not of ten minutes.
+      lastFrameAt = performance.now();
       frameId = requestAnimationFrame(frame);
+    }
+
+    function stop() {
+      if (frameId === null) return;
+      cancelAnimationFrame(frameId);
+      frameId = null;
     }
 
     function onMove(event: MouseEvent) {
-      lastMoveAt = performance.now();
-      field.push(event.clientX, event.clientY);
-      start(lastMoveAt);
+      cursor.push(event.clientX, event.clientY, performance.now());
     }
 
     /**
-     * Leaving the window breaks the trail rather than stopping the loop.
+     * Leaving the window breaks the trail rather than stopping anything.
      *
-     * The cursor's next appearance is somewhere unrelated, and a segment drawn
-     * between where it left and where it returned would emit a line of
-     * particles across a screen the pointer never crossed.
+     * The pointer's next appearance is somewhere unrelated, and a segment drawn
+     * between where it left and where it came back would lay a stroke straight
+     * across a screen it never crossed.
      */
     function onLeave() {
-      field.breakTrail();
+      cursor.breakTrail();
+    }
+
+    function onVisibility() {
+      if (document.hidden) {
+        stop();
+        // Drop the buffer as well as the loop. A hidden tab holding a viewport
+        // of pixels it cannot show is the memory half of the same waste.
+        context!.setTransform(1, 0, 0, 1, 0, 0);
+        context!.clearRect(0, 0, canvas!.width, canvas!.height);
+        cursor.breakTrail();
+        resize();
+      } else {
+        start();
+      }
     }
 
     resize();
+    start();
     window.addEventListener("resize", resize);
     window.addEventListener("mousemove", onMove, { passive: true });
     document.addEventListener("mouseleave", onLeave);
     window.addEventListener("blur", onLeave);
+    document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
       window.removeEventListener("resize", resize);
       window.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseleave", onLeave);
       window.removeEventListener("blur", onLeave);
-      if (frameId !== null) cancelAnimationFrame(frameId);
+      document.removeEventListener("visibilitychange", onVisibility);
+      stop();
     };
   }, []);
 

@@ -1,58 +1,12 @@
 /**
- * The particle field: the arithmetic, with no canvas and no React in it.
+ * What the two layers share: a colour, a sprite, and an envelope.
  *
- * Kept as a plain class so the two properties that actually matter — the cap
- * holds, and the field goes empty — are testable without a DOM, a frame loop
- * or a rendering context. `ParticleField` knows how to be stepped and how to
- * be drawn onto a context it is handed; it never looks one up.
- *
- * **Every constant here is a restraint rather than a tuning knob.** On a light
- * ground, dark particles stop being atmosphere and become dirt very quickly.
- * The numbers below are the ones that survived being looked at: a peak opacity
- * you have to go looking for, a lifetime long enough that nothing pops, and an
- * emission rate tied to distance travelled rather than to frames elapsed — so
- * a still cursor emits nothing at all, and a fast one does not emit a stripe.
+ * **Deliberately small.** M9.3's second step split the effect into an ambient
+ * drift and a cursor trail specifically so each could be re-tuned without
+ * touching the other, and that split is only real if the tunable numbers live
+ * in `ambient.ts` and `cursor.ts` rather than here. Nothing in this file is a
+ * look; everything in it is machinery both looks are made of.
  */
-
-/** Beyond this, the oldest particle is dropped to make room. */
-export const MAX_PARTICLES = 150;
-
-/** One particle per this many pixels of cursor travel. Not per frame. */
-export const EMIT_DISTANCE = 40;
-
-/** Lifetime bounds, in milliseconds. */
-export const LIFE_MIN = 1500;
-export const LIFE_MAX = 2500;
-
-/**
- * Peak opacity bounds.
- *
- * The upper bound is the number to distrust, and **it is 0.09 rather than the
- * 0.12 this was built at, for a measured reason.** A particle is ink laid over
- * both the glyph and the paper, so it costs contrast; the specified ceiling was
- * checked against every text role in `tokens.css` and one of them does not
- * survive it. `accent` — links, and the only colour in the interface that means
- * "you can act on this" — measures 4.86:1 on the ground, clearing WCAG AA by
- * 0.36. An ink veil at 0.12 takes it to 4.44:1, and the crossing point is
- * α = 0.105. At 0.09 it holds at 4.55:1, and `ink-3`, the next tightest, at
- * 4.75:1.
- *
- * That is a third of a stop the effect gives up, and it is not visible as one:
- * a real sweep peaks around 0.078 anyway, because a particle only reaches its
- * own ceiling at the top of the envelope and only at its centre pixel. What the
- * old ceiling bought was a worst case that quietly undid a contrast contract
- * this theme has an argued test file for. `contrast.test.ts` checks the tokens;
- * `particles.test.tsx` checks them under this veil.
- *
- * Above these numbers it stops being weather. At 0.2 a particle is a smudge,
- * and at 0.3 you read the individual dots instead of the sentence under them.
- */
-export const ALPHA_MIN = 0.06;
-export const ALPHA_MAX = 0.09;
-
-/** Radius bounds, in CSS pixels, before the lifetime's slow expansion. */
-export const SIZE_MIN = 3;
-export const SIZE_MAX = 12;
 
 /**
  * The particle colour, read off `--color-ink` at sprite time.
@@ -95,154 +49,44 @@ export function readInk(): string {
   return INK_FALLBACK;
 }
 
-export interface Particle {
+/** Anything with a position, a size and an opacity. Both layers draw as these. */
+export interface Drawable {
   x: number;
   y: number;
-  /** Velocity in CSS pixels per millisecond. */
-  vx: number;
-  vy: number;
+  /** Radius in CSS pixels. */
   radius: number;
-  /** Age and lifetime, both in milliseconds. */
-  age: number;
-  life: number;
-  /** Opacity at the peak of the envelope. */
-  peak: number;
+  /** Composited opacity for this frame, in `0..1`. */
+  alpha: number;
 }
 
 /**
- * The opacity envelope over a particle's life, in `0..1`.
+ * A short fade in and a long, eased fade out, over `0..1`.
  *
- * A short fade in and a long, eased fade out. Both ends matter: a particle
- * that appears at full strength pops, and one that vanishes at full strength
- * is a dot being deleted rather than smoke dispersing. The `1.6` exponent puts
- * most of the life in the faded tail, which is what makes it read as
- * dissipation instead of a dimmer switch.
+ * Both ends matter: a particle that appears at full strength pops, and one that
+ * vanishes at full strength is a dot being deleted rather than smoke
+ * dispersing. The exponent puts most of the life in the faded tail, which is
+ * what makes it read as dissipation instead of a dimmer switch.
  */
-export function envelope(t: number): number {
+export function envelope(t: number, rise = 0.12, fallPower = 1.6): number {
   if (t <= 0 || t >= 1) return 0;
-  const rise = Math.min(t / 0.12, 1);
-  const fall = Math.pow(1 - t, 1.6);
-  return rise * fall;
+  return Math.min(t / rise, 1) * Math.pow(1 - t, fallPower);
 }
 
 /** Injectable so a test can make emission deterministic. */
 export type Random = () => number;
 
-function between(random: Random, low: number, high: number): number {
+export function between(random: Random, low: number, high: number): number {
   return low + random() * (high - low);
 }
 
-export class ParticleField {
-  readonly particles: Particle[] = [];
-
-  /** Cursor travel not yet spent on a particle. */
-  private pending = 0;
-  private last: { x: number; y: number } | null = null;
-  private readonly random: Random;
-
-  constructor(random: Random = Math.random) {
-    this.random = random;
-  }
-
-  /**
-   * Record a cursor position, emitting along the segment since the last one.
-   *
-   * Emission walks the segment rather than dropping everything at the new
-   * point, so a fast flick across the screen leaves a dispersed line instead of
-   * a clump at the far end — which is the difference between smoke and a
-   * cursor trail.
-   */
-  push(x: number, y: number): void {
-    const previous = this.last;
-    this.last = { x, y };
-    if (!previous) return;
-
-    const dx = x - previous.x;
-    const dy = y - previous.y;
-    const distance = Math.hypot(dx, dy);
-    // A teleport — a tab switch, a window move — is not travel, and treating it
-    // as such would emit a full field's worth of particles in one frame.
-    if (distance === 0 || distance > 400) return;
-
-    this.pending += distance;
-    while (this.pending >= EMIT_DISTANCE) {
-      this.pending -= EMIT_DISTANCE;
-      const at = 1 - this.pending / distance;
-      this.emit(previous.x + dx * at, previous.y + dy * at);
-    }
-  }
-
-  /** Forget where the cursor was, so the next move is not a segment from it. */
-  breakTrail(): void {
-    this.last = null;
-    this.pending = 0;
-  }
-
-  emit(x: number, y: number): void {
-    const random = this.random;
-    this.particles.push({
-      x,
-      y,
-      // Sideways drift is small and signed; without it the field rises in a
-      // column and reads as a machine venting.
-      vx: between(random, -0.018, 0.018),
-      // Up, always, but by varying amounts — roughly 15 to 60px over a life.
-      vy: -between(random, 0.008, 0.026),
-      radius: between(random, SIZE_MIN, SIZE_MAX),
-      age: 0,
-      life: between(random, LIFE_MIN, LIFE_MAX),
-      peak: between(random, ALPHA_MIN, ALPHA_MAX),
-    });
-
-    // The cap is a hard ceiling on both memory and per-frame cost. Oldest goes
-    // first: it is the one already closest to invisible, so dropping it is the
-    // only choice a viewer cannot see.
-    while (this.particles.length > MAX_PARTICLES) this.particles.shift();
-  }
-
-  /** Advance by `dt` milliseconds and drop anything that has finished. */
-  step(dt: number): void {
-    for (let i = this.particles.length - 1; i >= 0; i -= 1) {
-      const particle = this.particles[i];
-      particle.age += dt;
-      if (particle.age >= particle.life) {
-        this.particles.splice(i, 1);
-        continue;
-      }
-      particle.x += particle.vx * dt;
-      particle.y += particle.vy * dt;
-    }
-  }
-
-  draw(context: CanvasRenderingContext2D, sprite: CanvasImageSource): void {
-    for (const particle of this.particles) {
-      const t = particle.age / particle.life;
-      const alpha = particle.peak * envelope(t);
-      if (alpha <= 0.001) continue;
-      // Ash spreads as it cools. 40% growth over a life, which is not visible
-      // as growth — it is visible as the edge going soft.
-      const radius = particle.radius * (1 + t * 0.4);
-      context.globalAlpha = alpha;
-      context.drawImage(
-        sprite,
-        particle.x - radius,
-        particle.y - radius,
-        radius * 2,
-        radius * 2,
-      );
-    }
-    context.globalAlpha = 1;
-  }
-}
-
 /**
- * The one soft dot every particle is a scaled copy of.
+ * The one soft dot every particle in both layers is a scaled copy of.
  *
  * Built once and blitted, rather than a `createRadialGradient` per particle per
- * frame — at 150 particles and 60fps that would be nine thousand gradient
- * objects a second for an effect whose entire claim is that it is cheap. The
- * three stops are what make the edge soft: a hard-edged `arc` at this opacity
- * reads as a dead pixel rather than as smoke.
+ * frame — at a thousand particles and 60fps that would be sixty thousand
+ * gradient objects a second for an effect whose entire claim is that it is
+ * cheap. The three stops are what make the edge soft: a hard-edged `arc` at
+ * these opacities reads as a dead pixel rather than as smoke.
  */
 export function buildSprite(size = 64): HTMLCanvasElement | null {
   if (typeof document === "undefined") return null;
@@ -261,4 +105,24 @@ export function buildSprite(size = 64): HTMLCanvasElement | null {
   context.fillStyle = gradient;
   context.fillRect(0, 0, size, size);
   return canvas;
+}
+
+/** Blit one batch of particles. Both layers hand their own array to this. */
+export function drawAll(
+  context: CanvasRenderingContext2D,
+  sprite: CanvasImageSource,
+  particles: readonly Drawable[],
+): void {
+  for (const particle of particles) {
+    if (particle.alpha <= 0.002) continue;
+    context.globalAlpha = particle.alpha;
+    context.drawImage(
+      sprite,
+      particle.x - particle.radius,
+      particle.y - particle.radius,
+      particle.radius * 2,
+      particle.radius * 2,
+    );
+  }
+  context.globalAlpha = 1;
 }

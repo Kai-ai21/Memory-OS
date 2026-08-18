@@ -12,18 +12,35 @@
  * frosting to have something to pick up and not enough to turn a light theme
  * into a gradient. If you can see it without looking for it, it is too strong.
  *
- * **M9.3 adds a second layer over them, on the same rule.** Soft dark specks
- * that drift off the cursor and dissipate. The intent is atmosphere, so the
- * measure of success is that you cannot count them: peak opacity 0.06–0.12,
- * radial-gradient edges, one particle per 40px of travel rather than one per
- * frame. Every one of those numbers is low enough to feel like a mistake until
- * you see the alternative, which on a light ground is soot. The arithmetic is
- * in `field.ts` and the loop is in `ParticleCanvas.tsx`.
+ * **M9.3 draws two more layers over them, and they are not the same effect.**
+ * They share one canvas and one frame loop and nothing else, which is the
+ * point: either can be re-tuned without the other moving.
+ *
+ * `ambient.ts` is the weather — eight hundred half-pixel-to-two-pixel specks
+ * riding a Perlin flow field, peak 0.08 each, with no idea the cursor exists.
+ * It is running before you touch the mouse and it does not stop.
+ *
+ * `cursor.ts` is the gesture — emitted one per eight pixels of pointer travel,
+ * peak 0.35, born with a fraction of the pointer's own velocity so a flick
+ * throws a longer tail than a crawl, and handed over to the same flow field as
+ * it fades so the trail dissolves into the weather instead of switching off.
+ *
+ * `ParticleCanvas.tsx` owns the loop and the thing that makes a trail a trail:
+ * the buffer is faded rather than cleared, so a particle overlaps its own
+ * recent past and a row of dots becomes a smear. Read the header there before
+ * changing the clear — it is done by erasing alpha rather than by painting the
+ * page colour over the top, and the reason is the wash directly underneath it.
+ *
+ * **The cursor layer is four times darker than anything M9.3 shipped in step
+ * 1a, and that was a decision rather than a drift.** It costs contrast; what it
+ * costs, on which text role, is measured in `particles.test.tsx`.
  *
  * **Three gates, and only one of them is a preference.** Reduced motion and a
  * touch-primary pointer both mean the canvas is never created — see
  * `preference.ts`. The stored preference is the third, and it is the only one
- * the toggle can change.
+ * the toggle can change. All three matter more since the ambient layer landed:
+ * it never stops on its own, so there is no moment at which opting out is
+ * merely cosmetic.
  *
  * **Kept deliberately isolated.** Everything about how this is drawn lives
  * inside this one directory — no other file imports from it, references its
