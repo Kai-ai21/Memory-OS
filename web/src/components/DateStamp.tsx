@@ -38,7 +38,7 @@ export function DateStamp({
   if (!value) {
     return (
       <span
-        className="meta text-faint"
+        className="meta text-ink-3"
         title={title}
         data-testid="date-stamp"
         data-provenance={provenance ?? "unknown"}
@@ -57,7 +57,7 @@ export function DateStamp({
     >
       {utc ? timestampUtc(value) : timestamp(value)}
       {mark ? <span className="text-accent">{mark}</span> : null}
-      {showProvenance ? <span className="ml-1.5 text-faint">{provenance}</span> : null}
+      {showProvenance ? <span className="ml-1.5 text-ink-3">{provenance}</span> : null}
     </span>
   );
 }

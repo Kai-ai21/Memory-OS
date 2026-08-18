@@ -51,7 +51,7 @@ export function Evolution({ memoryId, kind }: { memoryId: string; kind: string }
   const data = evolution.data;
   if (data.versions.length < 2) {
     return (
-      <p className="meta text-faint">
+      <p className="meta text-ink-3">
         One version. Nothing has changed since this was first ingested, so there is no
         diff to show.
       </p>
@@ -119,7 +119,7 @@ function VersionSelector({
             </option>
           ))}
         </select>
-        <span className="meta text-faint">→</span>
+        <span className="meta text-ink-3">→</span>
         <select
           className="field meta"
           value={to}
@@ -172,10 +172,10 @@ function DiffPanel({
           <span className="flex items-baseline gap-3">
             <span className="text-affirm">+{count(diff.added_chars)}</span>
             <span className="text-deny">−{count(diff.removed_chars)}</span>
-            <span className="text-faint">
+            <span className="text-ink-3">
               {diff.span_count} span{diff.span_count === 1 ? "" : "s"}
             </span>
-            <span className="text-faint">
+            <span className="text-ink-3">
               {/* Null rather than zero, and rendered as a reason rather than a
                   dash: superseded versions have no chunks to count. */}
               chunk delta{" "}
@@ -196,9 +196,9 @@ function DiffPanel({
       {after ? (
         <div className="flex flex-wrap items-baseline gap-x-4">
           <Tag>{after.change}</Tag>
-          <span className="meta text-faint">occurred</span>
+          <span className="meta text-ink-3">occurred</span>
           <DateStamp value={after.occurred_at} provenance={after.occurred_at_source} />
-          <span className="meta text-faint">
+          <span className="meta text-ink-3">
             {count(after.characters)} chars
             {after.holds_chunks ? `, ${after.chunks} chunks` : ", chunks discarded"}
           </span>
@@ -208,7 +208,7 @@ function DiffPanel({
       {diff.summary ? <SummaryLine summary={diff.summary} /> : null}
 
       {diff.is_empty ? (
-        <p className="meta text-muted" data-testid="empty-diff">
+        <p className="meta text-ink-2" data-testid="empty-diff">
           The normalized text is identical. The bytes changed — a new artifact and a new
           version were recorded — but nothing a reader would call a change did, so the
           chunks were adopted rather than rebuilt.
@@ -217,12 +217,12 @@ function DiffPanel({
         <>
           <SpanTable spans={diff.spans} code={code} />
           {diff.span_count > diff.spans.length ? (
-            <p className="meta text-faint">
+            <p className="meta text-ink-3">
               showing {diff.spans.length} of {count(diff.span_count)} spans
             </p>
           ) : null}
           {diff.affected_chunks.length > 0 ? (
-            <p className="meta text-muted" data-testid="affected-chunks">
+            <p className="meta text-ink-2" data-testid="affected-chunks">
               touches {diff.affected_chunks.length} chunk
               {diff.affected_chunks.length === 1 ? "" : "s"}:{" "}
               {diff.affected_chunks
@@ -255,7 +255,7 @@ function SummaryLine({ summary }: { summary: NonNullable<VersionDiff["summary"]>
       data-testid="change-summary"
     >
       <p className="prose-content text-ink">{summary.text}</p>
-      <p className="meta mt-1 text-faint">
+      <p className="meta mt-1 text-ink-3">
         {summary.trivial ? "decided from the diff, not generated" : summary.model_id}
         {summary.cached ? " · cached" : ""}
         {summary.grounded ? "" : " · ungrounded"}
@@ -266,7 +266,7 @@ function SummaryLine({ summary }: { summary: NonNullable<VersionDiff["summary"]>
         </p>
       ) : null}
       {summary.context_only.length > 0 ? (
-        <p className="meta text-muted" title="present only on unchanged context lines">
+        <p className="meta text-ink-2" title="present only on unchanged context lines">
           from context, not from the change: {summary.context_only.join(", ")}
         </p>
       ) : null}
@@ -327,10 +327,10 @@ function Side({
   const segments = segmentAll(text, [{ start: 0, end: text.length }]);
 
   return (
-    <div className={`px-3 py-2 ${removed ? "bg-void" : "bg-raised"}`}>
+    <div className={`px-3 py-2 ${removed ? "bg-ground" : "bg-surface"}`}>
       <p className="meta-label mb-1">{label}</p>
       {text.length === 0 ? (
-        <p className="meta text-faint">{empty}</p>
+        <p className="meta text-ink-3">{empty}</p>
       ) : (
         <div className={body}>
           {segments.map((segment, index) =>

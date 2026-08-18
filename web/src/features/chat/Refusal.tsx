@@ -10,7 +10,7 @@
  * the system reporting a measured fact about the corpus: nothing here supports a
  * claim, so no claim is made.
  *
- * So it gets the loudest treatment available short of colour-as-alarm: a magenta
+ * So it gets the loudest treatment available short of colour-as-alarm: a warn
  * rule (this palette's colour for what the system does not have), a mono label
  * above it naming the finding rather than the mood, and the sentence itself at
  * full body size in white — the same size as an answer, because it *is* the
@@ -38,14 +38,12 @@ export function Refusal({
 }) {
   return (
     <div className="relative pl-6" data-testid="refusal">
-      {/* The rule, and the glow that makes it read as lit rather than drawn.
-          Full strength at the top where the label is, fading downward — the
-          reference's gradient rule, in magenta. */}
-      <span
-        className="absolute inset-y-0 left-0 w-0.5 rounded-full bg-gradient-to-b from-magenta via-magenta/30 to-transparent shadow-[0_0_8px_var(--color-magenta)]"
-        aria-hidden
-      />
-      <p className="meta-label mb-2 text-magenta" data-testid="refusal-label">
+      {/* A solid rule, full height. The dark theme faded it downward and lit it
+          with a glow; on light a fading rule just looks like a rendering error
+          and there is no glow to spend, so it is a plain 2px bar in `warn` —
+          which is more emphatic here, not less. */}
+      <span className="absolute inset-y-0 left-0 w-0.5 bg-warn" aria-hidden />
+      <p className="meta-label mb-2 font-bold text-warn" data-testid="refusal-label">
         No supporting memories
       </p>
       <p className="prose-content text-base text-ink" data-testid="refusal-text">

@@ -6,57 +6,47 @@
  * fifteen views — that "revise the palette" has to be one edit rather than
  * fifteen. Checked mechanically: there is not one hex literal under `src/`.
  *
- * THE CHARACTER: **Luminous Architecture** — a HUD suspended in deep space.
- * Depth comes from refraction rather than from shadow: a dark, coloured void,
- * soft radial glows drifting behind everything, and panels of translucent glass
- * that blur what is behind them. The glow is not decoration. It is the only
- * thing a translucent panel has to be translucent *of*; remove it and every
- * `backdrop-filter` in the application becomes an expensive no-op and the
- * panels read as flat grey boxes. See `.glass` and `--glow-*` below.
+ * THE CHARACTER: **a light instrument.** Flat white panels on a cool grey
+ * ground, separated by hairlines. No cards floating on shadows, no frosted
+ * pills, no neon. This replaced the dark Luminous theme at M9.2, and the
+ * replacement is not a colour swap — it is a change of what carries hierarchy.
  *
- * This replaced Archival Precision — warm paper, Fraunces, Source Serif, one
- * amber accent — wholesale at M9. The two share no value. What survived is the
- * *shape* of this file: role names rather than colour names, so that `text-ink`
- * meant near-black on bone and now means white on void without a component
- * knowing either. That is why the swap touched thirty files and not three
- * hundred.
+ * On dark, cyan did that work: an accent glowing out of a void is findable
+ * without any other help, so the interface could afford to be flat everywhere
+ * else. On light there is no glow to spend. **Hierarchy comes from weight, size
+ * and rules instead**, and the accent is demoted to meaning one thing only.
  *
- * GROUND — a five-step scale from the void up. `void` is the page itself, and
- * is the one surface that is fully opaque; everything above it is white at a
- * low alpha so that the glows behind show through and the stack reads as
- * stacked. Alpha rather than mixed opaque values, because the same panel sits
- * over a cyan glow in one corner and a magenta one in the other and has to be
- * tinted by whichever it is over.
+ * TWO RULES, and the theme is only as good as they are kept:
  *
- * TYPE — three faces, three jobs, distinguishable at a glance:
- *   display   Space Grotesk. Page titles and the wordmark. Geometric and a
- *             little technical, which is what keeps the headings from reading
- *             as a generic dashboard.
+ *   1. **Accent means interaction, never position.** Links, focus rings, the
+ *      send button, the thing you are about to do. The active nav item is *not*
+ *      accent — it takes an ink left rule and a weight change, because where
+ *      you are is not something you can click. Spending the accent on position
+ *      is how it stops meaning anything, and then nothing on the page says
+ *      "this is the actionable thing" any more.
+ *
+ *   2. **Hairlines, not shadows.** Panels are `surface` with a 1px `rule`.
+ *      There is exactly one shadow in the entire application and it is on the
+ *      one glass element. On light, shadows accumulate into noise faster than
+ *      anything else — five soft drop shadows and the page looks like it is
+ *      made of stickers.
+ *
+ * GLASS is used on exactly one element: the NEW CONVERSATION button. See
+ * `.glass-button` in `index.css` and `BackgroundLayer` in the shell, which is
+ * the only reason the frosting has anything to frost. More glass will be
+ * introduced later, deliberately, once the flat version reads well.
+ *
+ * TYPE — three faces, three jobs, unchanged from the dark theme:
+ *   display   Space Grotesk. Page titles and the wordmark.
  *   prose     Inter. The thing being *read*: chunk text, answers, statements.
- *             Chosen by the design system for legibility through translucency,
- *             which is a real constraint here — body text sits on glass over a
- *             moving gradient.
- *   mono      JetBrains Mono. Paths, scores, offsets, labels, code, and every
- *             uppercase micro-label in the interface. Tabular figures, so a
- *             column of scores compares vertically.
- *
- * ACCENT — two, and they are not interchangeable. Cyan is the system speaking
- * about *what it found*: matches, active nav, scores, primary actions. Magenta
- * is the system speaking about *what it does not have*: a refusal, a gap in the
- * timeline, a signal that is switched off. Learning that distinction once makes
- * several screens readable at a glance, so nothing is allowed to blur it — a
- * magenta button, or a cyan gap band, would cost more than it looks like.
+ *   mono      JetBrains Mono. Paths, scores, offsets, labels, code. Tabular
+ *             figures, so a column of scores compares vertically.
  */
 
 /* Self-hosted, because this is a local-first tool that has to work with no
- * network. The design's own export links Google Fonts; that is a CDN request
- * per page load and a blank heading on a train.
- *
- * Latin only, declared by hand rather than by importing the packages' index
- * files. `@fontsource-variable/inter` ships fourteen subsets — Cyrillic, Greek,
- * Vietnamese — and Vite emits every one it sees into `dist`. The corpus and the
- * interface are English, and shipping alphabets no browser here will request is
- * dead weight measured in hundreds of kilobytes. */
+ * network. Latin only, declared by hand rather than by importing the packages'
+ * index files — `@fontsource-variable/inter` ships fourteen subsets and Vite
+ * emits every one it sees into `dist`. */
 @font-face {
   font-family: "Space Grotesk Variable";
   font-style: normal;
@@ -81,11 +71,6 @@
     U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
-/* Three weights rather than a variable face: JetBrains Mono ships static files,
- * and the interface uses exactly 400 for text, 500 for labels and 700 for the
- * wordmark. Declared by hand for the same subset reason as above — the
- * package's own CSS pulls latin-ext and a `.woff` fallback for every weight,
- * which was six files nothing asked for. */
 @font-face {
   font-family: "JetBrains Mono";
   font-style: normal;
@@ -124,106 +109,103 @@
 
 /* Tailwind v4 has no `tailwind.config.js`. `@theme` *is* the config: every
  * custom property declared here both exists as a CSS variable and generates the
- * matching utility, so `--color-cyan` gives `text-cyan`, `bg-cyan`,
- * `border-cyan` and the rest for free. One declaration, both consumers, and no
- * way for a JavaScript config and a stylesheet to drift apart. */
+ * matching utility, so `--color-accent` gives `text-accent`, `bg-accent`,
+ * `border-accent` and the rest for free. One declaration, both consumers, and
+ * no way for a JavaScript config and a stylesheet to drift apart. */
 @theme {
-  /* --- The void ----------------------------------------------------------
-   * The one opaque surface. Everything else is white at an alpha over this, so
-   * the radial glows painted on the shell tint the whole stack.
+  /* --- Ground and surfaces ----------------------------------------------
+   * Note the inversion from the dark theme: panels are now *lighter* than the
+   * page, not darker. `ground` is the page; `surface` is anything drawn on it.
+   * `surface-tint` is hover and the one step of recession — a code block, the
+   * inside of a well — and is the only grey fill in the system.
    */
-  --color-void: #101415;
-  /* One step below the void, for anything recessed *into* the page rather than
-   * floating over it: code blocks, the inside of an input, the explanation
-   * panel's well. The design draws these as `bg-black/20` over glass. */
-  --color-sunken: #0b0f10;
+  --color-ground: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-surface-tint: #eef1f6;
 
-  /* --- The glass stack ---------------------------------------------------
-   * Three levels, matching the design system's elevation model. Level 2 is
-   * every panel; level 3 is the two things that overlap another surface (the
-   * command palette, the mobile drawer) and is brighter and more blurred to
-   * read as closer. `nav` is the sidebar, which is glass over the void at the
-   * screen edge.
+  /* The hairline. Every structural edge in the application is this, at 1px.
+   *
+   * The brief calls this token `border`; it is spelled `rule` here because
+   * Tailwind generates the utility from the token name and `border-border` is
+   * a class nobody can read. Same value, same job, one syllable of difference.
    */
-  --color-glass: rgb(255 255 255 / 3%);
-  --color-glass-bright: rgb(255 255 255 / 6%);
-  --color-float: rgb(30 36 38 / 82%);
-  --color-nav: rgb(16 20 21 / 40%);
-  /* Kept as a role name from the ruled-sheet era: "the surface a reader is
-   * meant to act on". Under Luminous that is a glass card. */
-  --color-raised: rgb(255 255 255 / 4%);
+  --color-rule: #e2e6ed;
+  /* The same edge where it has to separate two adjacent surfaces on its own —
+   * a table header, the sidebar against the page. */
+  --color-rule-strong: #cdd4df;
 
-  /* Borders. `rule` is the 1px translucent white the design system specifies on
-   * every panel; `rule-strong` is the same edge where it has to survive being
-   * the only thing separating two adjacent surfaces. */
-  --color-rule: rgb(255 255 255 / 10%);
-  --color-rule-strong: rgb(255 255 255 / 20%);
-
-  /* Behind the palette. Deep and slightly indigo rather than neutral black, so
-   * the dimmed page keeps the temperature of the void instead of going grey. */
-  --color-scrim: rgb(6 8 12 / 66%);
+  /* Behind the command palette. Ink at low alpha rather than black, so the
+   * dimmed page keeps the palette's temperature instead of going flat grey. */
+  --color-scrim: rgb(15 23 42 / 32%);
 
   /* --- Ink ---------------------------------------------------------------
-   * `ink` for content, `muted` for metadata being read, `faint` for metadata
-   * that is present but not being read. White at three alphas rather than three
-   * greys: the same three values then hold their relationship over the sidebar,
-   * over a glass card, and over the explanation panel's darker well, which
-   * opaque greys would not.
+   * Three tiers: content, metadata being read, metadata that is present but not
+   * being read. All three clear WCAG AA (4.5:1) against both `surface` and
+   * `ground`, which is asserted by a test rather than trusted.
+   *
+   * **`ink-3` is not the value the brief specified, and this is the one place
+   * this milestone departs from it.** The brief asks for #94A3B8 *and* for a
+   * test proving all three tiers meet 4.5:1. Those two requirements contradict
+   * each other: #94A3B8 measures 2.56:1 on white, which is not a near miss —
+   * it is a little over half the required ratio, and it is the colour every
+   * timestamp, path and count in this interface is set in. #5D6B80 is the
+   * lightest value on the same ramp that clears 4.5:1 on white *and* on the
+   * grey ground, measuring 5.41:1 and 5.09:1. The accessibility requirement was
+   * the point and the hex was the means, so the hex moved. See the report.
    */
-  --color-ink: #ffffff;
-  --color-muted: rgb(255 255 255 / 70%);
-  --color-faint: rgb(255 255 255 / 45%);
+  --color-ink: #0f172a;
+  --color-ink-2: #475569;
+  --color-ink-3: #5d6b80;
 
-  /* --- The two accents ---------------------------------------------------
-   * Cyan: what the system found. Magenta: what it does not have. See the file
-   * header — the distinction carries real meaning on the timeline, in chat and
-   * in the explanation panel, and is not a palette convenience.
+  /* --- The accent --------------------------------------------------------
+   * One colour, one meaning: **you can do something here.** Links, focus rings,
+   * the send button, the primary action. Never the active nav item, never a
+   * selected row, never a heading. See rule 1 in the file header.
    */
-  --color-cyan: #22d3ee;
-  /* The same hue held back, for a second cyan element in one panel that must
-   * not compete with the first — a bar behind a value, an inactive tab. */
-  --color-cyan-dim: rgb(34 211 238 / 55%);
-  --color-magenta: #d946ef;
-  --color-magenta-dim: rgb(217 70 239 / 55%);
+  --color-accent: #2563eb;
+  /* Hover and active. Darker rather than brighter — on light, "more" is down. */
+  --color-accent-strong: #1d4ed8;
+  /* The highlight wash, and the fill behind an accent chip. */
+  --color-accent-soft: rgb(37 99 235 / 10%);
 
-  /* Kept for the code that still calls the interactive colour `accent`. It is
-   * cyan; the alias exists so that "the accent" has a name that does not
-   * presume which hue it is. */
-  --color-accent: var(--color-cyan);
-  --color-accent-bright: #67e8f9;
+  /* --- Warn --------------------------------------------------------------
+   * What the system does not have, or what argues against: a refusal, a gap in
+   * the timeline, counter-evidence. Distinct from `deny`, which is a verdict
+   * somebody recorded, and from `accent`, which is an invitation.
+   */
+  --color-warn: #b45309;
+  --color-warn-soft: rgb(180 83 9 / 10%);
 
   /* The matched span. The most important element in the product: it is what
-   * makes a search result legible without reading it. A cyan wash with a solid
-   * cyan underline, exactly as the reference draws it — the wash alone is too
-   * quiet through a blurred panel, and the underline is what survives a
-   * screenshot. */
-  --color-wash: rgb(34 211 238 / 20%);
-  --color-edge: #22d3ee;
+   * makes a search result legible without reading it. On light, a background
+   * tint alone is far too weak — an 10% wash on white is nearly invisible at
+   * arm's length — so the mark is the wash *plus* a solid accent underline, and
+   * the underline is what actually carries it. */
+  --color-wash: var(--color-accent-soft);
+  --color-edge: var(--color-accent);
 
-  /* Verdicts. These annotate data rather than announce status, so they stay
-   * one step down in saturation from the accents — three saturated pills in a
-   * result row would out-shout the highlight the row exists to show. */
-  --color-affirm: #5eead4;
-  --color-deny: #ffb4ab;
-  /* The one amber left in the system, for "degraded": a state that is neither
-   * a verdict nor an accent and must not be mistaken for either. */
-  --color-warn: #fbbf24;
+  /* Verdicts. These annotate data rather than announce status, so they sit one
+   * step down in saturation from the accent — three saturated pills in a result
+   * row would out-shout the highlight the row exists to show. Both clear AA. */
+  --color-affirm: #047857;
+  --color-deny: #b91c1c;
 
   /* Kind colours, for the timeline's stacked bars.
    *
-   * The one place the two-accent rule bends, and it bends because here the
+   * The one place the single-accent rule bends, and it bends because here the
    * categorical encoding *is* the content: a bar that does not say what it is
-   * made of is a count, which the CLI already prints. Pitched bright enough to
-   * hold against the void at 2px tall, and kept away from magenta so that no
-   * bar can be mistaken for the gap band drawn beside it. */
-  --color-kind-code: #22d3ee;
-  --color-kind-note: #a78bfa;
-  --color-kind-document: #d1bcff;
-  --color-kind-email: #5eead4;
-  --color-kind-commit: #38bdf8;
-  --color-kind-meeting: #7dd3fc;
-  --color-kind-bookmark: #fbbf24;
-  --color-kind-other: rgb(255 255 255 / 35%);
+   * made of is a count, which the CLI already prints. Pitched dark enough to
+   * hold against the light ground at 2px tall — the dark theme's values were
+   * chosen to glow out of a void and are invisible here — and kept away from
+   * `warn` so no bar can be mistaken for the gap band drawn beside it. */
+  --color-kind-code: #2563eb;
+  --color-kind-note: #7c3aed;
+  --color-kind-document: #0e7490;
+  --color-kind-email: #047857;
+  --color-kind-commit: #1e40af;
+  --color-kind-meeting: #6d28d9;
+  --color-kind-bookmark: #a16207;
+  --color-kind-other: #64748b;
 
   /* --- Faces ------------------------------------------------------------- */
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -231,57 +213,47 @@
   --font-display: "Space Grotesk Variable", "Space Grotesk", ui-sans-serif,
     system-ui, sans-serif;
 
-  /* The type scale, from the design system's `typography` block. Named for the
-   * job rather than the size, so a heading that needs to shrink on mobile
-   * changes here and not in nine components. */
-  --text-headline-xl: 3rem; /* 48px */
+  --text-headline-xl: 3rem;
   --text-headline-xl--line-height: 1.1;
   --text-headline-xl--letter-spacing: -0.02em;
   --text-headline-xl--font-weight: 700;
 
-  --text-headline-lg: 2rem; /* 32px */
+  --text-headline-lg: 2rem;
   --text-headline-lg--line-height: 1.2;
   --text-headline-lg--letter-spacing: -0.01em;
   --text-headline-lg--font-weight: 600;
 
-  --text-headline-md: 1.375rem; /* 22px */
+  --text-headline-md: 1.375rem;
   --text-headline-md--line-height: 1.4;
   --text-headline-md--font-weight: 500;
 
-  --text-body-md: 1rem; /* 16px */
+  --text-body-md: 1rem;
   --text-body-md--line-height: 1.6;
 
-  --text-body-sm: 0.875rem; /* 14px */
+  --text-body-sm: 0.875rem;
   --text-body-sm--line-height: 1.5;
 
-  /* The mono micro-label, which is most of the text in this interface. */
-  --text-meta: 0.75rem; /* 12px */
+  --text-meta: 0.75rem;
   --text-meta--line-height: 1.4;
   --text-meta--letter-spacing: 0.05em;
-  /* The smaller caps label the design uses for nav items and section headings. */
-  --text-label: 0.6875rem; /* 11px */
+
+  --text-label: 0.6875rem;
   --text-label--line-height: 1;
   --text-label--letter-spacing: 0.08em;
   --text-label--font-weight: 500;
 
   /* --- Radius ------------------------------------------------------------
-   * From the design system's `rounded` block. Panels are `md`; the large
-   * architectural containers — the chat input, a dashboard region — are `xl`.
-   * Nothing in this interface is square any more, which is the single biggest
-   * visible difference from the ruled-sheet era.
+   * Smaller than the dark theme throughout. Large radii read as soft and
+   * app-like against a glowing void; against flat white hairlines they read as
+   * imprecise, and this is an instrument.
    */
   --radius-sm: 0.25rem;
-  --radius-DEFAULT: 0.5rem;
-  --radius-md: 0.75rem;
-  --radius-lg: 1rem;
-  --radius-xl: 1.5rem;
+  --radius-DEFAULT: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
 
-  /* --- Space -------------------------------------------------------------
-   * The design system's 8px vertical rhythm, and the three layout constants
-   * that more than one component references. `--space-*` mirrors Tailwind's own
-   * 4px scale so that a utility and a custom property cannot resolve to
-   * different numbers.
-   */
+  /* --- Space ------------------------------------------------------------- */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
@@ -291,25 +263,25 @@
   --space-12: 3rem;
   --space-16: 4rem;
 
-  /* 280px, from the reference's sidebar. Wider than the 15rem the ruled nav
-   * used, because the nav items now carry an icon and an uppercase label. */
   --width-sidebar: 17.5rem;
   --width-reading: 75ch;
 
-  /* --- The glow ----------------------------------------------------------
-   * The two radial gradients the shell paints behind everything. Declared as
-   * tokens rather than written into the shell because they are the reason the
-   * glass reads as glass, and a future screen that needs its own glow should
-   * spend these rather than invent a third colour.
+  /* --- The background wash ----------------------------------------------
+   * The two soft radials `BackgroundLayer` paints. They exist for one reason:
+   * the NEW CONVERSATION button is frosted glass, and frosted glass over a flat
+   * colour is just a flat colour. These are what it frosts.
+   *
+   * Pale and low-opacity on purpose. Anything stronger and the "light theme"
+   * becomes a gradient, which is a different product.
    */
-  --glow-cyan: radial-gradient(
+  --wash-blue: radial-gradient(
     circle,
-    rgb(34 211 238 / 22%) 0%,
-    rgb(34 211 238 / 0%) 70%
+    rgb(37 99 235 / 10%) 0%,
+    rgb(37 99 235 / 0%) 70%
   );
-  --glow-magenta: radial-gradient(
+  --wash-violet: radial-gradient(
     circle,
-    rgb(160 40 200 / 26%) 0%,
-    rgb(160 40 200 / 0%) 70%
+    rgb(124 58 237 / 9%) 0%,
+    rgb(124 58 237 / 0%) 70%
   );
 }

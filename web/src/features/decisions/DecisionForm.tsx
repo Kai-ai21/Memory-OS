@@ -123,7 +123,7 @@ export function DecisionForm() {
         record a decision
       </SectionHeading>
       {prefill.acceptSuggestionId ? (
-        <p className="meta max-w-prose leading-relaxed text-faint">
+        <p className="meta max-w-prose leading-relaxed text-ink-3">
           Editing a draft. Submitting accepts the suggestion and writes this, with the
           passage it came from attached as <code className="kbd">records</code> evidence.
           Confidence and assumptions are blank on purpose — they are yours, not the
@@ -218,7 +218,7 @@ export function DecisionForm() {
           onChange={(event) => setConfidence(event.target.value)}
           aria-label="confidence"
         />
-        <p className="meta mt-1 text-faint">
+        <p className="meta mt-1 text-ink-3">
           Recorded as of now and never updated. A number revised after the outcome measures
           nothing.
         </p>
@@ -263,7 +263,7 @@ export function DecisionForm() {
       </section>
 
       {refusal ? (
-        <p className="meta max-w-prose border-l-2 border-deny bg-raised p-3 leading-relaxed text-ink">
+        <p className="meta max-w-prose border-l-2 border-deny bg-surface p-3 leading-relaxed text-ink">
           {refusal}
         </p>
       ) : null}
@@ -287,7 +287,7 @@ export function DecisionForm() {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="meta-label text-muted">{label}</span>
+      <span className="meta-label text-ink-2">{label}</span>
       {children}
     </label>
   );

@@ -93,7 +93,7 @@ function Registered({ sources }: { sources: Source[] }) {
           </tbody>
         </table>
       </div>
-      <p className="meta text-faint">
+      <p className="meta text-ink-3">
         A full sync is the only one that can notice a deletion: a file that is
         gone produces no observation, so the complete set has to be compared
         against the complete known set. That is why the two dates are separate.
@@ -117,11 +117,11 @@ function Row({ source }: { source: Source }) {
   return (
     <tr className="border-b border-rule/60" data-testid="source-row">
       <td className="meta py-1 pr-4 text-ink">{source.name}</td>
-      <td className="meta py-1 pr-4 text-faint">{source.kind}</td>
+      <td className="meta py-1 pr-4 text-ink-3">{source.kind}</td>
       <td className="meta py-1 pr-4">{count(source.memories)}</td>
       <td className="meta py-1 pr-4">{count(source.chunks)}</td>
-      <td className="meta py-1 pr-4 text-faint">{timestamp(source.last_sync_at)}</td>
-      <td className="meta py-1 pr-4 text-faint">{timestamp(source.last_full_sync_at)}</td>
+      <td className="meta py-1 pr-4 text-ink-3">{timestamp(source.last_sync_at)}</td>
+      <td className="meta py-1 pr-4 text-ink-3">{timestamp(source.last_full_sync_at)}</td>
       <td className="py-1">
         {walkable ? (
           <span className="flex gap-2">
@@ -144,13 +144,13 @@ function Row({ source }: { source: Source }) {
             </button>
           </span>
         ) : (
-          <span className="meta text-faint" title="Messages are pushed, not walked">
+          <span className="meta text-ink-3" title="Messages are pushed, not walked">
             not walked
           </span>
         )}
         {sync.isError ? <Failure error={sync.error} /> : null}
         {sync.isSuccess ? (
-          <span className="meta ml-2 text-muted">
+          <span className="meta ml-2 text-ink-2">
             {sync.data?.job_id ? "queued" : "already running"}
           </span>
         ) : null}
@@ -263,7 +263,7 @@ function DeleteSourcePanel({
 
   return (
     <div
-      className="flex max-w-prose flex-col gap-2 border-l-2 border-deny bg-void p-3"
+      className="flex max-w-prose flex-col gap-2 border-l-2 border-deny bg-ground p-3"
       role="alertdialog"
       aria-label={`Delete the source ${source.name}`}
     >
@@ -272,7 +272,7 @@ function DeleteSourcePanel({
         everything from it?
       </p>
       {scope.isPending ? (
-        <p className="meta text-faint">counting what this would remove…</p>
+        <p className="meta text-ink-3">counting what this would remove…</p>
       ) : null}
       {scope.data ? (
         <ul className="flex flex-col gap-0.5" data-testid="source-deletion-scope">
@@ -309,7 +309,7 @@ function DeleteSourcePanel({
         </ul>
       ) : null}
       {scope.data ? (
-        <p className="meta text-muted" data-testid="source-log-note">
+        <p className="meta text-ink-2" data-testid="source-log-note">
           {scope.data.log_note}
         </p>
       ) : null}
@@ -318,7 +318,7 @@ function DeleteSourcePanel({
       </label>
       <input
         id={`confirm-source-${source.id}`}
-        className="w-56 border border-deny bg-void p-2 font-mono text-sm text-ink"
+        className="w-56 border border-deny bg-ground p-2 font-mono text-sm text-ink"
         value={typed}
         onChange={(event) => setTyped(event.target.value)}
         autoComplete="off"
@@ -326,13 +326,13 @@ function DeleteSourcePanel({
       <span className="flex items-baseline gap-3">
         <button
           type="button"
-          className="meta text-deny hover:underline disabled:text-faint disabled:no-underline"
+          className="meta text-deny hover:underline disabled:text-ink-3 disabled:no-underline"
           disabled={typed !== source.name || remove.isPending || !scope.data}
           onClick={() => remove.mutate()}
         >
           {remove.isPending ? "deleting…" : "delete this source"}
         </button>
-        <button type="button" className="meta text-faint" onClick={onCancel}>
+        <button type="button" className="meta text-ink-3" onClick={onCancel}>
           cancel
         </button>
       </span>
@@ -413,7 +413,7 @@ function Register() {
         </button>
       </form>
       {create.isError ? <Failure error={create.error} /> : null}
-      <p className="meta text-faint">
+      <p className="meta text-ink-3">
         Registering does not read anything. It records where to look; the first
         sync is a separate act, and it is the one that costs time.
       </p>

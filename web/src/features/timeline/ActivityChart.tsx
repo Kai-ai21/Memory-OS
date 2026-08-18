@@ -81,7 +81,7 @@ export function ActivityChart({
 
   if (buckets.length === 0) {
     return (
-      <p className="meta text-faint">
+      <p className="meta text-ink-3">
         no periods in this window — nothing in the corpus carries a date inside it
       </p>
     );
@@ -102,11 +102,11 @@ export function ActivityChart({
             **This is the most important element on the timeline.** M4.0's whole
             argument is that absence is the signal, and a thin hatched strip
             below the axis makes it a footnote to the bars — the opposite of
-            that argument. Drawn at full chart height, in magenta, dashed, it is
+            that argument. Drawn at full chart height, in warn, dashed, it is
             the first thing the eye lands on, which is correct: a month with
             nothing in it is more interesting than a month with forty things.
             Dashed because a dashed boundary is the drawing convention for a
-            region that is inferred rather than measured, and magenta because
+            region that is inferred rather than measured, and warn because
             that is this palette's colour for what the system does not have. */}
         {gaps.map((gap) => {
           const from = clamp((Date.parse(gap.start) - windowStart) / span);
@@ -125,7 +125,7 @@ export function ActivityChart({
                   only then: a label wider than the region it names points at
                   the wrong part of the chart. */}
               {width > 0.12 ? (
-                <span className="meta-label whitespace-nowrap text-magenta">
+                <span className="meta-label whitespace-nowrap font-bold text-warn">
                   {Math.round(gap.days)} day gap
                 </span>
               ) : null}
@@ -147,7 +147,7 @@ export function ActivityChart({
               data-bucket={bucket.start}
               data-count={bucket.count}
               className={`group relative flex h-full min-w-1.5 flex-1 cursor-pointer flex-col justify-end ${
-                isSelected ? "bg-cyan/12" : "hover:bg-glass"
+                isSelected ? "bg-accent-soft" : "hover:bg-surface-tint"
               }`}
             >
               {/* The count sits directly above its own bar rather than at the
@@ -156,7 +156,7 @@ export function ActivityChart({
                   which is the reading error the number exists to remove. In the
                   column, `justify-end` puts it exactly on the bar's shoulder. */}
               {!empty ? (
-                <span className="meta pointer-events-none pb-0.5 text-center text-faint group-hover:text-ink">
+                <span className="meta pointer-events-none pb-0.5 text-center text-ink-3 group-hover:text-ink">
                   {bucket.count}
                 </span>
               ) : null}
@@ -182,7 +182,7 @@ export function ActivityChart({
                       // and this interface spends its one accent on the matched
                       // -span highlight. 70% puts the bars back in the register
                       // of ink on paper without losing the categorical read.
-                      className="opacity-90 shadow-[0_0_10px_currentColor]"
+                      className=""
                       style={{
                         height: `${((bucket.by_kind?.[kind] ?? 0) / bucket.count) * 100}%`,
                         backgroundColor: kindColor(kind),
@@ -202,7 +202,7 @@ export function ActivityChart({
         {buckets.map((bucket, index) => (
           <span
             key={bucket.start}
-            className="meta min-w-1.5 flex-1 overflow-hidden pt-1 text-center text-faint"
+            className="meta min-w-1.5 flex-1 overflow-hidden pt-1 text-center text-ink-3"
           >
             {index % stride === 0 || index === buckets.length - 1 ? labelFor(bucket) : ""}
           </span>

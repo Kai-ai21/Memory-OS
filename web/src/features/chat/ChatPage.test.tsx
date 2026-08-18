@@ -180,7 +180,7 @@ describe("the connection line", () => {
     renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
 
     // Matched on the line's text content rather than with `findByText`,
-    // because M9.1 sets the entity names in cyan and they are therefore in
+    // because M9.1 sets the entity names in accent and they are therefore in
     // their own spans. The sentence is the assertion; which elements carry it
     // is not.
     const line = await screen.findByTestId("connection-line");
@@ -211,7 +211,7 @@ describe("an answer", () => {
     expect(within(answer).getByText(/nothing was cited/i)).toBeInTheDocument();
   });
 
-  it("gives the refusal the magenta treatment and the mono label, not a quiet one", async () => {
+  it("gives the refusal the warn treatment and the mono label, not a quiet one", async () => {
     // The point of M9.1's chat work, pinned. This state used to render in grey
     // italic body text half-hidden behind the composer — the visual language of
     // an apology. It is not one: it is the system reporting that nothing in the
@@ -222,23 +222,26 @@ describe("an answer", () => {
 
     const refusal = await screen.findByTestId("refusal");
 
-    // The mono label, in the magenta this palette reserves for what the system
+    // The mono label, in the warn this palette reserves for what the system
     // does not have.
     const label = within(refusal).getByTestId("refusal-label");
     expect(label).toHaveTextContent(/no supporting memories/i);
     expect(label.className).toMatch(/meta-label/);
-    expect(label.className).toMatch(/text-magenta/);
+    expect(label.className).toMatch(/text-warn/);
 
-    // The magenta rule down the left, which is what carries it at a glance.
+    // The warn rule down the left, which is what carries it at a glance.
+    // M9.2 made it a solid bar rather than the dark theme's fading gradient:
+    // on light a rule that fades out reads as a rendering error, and there is
+    // no glow to make the top of it emphatic instead.
     const rule = refusal.querySelector('[aria-hidden="true"]');
-    expect(rule?.className).toMatch(/from-magenta/);
+    expect(rule?.className).toMatch(/bg-warn/);
 
     // And the sentence at full body size — the same size as an answer, because
     // it is the answer. Never italic, never dimmed.
     const body = within(refusal).getByTestId("refusal-text");
     expect(body.className).toMatch(/text-base/);
     expect(body.className).toMatch(/text-ink/);
-    expect(body.className).not.toMatch(/italic|text-faint|text-muted/);
+    expect(body.className).not.toMatch(/italic|text-ink-3|text-ink-2/);
   });
 
   it("shows no stored line for a question, because nothing was stored", async () => {

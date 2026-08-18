@@ -53,7 +53,7 @@ export function MemoryPage() {
           {detail.deleted_at ? <Tag>deleted</Tag> : null}
           {!detail.is_current ? <Tag>superseded</Tag> : null}
         </div>
-        {detail.title ? <p className="prose-content text-muted">{detail.title}</p> : null}
+        {detail.title ? <p className="prose-content text-ink-2">{detail.title}</p> : null}
         <div className="flex flex-wrap gap-x-5 gap-y-1">
           <Meta label="source">{detail.source_name}</Meta>
           <Meta label="version">{detail.version}</Meta>
@@ -114,8 +114,8 @@ export function MemoryPage() {
                 <td className="meta py-1 pr-4 text-ink">{chunk.ordinal}</td>
                 <td className="meta py-1 pr-4">{range(chunk.char_start, chunk.char_end)}</td>
                 <td className="meta py-1 pr-4">{chunk.token_count}</td>
-                <td className="meta py-1 pr-4 text-faint">{chunk.chunker_version}</td>
-                <td className="meta py-1 pr-4 text-faint">{chunk.embedding_model ?? "—"}</td>
+                <td className="meta py-1 pr-4 text-ink-3">{chunk.chunker_version}</td>
+                <td className="meta py-1 pr-4 text-ink-3">{chunk.embedding_model ?? "—"}</td>
                 <td className="meta py-1 pr-4">
                   {chunk.embedded ? timestamp(chunk.embedded_at) : "not embedded"}
                 </td>
@@ -207,14 +207,14 @@ function BoundedContent({
 
   if (!content) {
     return (
-      <p className="meta text-faint">
+      <p className="meta text-ink-3">
         no normalized text — this memory has not been normalized, or parsed to nothing
       </p>
     );
   }
 
   return (
-    <div className="border border-rule bg-raised" data-testid="bounded-content">
+    <div className="border border-rule bg-surface" data-testid="bounded-content">
       {pieces.map((piece, index) => {
         // The slice a citation landed on. Marked rather than scrolled-to with a
         // ref: the page is short enough that an anchor is enough, and a
@@ -235,7 +235,7 @@ function BoundedContent({
           data-cited={cited ? "true" : undefined}
         >
           <div className="flex gap-3 px-3 py-2">
-            <span className="meta w-8 shrink-0 pt-0.5 text-right text-faint">
+            <span className="meta w-8 shrink-0 pt-0.5 text-right text-ink-3">
               {piece.ordinal !== null ? `#${piece.ordinal}` : ""}
             </span>
             <div className={code ? "code-content flex-1" : "prose-content flex-1"}>

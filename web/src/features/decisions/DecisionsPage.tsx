@@ -77,7 +77,7 @@ export function DecisionsPage() {
         decisions
       </SectionHeading>
 
-      <div className="meta flex items-baseline gap-4 text-faint">
+      <div className="meta flex items-baseline gap-4 text-ink-3">
         <span className="flex gap-2">
           {STATUSES.map((value) => (
             <button
@@ -85,7 +85,7 @@ export function DecisionsPage() {
               type="button"
               onClick={() => setStatus(value)}
               className={
-                value === status ? "text-accent underline" : "text-muted hover:text-ink"
+                value === status ? "text-accent underline" : "text-ink-2 hover:text-ink"
               }
             >
               {value}
@@ -103,7 +103,7 @@ export function DecisionsPage() {
         // outside the rate. Three numbers rather than one percentage, because
         // "too soon to say" and "nobody checked" are different facts and
         // neither is a failure.
-        <div className="meta flex flex-wrap gap-4 text-faint">
+        <div className="meta flex flex-wrap gap-4 text-ink-3">
           <span className="text-affirm">{rate.data.worked} worked</span>
           <span className="text-deny">{rate.data.failed} failed</span>
           <span className="text-accent">{rate.data.mixed} mixed</span>
@@ -146,21 +146,21 @@ export function DecisionsPage() {
                   </Link>
                 </td>
                 <td className="prose-content py-1.5 pr-4 text-sm">{row.chosen}</td>
-                <td className="meta py-1.5 pr-4 text-muted">{row.status}</td>
+                <td className="meta py-1.5 pr-4 text-ink-2">{row.status}</td>
                 <td className="meta py-1.5 pr-4 text-ink">
                   {/* Never rounded away and never defaulted: an absent confidence
                       is a different claim from a low one. */}
                   {row.confidence === null ? "—" : row.confidence.toFixed(2)}
                 </td>
-                <td className="meta py-1.5 pr-4 text-faint">{row.options}</td>
+                <td className="meta py-1.5 pr-4 text-ink-3">{row.options}</td>
                 <td
                   className={`meta py-1.5 pr-4 ${
-                    row.assumptions === 0 ? "text-deny" : "text-faint"
+                    row.assumptions === 0 ? "text-deny" : "text-ink-3"
                   }`}
                 >
                   {row.assumptions}
                 </td>
-                <td className="meta py-1.5 pr-4 text-faint">{row.evidence}</td>
+                <td className="meta py-1.5 pr-4 text-ink-3">{row.evidence}</td>
                 <td className="py-1.5">
                   <DateStamp value={row.decided_at} provenance={row.decided_at_source} />
                 </td>

@@ -91,7 +91,7 @@ export function OutcomeQueue() {
       </SectionHeading>
 
       {rate.data ? (
-        <div className="meta flex flex-wrap gap-4 text-faint">
+        <div className="meta flex flex-wrap gap-4 text-ink-3">
           <span className="text-affirm">{rate.data.worked} worked</span>
           <span className="text-deny">{rate.data.failed} failed</span>
           <span className="text-accent">{rate.data.mixed} mixed</span>
@@ -108,7 +108,7 @@ export function OutcomeQueue() {
         </div>
       ) : null}
 
-      <div className="meta flex items-baseline gap-4 text-faint">
+      <div className="meta flex items-baseline gap-4 text-ink-3">
         <span className="flex gap-2">
           {(["pending", "accepted", "rejected"] as const).map((value) => (
             <button
@@ -116,7 +116,7 @@ export function OutcomeQueue() {
               type="button"
               onClick={() => setStatus(value)}
               className={
-                value === status ? "text-accent underline" : "text-muted hover:text-ink"
+                value === status ? "text-accent underline" : "text-ink-2 hover:text-ink"
               }
             >
               {value}
@@ -169,7 +169,7 @@ function CandidateRow({
 
   return (
     <li className="border-b border-rule-strong pb-5">
-      <div className="meta mb-2 flex flex-wrap items-baseline gap-3 text-faint">
+      <div className="meta mb-2 flex flex-wrap items-baseline gap-3 text-ink-3">
         <Tag>{row.status}</Tag>
         <span>{row.model_id}</span>
         <span>{timestamp(row.suggested_at)}</span>
@@ -177,36 +177,36 @@ function CandidateRow({
 
       <div className="grid gap-4 md:grid-cols-2">
         <div className="flex flex-col gap-2">
-          <p className="meta-label text-muted">the decision</p>
+          <p className="meta-label text-ink-2">the decision</p>
           <Link
             className="prose-content text-sm text-accent"
             to={`/decisions/${row.decision_id}`}
           >
             {row.decision_question}
           </Link>
-          <p className="meta text-faint">
+          <p className="meta text-ink-3">
             decided {timestamp(row.decision_decided_at)}
           </p>
 
-          <p className="meta-label mt-2 text-muted">what the model says happened</p>
+          <p className="meta-label mt-2 text-ink-2">what the model says happened</p>
           <p className="prose-content text-sm text-ink">{draft.description}</p>
-          <p className="meta text-muted">verdict: {draft.verdict}</p>
+          <p className="meta text-ink-2">verdict: {draft.verdict}</p>
           {draft.rationale ? (
-            <p className="meta max-w-prose leading-relaxed text-faint">
+            <p className="meta max-w-prose leading-relaxed text-ink-3">
               {draft.rationale}
             </p>
           ) : null}
         </div>
 
         <div className="flex flex-col gap-2">
-          <p className="meta-label text-muted">the memory that followed</p>
+          <p className="meta-label text-ink-2">the memory that followed</p>
           <span className="meta text-ink">
             {row.source_name}:{row.external_key}
           </span>
           {/* The whole basis of the claim, in one line, before the passage. */}
           <p className="meta text-ink">
             <span className="text-accent">{describeGap(row.gap_days)} later</span>
-            <span className="text-faint">
+            <span className="text-ink-3">
               {" "}
               · window {Math.round(row.window_days)}d ·{" "}
               {row.entity_filter === "applied" ? (
@@ -218,7 +218,7 @@ function CandidateRow({
               )}
             </span>
           </p>
-          <blockquote className="prose-content max-h-56 overflow-y-auto border-l-2 border-edge bg-raised p-3 text-sm leading-relaxed text-muted">
+          <blockquote className="prose-content max-h-56 overflow-y-auto border-l-2 border-edge bg-surface p-3 text-sm leading-relaxed text-ink-2">
             {row.source_text}
           </blockquote>
         </div>
@@ -242,7 +242,7 @@ function CandidateRow({
           >
             not an outcome
           </button>
-          <span className="meta self-center text-faint">
+          <span className="meta self-center text-ink-3">
             Accepting records this as <code className="kbd">inferred</code>, never as
             observed. If you watched it happen, record it on the decision instead.
           </span>

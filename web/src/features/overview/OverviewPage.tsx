@@ -163,7 +163,7 @@ function Figure({
         {value === undefined ? (
           // Not a zero and not a spinner. A zero would be a claim about the
           // corpus that has not been checked yet.
-          <span className="text-faint" aria-label="loading">
+          <span className="text-ink-3" aria-label="loading">
             —
           </span>
         ) : (
@@ -171,10 +171,10 @@ function Figure({
         )}
       </dd>
       <dt className="flex flex-col gap-0.5">
-        <Link to={to} className="meta-label text-muted hover:text-accent">
+        <Link to={to} className="meta-label text-ink-2 hover:text-accent">
           {label}
         </Link>
-        {note ? <span className="meta text-faint">{note}</span> : null}
+        {note ? <span className="meta text-ink-3">{note}</span> : null}
       </dt>
     </div>
   );
@@ -231,7 +231,7 @@ function SearchBox() {
           autoFocus
         />
       </form>
-      <p className="meta text-faint">
+      <p className="meta text-ink-3">
         Semantic, not keyword — wording matters more than exact terms.{" "}
         <span className="kbd">/</span> focuses this from anywhere,{" "}
         <span className="kbd">⌘K</span> opens the palette.
@@ -261,7 +261,7 @@ function Recent() {
       <SectionHeading right="by ingestion">recent activity</SectionHeading>
       {memories.isError ? <Failure error={memories.error} /> : null}
       {memories.data?.length === 0 ? (
-        <p className="meta text-faint">
+        <p className="meta text-ink-3">
           Nothing ingested. Register a source and sync it —{" "}
           <code className="kbd">memoryos sync</code>.
         </p>
@@ -279,7 +279,7 @@ function Recent() {
             >
               {memory.external_key}
             </Link>
-            <span className="meta shrink-0 text-faint">{memory.kind}</span>
+            <span className="meta shrink-0 text-ink-3">{memory.kind}</span>
             <span className="hidden shrink-0 sm:inline">
               <DateStamp value={memory.ingested_at} provenance="declared" />
             </span>
@@ -342,7 +342,7 @@ function Health() {
           }
         />
       </dl>
-      <p className="meta text-faint">
+      <p className="meta text-ink-3">
         The standing checks live on{" "}
         <Link to="/corpus" className="text-accent underline">
           corpus
@@ -363,7 +363,7 @@ function Line({
   ok: boolean | null;
   value: string;
 }) {
-  const tone = ok === null ? "text-faint" : ok ? "text-muted" : "text-deny";
+  const tone = ok === null ? "text-ink-3" : ok ? "text-ink-2" : "text-deny";
   return (
     <div className="flex items-baseline justify-between gap-3">
       <dt className="meta-label">{label}</dt>

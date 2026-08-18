@@ -93,7 +93,7 @@ describe("navigation", () => {
     // where you are, and one that marks two items is worse than marking none.
     //
     // Asserted on `aria-current`, which `NavLink` sets from the same `isActive`
-    // the cyan treatment is driven by. Asserting the class instead would pin
+    // the accent treatment is driven by. Asserting the class instead would pin
     // the styling rather than the state, and the styling is the thing this
     // milestone changes.
     stubEverything();

@@ -67,7 +67,7 @@ export function ReflectionsPage() {
             <button
               type="button"
               className={
-                includeDismissed ? "text-accent underline" : "text-muted hover:text-ink"
+                includeDismissed ? "text-accent underline" : "text-ink-2 hover:text-ink"
               }
               onClick={() => setIncludeDismissed((current) => !current)}
             >
@@ -82,7 +82,7 @@ export function ReflectionsPage() {
         reflections
       </SectionHeading>
 
-      <p className="meta max-w-prose leading-relaxed text-muted">
+      <p className="meta max-w-prose leading-relaxed text-ink-2">
         Written only for patterns whose evidence clears a confidence bar set above the one
         the pattern itself had to clear. A pattern below it produces no reflection at all
         rather than a hedged one — run{" "}
@@ -136,7 +136,7 @@ function ReflectionRow({
 
   return (
     <li className="border-b border-rule-strong pb-5">
-      <div className="meta mb-2 flex flex-wrap items-baseline gap-3 text-faint">
+      <div className="meta mb-2 flex flex-wrap items-baseline gap-3 text-ink-3">
         <Tag>reflection</Tag>
         <span className="text-ink">
           cited{" "}
@@ -160,7 +160,7 @@ function ReflectionRow({
         uncited={uncited}
       />
 
-      <p className="meta mt-3 max-w-prose text-faint">
+      <p className="meta mt-3 max-w-prose text-ink-3">
         from the pattern: {reflection.pattern_statement}{" "}
         <Link className="text-accent underline" to="/decisions/patterns">
           evidence
@@ -171,7 +171,7 @@ function ReflectionRow({
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
             type="button"
-            className="meta-label border border-rule px-3 py-1 text-muted disabled:opacity-40"
+            className="meta-label border border-rule px-3 py-1 text-ink-2 disabled:opacity-40"
             disabled={busy || reflection.acknowledged_at !== null}
             onClick={onAcknowledge}
           >

@@ -121,9 +121,13 @@ export function EntityGraph({ nodes, edges, focusId, onFocus }: Props) {
                 y1={CENTRE}
                 x2={x}
                 y2={y}
-                stroke="var(--color-cyan)"
-                strokeWidth={1}
-                strokeOpacity={0.35}
+                /* Darker and thicker than the dark theme's. A 1px line at 35%
+                   opacity glowed against a void and vanishes against #F7F8FA —
+                   measured by looking at it. `ink-3` at 1.5px is the lightest
+                   an edge can be here and still be traceable across the
+                   canvas. */
+                stroke="var(--color-ink-3)"
+                strokeWidth={1.5}
               />
               {edge ? (
                 /* The predicate on the edge rather than in a legend. An edge
@@ -133,7 +137,7 @@ export function EntityGraph({ nodes, edges, focusId, onFocus }: Props) {
                   x={(CENTRE + x) / 2}
                   y={(CENTRE + y) / 2 - 4}
                   textAnchor="middle"
-                  className="fill-cyan font-mono"
+                  className="fill-ink-2 font-mono"
                   fontSize={8}
                   letterSpacing="0.08em"
                 >
@@ -157,9 +161,9 @@ export function EntityGraph({ nodes, edges, focusId, onFocus }: Props) {
               cx={x}
               cy={y}
               r={14}
-              fill="var(--color-void)"
-              stroke="var(--color-rule-strong)"
-              strokeWidth={1}
+              fill="var(--color-surface)"
+              stroke="var(--color-ink-3)"
+              strokeWidth={1.5}
             />
             <text
               x={x}
@@ -179,10 +183,14 @@ export function EntityGraph({ nodes, edges, focusId, onFocus }: Props) {
             cx={CENTRE}
             cy={CENTRE}
             r={22}
-            fill="color-mix(in oklab, var(--color-cyan) 15%, transparent)"
-            stroke="var(--color-cyan)"
-            strokeWidth={1.5}
-            style={{ filter: "drop-shadow(0 0 8px var(--color-cyan))" }}
+            /* The one accent on this canvas. A selected node is the thing the
+               reader just clicked and the thing every edge is drawn from, so it
+               is a result of an interaction rather than a position in a list —
+               which is the line rule 1 draws. No drop shadow: the fill and the
+               2px ring are enough on a light ground. */
+            fill="var(--color-accent-soft)"
+            stroke="var(--color-accent)"
+            strokeWidth={2}
           />
           <text
             x={CENTRE}
@@ -198,7 +206,7 @@ export function EntityGraph({ nodes, edges, focusId, onFocus }: Props) {
             x={CENTRE}
             y={CENTRE + 60}
             textAnchor="middle"
-            className="fill-current font-mono text-faint"
+            className="fill-current font-mono text-ink-3"
             fontSize={9}
             letterSpacing="0.08em"
           >
@@ -208,7 +216,7 @@ export function EntityGraph({ nodes, edges, focusId, onFocus }: Props) {
       </svg>
 
       {hidden > 0 ? (
-        <p className="meta text-faint">
+        <p className="meta text-ink-3">
           {hidden} further {hidden === 1 ? "connection" : "connections"} not drawn — the
           canvas holds {MAX_NODES} at a time so the labels stay readable.
         </p>

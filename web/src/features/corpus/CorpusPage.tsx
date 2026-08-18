@@ -75,7 +75,7 @@ export function CorpusPage() {
           where it has the two controls it always needed — register, and sync.
           Moved rather than copied: a read-only duplicate of a page you can act
           on is a page somebody edits and then wonders why nothing changed. */}
-      <p className="meta text-faint">
+      <p className="meta text-ink-3">
         Sources moved to{" "}
         <Link to="/sources" className="text-accent underline">
           sources
@@ -101,7 +101,7 @@ export function CorpusPage() {
 
         {doctor.isError ? <Failure error={doctor.error} /> : null}
         {!doctor.data && !doctor.isFetching ? (
-          <p className="meta text-faint">
+          <p className="meta text-ink-3">
             Not run. It tokenizes candidate chunks with the real tokenizer, so it costs a moment.
           </p>
         ) : null}
@@ -128,15 +128,15 @@ export function CorpusPage() {
                       {note ? "note" : finding.healthy ? "ok" : "FAIL"}
                     </span>
                     <span className="meta text-ink">{finding.check}</span>
-                    <span className="meta text-faint">{count(finding.count)}</span>
+                    <span className="meta text-ink-3">{count(finding.count)}</span>
                   </div>
                   {!finding.healthy || note ? (
-                    <p className="meta mt-0.5 max-w-prose text-muted">{finding.detail}</p>
+                    <p className="meta mt-0.5 max-w-prose text-ink-2">{finding.detail}</p>
                   ) : null}
                   {finding.examples.length > 0 && (!finding.healthy || note) ? (
                     <ul className="mt-0.5">
                       {finding.examples.map((example) => (
-                        <li key={example} className="meta text-faint">
+                        <li key={example} className="meta text-ink-3">
                           {example}
                         </li>
                       ))}
@@ -170,7 +170,7 @@ function Figure({
       <dd className="font-mono text-lg text-ink">
         {value}
         {note ? (
-          <span className={`meta ml-1.5 ${alarm ? "text-deny" : "text-faint"}`}>{note}</span>
+          <span className={`meta ml-1.5 ${alarm ? "text-deny" : "text-ink-3"}`}>{note}</span>
         ) : null}
       </dd>
     </div>

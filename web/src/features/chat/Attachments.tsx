@@ -81,19 +81,19 @@ function Row({ attachment }: { attachment: Attachment }) {
         ) : (
           <span className="font-mono text-sm text-ink">{attachment.filename}</span>
         )}
-        <span className="meta text-faint">{fileSize(attachment.byte_size)}</span>
+        <span className="meta text-ink-3">{fileSize(attachment.byte_size)}</span>
         {attachment.media_type ? (
-          <span className="meta text-faint">{attachment.media_type}</span>
+          <span className="meta text-ink-3">{attachment.media_type}</span>
         ) : null}
         {attachment.deduplicated ? (
           // Said out loud. A silent success looks identical to a re-upload that
           // did nothing, and content addressing means the second upload of a file
           // genuinely stores no new bytes — which is worth knowing rather than
           // hiding.
-          <span className="meta text-muted">already in memory, linked</span>
+          <span className="meta text-ink-2">already in memory, linked</span>
         ) : null}
       </div>
-      <p className={`meta ${failed ? "text-deny" : "text-faint"}`}>
+      <p className={`meta ${failed ? "text-deny" : "text-ink-3"}`}>
         {describe(data)}
       </p>
     </li>

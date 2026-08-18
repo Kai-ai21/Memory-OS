@@ -105,10 +105,10 @@ export function CommandPalette({
         if (event.target === dialog.current) onClose();
       }}
       aria-label="Command palette"
-      /* Level 3 in the elevation model: the palette is the only surface that
-         overlaps another, so it takes the heavier blur and brighter edge that
-         say "closer to the reader" without a drop shadow. */
-      className="glass-float m-0 w-full max-w-xl p-0 text-ink backdrop:bg-scrim sm:mt-[12vh] sm:ml-[max(0px,calc(50%-18rem))]"
+      /* Flat white with a hairline, like every other panel. The palette
+         overlaps the page, and on dark that earned it a heavier blur; here the
+         scrim behind it does that work, and glass is reserved for one button. */
+      className="panel m-0 w-full max-w-xl p-0 text-ink backdrop:bg-scrim sm:mt-[12vh] sm:ml-[max(0px,calc(50%-18rem))]"
     >
       <div
         onKeyDown={(event) => {
@@ -127,7 +127,7 @@ export function CommandPalette({
         }}
       >
         <div className="flex items-baseline gap-2 border-b border-rule px-3 py-2.5">
-          <span className="meta text-faint" aria-hidden>
+          <span className="meta text-ink-3" aria-hidden>
             &gt;
           </span>
           <input
@@ -142,7 +142,7 @@ export function CommandPalette({
             placeholder="go to a view, search the corpus, or open a path"
             aria-label="Command"
             aria-controls="palette-results"
-            className="flex-1 bg-transparent font-mono text-sm text-ink outline-none placeholder:text-faint"
+            className="flex-1 bg-transparent font-mono text-sm text-ink outline-none placeholder:text-ink-3"
             spellCheck={false}
             autoComplete="off"
           />
@@ -158,7 +158,7 @@ export function CommandPalette({
           data-testid="palette-results"
         >
           {entries.length === 0 ? (
-            <li className="meta px-3 py-4 text-faint">
+            <li className="meta px-3 py-4 text-ink-3">
               Nothing matches. Press enter to search the corpus for it anyway.
             </li>
           ) : (
@@ -174,15 +174,15 @@ export function CommandPalette({
                   onClick={() => go(entry)}
                   className={`flex w-full items-baseline gap-3 border-l-2 px-3 py-1.5 text-left ${
                     index === active
-                      ? "border-edge bg-sunken/70"
-                      : "border-transparent hover:bg-sunken/40"
+                      ? "border-edge bg-surface-tint/70"
+                      : "border-transparent hover:bg-surface-tint/40"
                   }`}
                 >
                   <span className="meta-label w-14 shrink-0">{entry.kind}</span>
                   <span className="min-w-0 flex-1 truncate font-mono text-xs text-ink">
                     {entry.label}
                   </span>
-                  <span className="meta hidden truncate text-faint sm:block sm:max-w-56">
+                  <span className="meta hidden truncate text-ink-3 sm:block sm:max-w-56">
                     {entry.detail}
                   </span>
                 </button>
@@ -191,7 +191,7 @@ export function CommandPalette({
           )}
         </ul>
 
-        <p className="meta border-t border-rule px-3 py-1.5 text-faint">
+        <p className="meta border-t border-rule px-3 py-1.5 text-ink-3">
           <span className="kbd">↑</span> <span className="kbd">↓</span> to move ·{" "}
           <span className="kbd">enter</span> to open · <span className="kbd">esc</span> to
           close

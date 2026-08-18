@@ -4,7 +4,7 @@
  * **The strongest thing in the Luminous reference, and the one screen where the
  * real data and the mockup disagree about something that matters.** The mockup
  * draws four signals — SEMANTIC 52%, KEYWORD 31%, RECENCY 12%, GRAPH 5% — with
- * the first two in cyan and the last two in magenta. Against this backend only
+ * the first two in accent and the last two in warn. Against this backend only
  * two of those four can ever have a number, and it is not an oversight in the
  * ranker: `weight_recency`, `weight_importance` and `weight_graph` are all 0.0
  * in `config.py`, each with a measurement written above it saying why. Recency
@@ -43,17 +43,17 @@ interface Props {
 /**
  * The four the reference draws, in its order, with its colours.
  *
- * Cyan is a retriever that read the text; magenta is a signal that reordered or
+ * Cyan is a retriever that read the text; warn is a signal that reordered or
  * introduced the result on grounds the reader cannot check by looking at it.
  * That is the same distinction the palette carries everywhere else in the
  * application, and it is why the reference's colour split is worth keeping even
  * though two of these rows are currently always empty.
  */
 const SIGNALS = [
-  { name: "semantic", tone: "cyan" },
-  { name: "keyword", tone: "cyan" },
-  { name: "recency", tone: "magenta" },
-  { name: "graph", tone: "magenta" },
+  { name: "semantic", tone: "accent" },
+  { name: "keyword", tone: "accent" },
+  { name: "recency", tone: "warn" },
+  { name: "graph", tone: "warn" },
 ] as const;
 
 export function ExplanationPanel({ explanation, citations, code }: Props) {
@@ -74,7 +74,7 @@ export function ExplanationPanel({ explanation, citations, code }: Props) {
     <div className="mt-3 lg:pl-25" data-testid="explanation">
       <button
         type="button"
-        className="meta text-cyan hover:text-accent-bright"
+        className="meta text-accent hover:text-accent-strong"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
       >
@@ -83,20 +83,20 @@ export function ExplanationPanel({ explanation, citations, code }: Props) {
 
       {/* The sentence is always visible. It is one line, it is free, and it is
           the whole explanation for most readers. */}
-      <p className="meta mt-1 text-muted">{explanation.why}</p>
+      <p className="meta mt-1 text-ink-2">{explanation.why}</p>
 
       {open ? (
         <div className="mt-3 space-y-4">
           {/* Written for somebody who has not read the ranker: "semantic 55%"
               is meaningless without knowing that several retrievers run and
               their opinions are combined. */}
-          <p className="prose-content max-w-prose text-sm text-muted">
+          <p className="prose-content max-w-prose text-sm text-ink-2">
             Several retrievers look for this result independently and their opinions are
             combined. Each row is one of them: where it placed this result, and how much
             of the final score came from it.
           </p>
 
-          <div className="rounded-md border border-rule bg-sunken/60 p-5">
+          <div className="panel p-5">
             <div className="flex flex-col gap-4" data-testid="signals">
               {SIGNALS.map((signal) => (
                 <SignalRow
@@ -107,12 +107,12 @@ export function ExplanationPanel({ explanation, citations, code }: Props) {
                 />
               ))}
               {extra.map((item) => (
-                <SignalRow key={item.name} name={item.name} tone="cyan" item={item} />
+                <SignalRow key={item.name} name={item.name} tone="accent" item={item} />
               ))}
             </div>
 
             <div className="mt-5 space-y-2 border-t border-rule pt-4">
-              <p className="prose-content text-sm text-muted" data-testid="why-sentence">
+              <p className="prose-content text-sm text-ink-2" data-testid="why-sentence">
                 {explanation.why}
               </p>
 
@@ -120,7 +120,7 @@ export function ExplanationPanel({ explanation, citations, code }: Props) {
                   empty row. Both halves are true and the response does not say
                   which — see the file header. */}
               {SIGNALS.some((signal) => !byName.has(signal.name)) ? (
-                <p className="meta text-faint" data-testid="absent-note">
+                <p className="meta text-ink-3" data-testid="absent-note">
                   A signal with no contribution either carries a fusion weight of zero or
                   did not return this result. The search response does not distinguish
                   the two.
@@ -129,7 +129,7 @@ export function ExplanationPanel({ explanation, citations, code }: Props) {
 
               {explanation.rerank_score !== null &&
               explanation.rerank_score !== undefined ? (
-                <p className="meta text-faint">
+                <p className="meta text-ink-3">
                   A second model read the query and this text together and scored the
                   pair{" "}
                   <span className="text-ink">{explanation.rerank_score.toFixed(3)}</span>.
@@ -143,7 +143,7 @@ export function ExplanationPanel({ explanation, citations, code }: Props) {
                   word with the query, and the route is the whole argument for it
                   being here. */}
               {explanation.graph_path ? (
-                <p className="meta text-magenta" data-testid="graph-path">
+                <p className="meta text-warn" data-testid="graph-path">
                   reached through the entity graph: {explanation.graph_path}
                 </p>
               ) : null}
@@ -174,8 +174,9 @@ export function ExplanationPanel({ explanation, citations, code }: Props) {
  * carried this result and the other three did not, which is the thing a column
  * of percentages makes you compute.
  *
- * The bar is 2px and glows, per the design system's rule for data marks:
- * "thin but highly saturated, as if etched into the glass".
+ * The bar is 3px and solid. On dark it was 2px with a glow; on light a 2px
+ * bar at 5% width is a dot, and there is no glow to make up the difference, so
+ * it gained a pixel instead.
  */
 function SignalRow({
   name,
@@ -183,22 +184,21 @@ function SignalRow({
   item,
 }: {
   name: string;
-  tone: "cyan" | "magenta";
+  tone: "accent" | "warn";
   item?: { name: string; rank: number; share: number };
 }) {
   const share = item ? item.share * 100 : 0;
-  const fill = tone === "cyan" ? "bg-cyan" : "bg-magenta";
-  const glow = tone === "cyan" ? "glow-box-cyan" : "glow-box-magenta";
+  const fill = tone === "accent" ? "bg-accent" : "bg-warn";
 
   return (
     <div className="flex items-center gap-4" data-testid="contribution" data-signal={name}>
-      <span className={`meta-label w-20 shrink-0 ${item ? "text-muted" : "text-faint"}`}>
+      <span className={`meta-label w-20 shrink-0 ${item ? "text-ink-2" : "text-ink-3"}`}>
         {name}
       </span>
-      <div className="relative h-0.5 flex-1 overflow-hidden rounded-full bg-rule">
+      <div className="relative h-[3px] flex-1 overflow-hidden rounded-full bg-rule">
         {item ? (
           <div
-            className={`absolute inset-y-0 left-0 ${fill} ${glow}`}
+            className={`absolute inset-y-0 left-0 ${fill}`}
             // Floored at 2% so a signal that contributed almost nothing is still
             // visibly a signal that contributed something, rather than an empty
             // track indistinguishable from one that did not run.
@@ -209,15 +209,15 @@ function SignalRow({
       </div>
       {item ? (
         <>
-          <span className="meta w-10 shrink-0 text-right text-faint">#{item.rank}</span>
+          <span className="meta w-10 shrink-0 text-right text-ink-3">#{item.rank}</span>
           <span
-            className={`meta w-12 shrink-0 text-right ${tone === "cyan" ? "text-cyan" : "text-magenta"}`}
+            className={`meta w-12 shrink-0 text-right ${tone === "accent" ? "text-accent" : "text-warn"}`}
           >
             {share.toFixed(0)}%
           </span>
         </>
       ) : (
-        <span className="meta w-22 shrink-0 text-right text-faint">no contribution</span>
+        <span className="meta w-22 shrink-0 text-right text-ink-3">no contribution</span>
       )}
     </div>
   );
@@ -237,13 +237,13 @@ function CitationBlock({ citation, code }: { citation: Citation; code: boolean }
       <div className="flex flex-wrap items-baseline gap-2">
         <Link
           to={`/memory/${citation.memory_id}?offset=${citation.char_start}`}
-          className="meta text-cyan underline decoration-rule-strong underline-offset-2 hover:decoration-edge"
+          className="meta text-accent underline decoration-rule-strong underline-offset-2 hover:decoration-edge"
         >
           #{citation.chunk_ordinal} @{citation.char_start}–{citation.char_end}
         </Link>
-        <span className="meta text-faint">v{citation.version}</span>
+        <span className="meta text-ink-3">v{citation.version}</span>
         {citation.definition ? (
-          <span className="meta text-cyan" data-testid="citation-definition">
+          <span className="meta text-accent" data-testid="citation-definition">
             {citation.definition}()
           </span>
         ) : null}

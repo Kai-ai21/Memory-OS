@@ -261,7 +261,7 @@ export function ChatPage() {
 
         <div ref={bottom} />
         {command.note ? (
-          <p className="meta text-accent" role="status" data-testid="command-note">
+          <p className="meta text-ink-2" role="status" data-testid="command-note">
             {command.note}
           </p>
         ) : null}
@@ -305,12 +305,12 @@ function Filter({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="flex items-baseline gap-3 border-b border-rule pb-1">
-      <label htmlFor="session-filter" className="meta-label text-muted">
+      <label htmlFor="session-filter" className="meta-label text-ink-2">
         in this conversation
       </label>
       <input
         id="session-filter"
-        className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-faint"
+        className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-3"
         placeholder="find a line you typed here"
         value={value}
         aria-label="Filter this conversation"
@@ -323,7 +323,7 @@ function Filter({ sessionId }: { sessionId: string }) {
           setParams(next, { replace: true });
         }}
       />
-      <Link to="/search" className="meta shrink-0 text-faint hover:text-accent">
+      <Link to="/search" className="meta shrink-0 text-ink-3 hover:text-accent">
         search the corpus
       </Link>
     </div>
@@ -372,16 +372,16 @@ function Turn({ message }: { message: ChatMessage }) {
   return (
     <li className="flex flex-col gap-2" data-testid="message">
       <div className="flex flex-wrap items-baseline gap-3">
-        <span className="meta-label text-muted">you</span>
-        <span className="meta text-faint">{timestamp(message.created_at)}</span>
+        <span className="meta-label text-ink-2">you</span>
+        <span className="meta text-ink-3">{timestamp(message.created_at)}</span>
         <IntentMark message={message} />
         {superseded ? (
-          <span className="meta text-faint" data-testid="superseded">
+          <span className="meta text-ink-3" data-testid="superseded">
             superseded by a correction below
           </span>
         ) : null}
         {message.corrects ? (
-          <span className="meta text-accent" data-testid="correction">
+          <span className="meta text-ink-2" data-testid="correction">
             corrects an earlier message
           </span>
         ) : null}
@@ -393,7 +393,7 @@ function Turn({ message }: { message: ChatMessage }) {
       <p
         className={
           superseded
-            ? "display text-xl whitespace-pre-wrap text-faint line-through decoration-1"
+            ? "display text-xl whitespace-pre-wrap text-ink-3 line-through decoration-1"
             : "display text-xl whitespace-pre-wrap"
         }
       >
@@ -416,7 +416,7 @@ function Turn({ message }: { message: ChatMessage }) {
         // here. It answers 409 for a memory that was permanently deleted, which
         // is the honest outcome: that one is not recoverable.
         <div className="flex items-baseline gap-3">
-          <p className="meta text-faint">
+          <p className="meta text-ink-3">
             stored · its memory is not in the corpus right now
           </p>
         </div>
@@ -447,7 +447,7 @@ function TagChips({ tags }: { tags: string[] }) {
         <li key={tag}>
           <Link
             to={`/search?tag=${encodeURIComponent(tag.replace(/^#/, ""))}`}
-            className="meta font-mono text-muted hover:text-accent"
+            className="meta font-mono text-ink-2 hover:text-accent"
           >
             {tag}
           </Link>
@@ -486,14 +486,14 @@ function IntentMark({ message }: { message: ChatMessage }) {
     <span className="relative">
       <button
         type="button"
-        className="meta text-faint underline decoration-dotted underline-offset-2 hover:text-accent"
+        className="meta text-ink-3 underline decoration-dotted underline-offset-2 hover:text-accent"
         aria-expanded={open}
         onClick={() => setOpen((was) => !was)}
       >
         {label[message.intent]}
       </button>
       {open ? (
-        <span className="meta mt-1 block max-w-prose text-muted">
+        <span className="meta mt-1 block max-w-prose text-ink-2">
           {why[message.intent]}{" "}
           {message.memory_id ? (
             <Link to={`/memory/${message.memory_id}`} className="text-accent underline">
@@ -538,16 +538,16 @@ function StoredLine({ memoryId }: { memoryId: string }) {
   const parts = data ? connectionParts(data) : null;
 
   return (
-    /* The reference's treatment: a magenta rule down the left of the line.
-       Magenta rather than cyan and the choice is not arbitrary — this line is
+    /* The reference's treatment: a warn rule down the left of the line.
+       Magenta rather than accent and the choice is not arbitrary — this line is
        the system reporting the *edges of what it knows*, which is the same
        register as a refusal and as a gap in the timeline. The entity names
-       inside it are cyan, because those are things it found. */
+       inside it are accent, because those are things it found. */
     <p
-      className="meta border-l-2 border-magenta/50 py-1 pl-4 text-faint"
+      className="meta border-l-2 border-warn py-1 pl-4 text-ink-2"
       data-testid="connection-line"
     >
-      <Link to={`/memory/${memoryId}`} className="hover:text-cyan hover:underline">
+      <Link to={`/memory/${memoryId}`} className="hover:text-accent hover:underline">
         stored
       </Link>
       {" · "}
@@ -559,7 +559,7 @@ function StoredLine({ memoryId }: { memoryId: string }) {
           {parts.entities.map((entity, index) => (
             <span key={entity}>
               {index > 0 ? ", " : ""}
-              <span className="glow-cyan text-cyan">{entity}</span>
+              <span className="font-medium text-ink">{entity}</span>
             </span>
           ))}
         </>
@@ -586,7 +586,7 @@ function Answer({ message }: { message: ChatMessage }) {
       <div data-testid="answer">
         <Refusal
           footnote={
-            <p className="meta text-faint">
+            <p className="meta text-ink-3">
               nothing was cited because nothing was used
               {message.answer_model ? ` · ${message.answer_model}` : ""}
             </p>
@@ -603,14 +603,11 @@ function Answer({ message }: { message: ChatMessage }) {
       {/* The reference's lit rule: full strength at the label, fading down the
           length of the answer. Cyan, because this is the system reporting what
           it found. */}
-      <span
-        className="absolute inset-y-0 left-0 w-0.5 rounded-full bg-gradient-to-b from-cyan via-cyan/25 to-transparent shadow-[0_0_8px_var(--color-cyan)]"
-        aria-hidden
-      />
+      <span className="absolute inset-y-0 left-0 w-0.5 bg-rule-strong" aria-hidden />
       <div className="flex items-baseline gap-3">
-        <span className="meta-label text-cyan">answer</span>
+        <span className="meta-label-on">answer</span>
         {message.answer_model ? (
-          <span className="meta text-faint">{message.answer_model}</span>
+          <span className="meta text-ink-3">{message.answer_model}</span>
         ) : null}
         {message.grounded === false ? (
           <span className="meta text-deny">not fully cited</span>
@@ -625,19 +622,19 @@ function Answer({ message }: { message: ChatMessage }) {
             {message.citations.map((citation) => (
               <li
                 key={`${citation.locator}-${citation.excerpt.slice(0, 24)}`}
-                className="glass-card flex flex-col gap-2 p-4"
+                className="panel flex flex-col gap-2 p-4"
               >
                 {citation.memory_id ? (
                   <Link
                     to={`/memory/${citation.memory_id}`}
-                    className="meta font-mono text-cyan hover:underline"
+                    className="meta font-mono text-accent hover:underline"
                   >
                     {citation.locator}
                   </Link>
                 ) : (
-                  <span className="meta font-mono text-cyan">{citation.locator}</span>
+                  <span className="meta font-mono text-accent">{citation.locator}</span>
                 )}
-                <span className="prose-content text-sm text-muted">
+                <span className="prose-content text-sm text-ink-2">
                   {citation.excerpt.slice(0, 140)}
                 </span>
               </li>
@@ -647,7 +644,7 @@ function Answer({ message }: { message: ChatMessage }) {
       ) : (
         // Said rather than omitted. An answer with no citation list looks
         // exactly like an answer whose citations have not rendered.
-        <p className="meta mt-2 text-faint">the answer cited no passage</p>
+        <p className="meta mt-2 text-ink-3">the answer cited no passage</p>
       )}
     </div>
   );
@@ -657,9 +654,9 @@ function Answer({ message }: { message: ChatMessage }) {
 function Pending({ text }: { text: string }) {
   return (
     <div className="flex flex-col gap-2 opacity-60" data-testid="pending">
-      <span className="meta-label text-muted">you</span>
+      <span className="meta-label text-ink-2">you</span>
       <p className="whitespace-pre-wrap text-ink">{text}</p>
-      <p className="meta text-faint">sending…</p>
+      <p className="meta text-ink-3">sending…</p>
     </div>
   );
 }
@@ -706,13 +703,11 @@ function Composer({
 
   return (
     <form
-      /* A glass panel rather than a ruled bar, per the reference: rounded, lit
-         at the edge when focused, and floating over the thread rather than
-         closing it off with a rule.
-         The gradient wash behind the field is the reference's, and it is what
-         keeps a large empty box from reading as a hole in the page. */
-      className={`glass sticky bottom-4 flex flex-col gap-2 rounded-xl p-4 relative transition-all focus-within:border-cyan/50 focus-within:shadow-[0_0_30px_color-mix(in_oklab,var(--color-cyan)_15%,transparent)] ${
-        over ? "border-cyan" : ""
+      /* `surface` with a hairline, and an accent focus ring when you are typing
+         into it. Flat: the composer is the one thing on the chat screen that is
+         a control rather than content, and the border is what says so. */
+      className={`panel sticky bottom-4 relative flex flex-col gap-2 p-4 transition-shadow focus-within:border-accent focus-within:shadow-[0_0_0_3px_var(--color-accent-soft)] ${
+        over ? "border-accent" : ""
       }`}
       onSubmit={(event) => {
         event.preventDefault();
@@ -732,15 +727,12 @@ function Composer({
         onQueue(Array.from(event.dataTransfer.files));
       }}
     >
-      {/* The reference's mask, and it earns its place rather than softening an
-          edge for taste. The composer is translucent, so the thread scrolls
-          *through* it — which is the glass working, until a line of the answer
-          is half-visible behind the box and reads as a rendering fault. This
-          fades the last inch of the thread into the void before it reaches the
-          panel, so what shows through the glass is the void and not a
-          bisected sentence. */}
+      {/* The composer is opaque now, so nothing shows through it — but it is
+          sticky, and without this the thread slides under a hard white edge and
+          a sentence is guillotined mid-line. Fading the last inch into the
+          ground makes the arrival read as an arrival. */}
       <div
-        className="pointer-events-none absolute inset-x-0 bottom-full h-24 bg-gradient-to-t from-void to-transparent"
+        className="pointer-events-none absolute inset-x-0 bottom-full h-24 bg-gradient-to-t from-ground to-transparent"
         aria-hidden
       />
       {queued.length > 0 ? (
@@ -751,10 +743,10 @@ function Composer({
               className="flex items-baseline gap-2 border-l-2 border-rule pl-2"
             >
               <span className="font-mono text-sm text-ink">{file.name}</span>
-              <span className="meta text-faint">{fileSize(file.size)}</span>
+              <span className="meta text-ink-3">{fileSize(file.size)}</span>
               <button
                 type="button"
-                className="meta text-faint hover:text-deny"
+                className="meta text-ink-3 hover:text-deny"
                 aria-label={`Remove ${file.name}`}
                 onClick={() => onRemove(index)}
               >
@@ -771,7 +763,7 @@ function Composer({
         </label>
         <button
           type="button"
-          className="meta text-faint hover:text-accent"
+          className="meta text-ink-3 hover:text-accent"
           onClick={() => picker.current?.click()}
           // The clip is the discoverable half; the drop zone is the fast half.
           // Both, because a person who has never dropped a file into a text box
@@ -823,12 +815,12 @@ function Composer({
             ? "say something about these files, or just send them"
             : "postgres full-text search is faster than I expected"
         }
-        className="w-full resize-y bg-transparent font-prose text-base text-ink placeholder:font-mono placeholder:text-sm placeholder:text-faint focus:outline-none"
+        className="w-full resize-y bg-transparent font-prose text-base text-ink placeholder:font-mono placeholder:text-sm placeholder:text-ink-3 focus:outline-none"
         aria-label="Message"
         spellCheck={false}
         autoFocus
       />
-      <p className="meta text-faint">
+      <p className="meta text-ink-3">
         <span className="kbd">enter</span> sends, <span className="kbd">shift</span>
         <span className="kbd">enter</span> starts a line. A question is answered
         and not stored; anything else is kept. Drop a file here and it becomes a

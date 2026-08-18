@@ -28,7 +28,7 @@ export function StreamingAnswer({ state }: { state: AnswerStream }) {
   return (
     <div className="flex flex-col gap-4" data-testid="streaming-answer">
       <div className="flex items-baseline gap-3">
-        <span className="meta-label text-muted">you</span>
+        <span className="meta-label text-ink-2">you</span>
       </div>
       {/* The reader's own words, in the display face at reading size. The
           reference sets these larger than the answer, and that is the right
@@ -41,7 +41,7 @@ export function StreamingAnswer({ state }: { state: AnswerStream }) {
       {state.done?.refused && !state.interrupted && !withdrawn ? (
         <Refusal
           footnote={
-            <p className="meta text-faint">
+            <p className="meta text-ink-3">
               nothing was cited because nothing was used
               {state.done.model_id ? ` · ${state.done.model_id}` : ""}
             </p>
@@ -57,14 +57,14 @@ export function StreamingAnswer({ state }: { state: AnswerStream }) {
       >
         {!state.interrupted && !withdrawn ? (
           <span
-            className="absolute inset-y-0 left-0 w-0.5 rounded-full bg-gradient-to-b from-cyan via-cyan/25 to-transparent shadow-[0_0_8px_var(--color-cyan)]"
+            className="absolute inset-y-0 left-0 w-0.5 bg-rule-strong"
             aria-hidden
           />
         ) : null}
         <div className="flex flex-wrap items-baseline gap-x-3">
-          <span className="meta-label text-cyan">{label(state)}</span>
+          <span className="meta-label-on">{label(state)}</span>
           {state.done?.model_id ? (
-            <span className="meta text-faint">{state.done.model_id}</span>
+            <span className="meta text-ink-3">{state.done.model_id}</span>
           ) : null}
           {state.done?.grounded === false && !withdrawn ? (
             <span className="meta text-deny">not fully cited</span>
@@ -126,7 +126,7 @@ function label(state: AnswerStream): string {
 function Progress({ state }: { state: AnswerStream }) {
   if (state.done || state.interrupted) {
     return state.done ? (
-      <p className="meta text-faint">
+      <p className="meta text-ink-3">
         {count(state.retrieval?.passages ?? 0)} passages ·{" "}
         {Math.round(state.done.citation_rate * 100)}% of factual sentences cited ·{" "}
         {(state.done.total_ms / 1000).toFixed(1)}s
@@ -136,14 +136,14 @@ function Progress({ state }: { state: AnswerStream }) {
   if (state.searching) {
     // Before any number is known. The first thing on screen, in milliseconds.
     return (
-      <p className="meta text-faint" data-testid="retrieval-status">
+      <p className="meta text-ink-3" data-testid="retrieval-status">
         searching the corpus…
       </p>
     );
   }
   if (state.retrieval) {
     return (
-      <p className="meta text-faint" data-testid="retrieval-status">
+      <p className="meta text-ink-3" data-testid="retrieval-status">
         found {count(state.retrieval.hits)} memories ·{" "}
         {count(state.retrieval.chunks)} matched chunks ·{" "}
         {count(state.retrieval.passages)} passages sent · reading them…
@@ -163,7 +163,7 @@ function Citations({ state }: { state: AnswerStream }) {
   if (state.citations.length === 0) {
     if (!state.done) return null;
     return (
-      <p className="meta mt-2 text-faint">
+      <p className="meta mt-2 text-ink-3">
         {state.done.refused
           ? "nothing was cited because nothing was used"
           : "the answer cited no passage"}
@@ -180,7 +180,7 @@ function Citations({ state }: { state: AnswerStream }) {
           >
             {citation.locator}
           </Link>
-          <span className="meta ml-2 text-faint">{citation.excerpt.slice(0, 140)}</span>
+          <span className="meta ml-2 text-ink-3">{citation.excerpt.slice(0, 140)}</span>
         </li>
       ))}
     </ul>

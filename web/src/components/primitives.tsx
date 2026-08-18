@@ -22,7 +22,7 @@ export function Meta({ label, children }: { label: string; children: ReactNode }
 /** A kind, a chunker version, a model — a short factual tag, not a status pill. */
 export function Tag({ children }: { children: ReactNode }) {
   return (
-    <span className="meta border border-rule px-1 py-px text-faint uppercase tracking-wider">
+    <span className="meta border border-rule px-1 py-px text-ink-3 uppercase tracking-wider">
       {children}
     </span>
   );
@@ -35,7 +35,7 @@ export function Tag({ children }: { children: ReactNode }) {
 export function SectionHeading({ children, right }: { children: ReactNode; right?: ReactNode }) {
   return (
     <div className="flex items-baseline justify-between border-b border-rule-strong pb-1">
-      <h2 className="meta-label text-muted">{children}</h2>
+      <h2 className="meta-label text-ink-2">{children}</h2>
       {right ? <div className="meta">{right}</div> : null}
     </div>
   );
@@ -49,7 +49,7 @@ export function SectionHeading({ children, right }: { children: ReactNode; right
 export function Empty({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <div className="border border-dashed border-rule-strong p-6" data-testid="empty">
-      <p className="meta-label text-muted">{title}</p>
+      <p className="meta-label text-ink-2">{title}</p>
       {children ? <div className="meta mt-2 max-w-prose leading-relaxed">{children}</div> : null}
     </div>
   );
@@ -60,11 +60,11 @@ export function Failure({ error }: { error: unknown }) {
   const message = error instanceof Error ? error.message : String(error);
   const isNetwork = error instanceof Error && error.name === "NetworkError";
   return (
-    <div className="border-l-2 border-deny bg-raised p-4" role="alert" data-testid="error">
+    <div className="border-l-2 border-deny bg-surface p-4" role="alert" data-testid="error">
       <p className="meta-label text-deny">{isNetwork ? "cannot reach the api" : "request failed"}</p>
       <p className="meta mt-1 text-ink">{message}</p>
       {isNetwork ? (
-        <p className="meta mt-2 text-muted">
+        <p className="meta mt-2 text-ink-2">
           Start it with <code className="kbd">make dev</code>, or set{" "}
           <code className="kbd">VITE_API_URL</code> if it is somewhere else.
         </p>
@@ -85,9 +85,9 @@ export function Loading({ rows = 3 }: { rows?: number }) {
       <span className="sr-only">Loading</span>
       {Array.from({ length: rows }, (_, index) => (
         <div key={index} className="border-b border-rule pb-3">
-          <div className="h-3 w-1/3 bg-sunken" />
-          <div className="mt-2 h-3 w-full bg-sunken" />
-          <div className="mt-1 h-3 w-4/5 bg-sunken" />
+          <div className="h-3 w-1/3 bg-surface-tint" />
+          <div className="mt-2 h-3 w-full bg-surface-tint" />
+          <div className="mt-1 h-3 w-4/5 bg-surface-tint" />
         </div>
       ))}
     </div>

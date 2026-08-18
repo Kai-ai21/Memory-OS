@@ -1,18 +1,12 @@
 /**
  * The frame: the lit void, a persistent sidebar, and the keyboard model.
  *
- * **The glows are structural, not decorative.** Two large radial gradients are
- * painted here, fixed to the viewport, behind everything. Every panel in this
- * application is white at 3% with a 12px backdrop blur, and a translucent panel
- * over a flat colour is just a slightly lighter flat colour — the blur has
- * nothing to blur and the whole design collapses to grey boxes. These are what
- * it is translucent *of*: the same panel reads cyan at the top left and magenta
- * at the bottom right, which is what makes the surfaces look like glass rather
- * than like fills. Delete them and the design system stops working.
- *
- * They drift, slowly, on a 20s alternating float. Slow enough that it is not an
- * animation you notice — it reads as light moving rather than as an element
- * moving — and it stops entirely under `prefers-reduced-motion`.
+ * `BackgroundLayer` is mounted here and is the first thing in the tree. It
+ * paints the two pale radials that the one glass element — the NEW
+ * CONVERSATION button — frosts. Nothing else in the application is
+ * translucent, so that component is the only reason it exists; it is kept
+ * isolated so a canvas or a cursor-following field can replace its contents
+ * later without touching this file.
  *
  * **The shortcuts are registered here rather than per page.** `/` used to be
  * bound inside the search view, which meant it worked on exactly one of fifteen
@@ -30,6 +24,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { Icon } from "../components/Icon";
+import { BackgroundLayer } from "./BackgroundLayer";
 import { CommandPalette } from "./CommandPalette";
 import { Sidebar } from "./Sidebar";
 
@@ -89,13 +84,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-dvh md:flex">
-      <Glows />
+      <BackgroundLayer />
 
       {/* Skip link: the sidebar is a dozen tab stops, and every page repeats
           them. First focusable thing in the document, visible once focused. */}
       <a
         href="#main"
-        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded focus:border focus:border-rule-strong focus:bg-float focus:px-3 focus:py-1.5 focus:text-xs"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded focus:border focus:border-rule-strong focus:bg-surface focus:px-3 focus:py-1.5 focus:text-xs"
         onClick={(event) => {
           event.preventDefault();
           main.current?.focus();
@@ -105,7 +100,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </a>
 
       {/* --- The bar that only exists on small screens ------------------- */}
-      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-rule bg-nav px-4 py-2 backdrop-blur-xl md:hidden">
+      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-rule bg-surface px-4 py-2 md:hidden">
         <button
           type="button"
           className="btn flex items-center gap-2"
@@ -116,7 +111,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <Icon name="menu" size={16} />
           menu
         </button>
-        <span className="display glow-cyan text-base font-bold tracking-[0.14em]">
+        <span className="display text-base font-bold tracking-[0.14em]">
           MEMO
         </span>
         <button
@@ -158,38 +153,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </main>
 
       <CommandPalette open={paletteOpen} onClose={closePalette} />
-    </div>
-  );
-}
-
-/**
- * The light behind everything.
- *
- * Fixed rather than absolute, so the light stays where it is while the page
- * scrolls under it — a glow that scrolls with the content reads as a coloured
- * shape *in* the document, which is exactly what it must not look like.
- *
- * `pointer-events-none` and `aria-hidden` throughout: this is two divs of pure
- * light, and neither the mouse nor a screen reader should ever find them.
- * `overflow-hidden` on the wrapper is what stops the two 50vw circles, which
- * are deliberately positioned off-screen at their corners, from giving the
- * document a horizontal scrollbar.
- */
-function Glows() {
-  return (
-    <div
-      className="pointer-events-none fixed inset-0 -z-10 overflow-hidden"
-      aria-hidden
-      data-testid="glows"
-    >
-      <div
-        className="absolute -top-[10%] -left-[10%] size-[55vw] animate-[drift_20s_ease-in-out_infinite_alternate] rounded-full opacity-70 blur-[80px]"
-        style={{ backgroundImage: "var(--glow-magenta)" }}
-      />
-      <div
-        className="absolute -right-[10%] -bottom-[15%] size-[45vw] animate-[drift_20s_ease-in-out_-10s_infinite_alternate] rounded-full opacity-70 blur-[80px]"
-        style={{ backgroundImage: "var(--glow-cyan)" }}
-      />
     </div>
   );
 }

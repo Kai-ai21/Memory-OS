@@ -62,7 +62,7 @@ export function PatternsPage() {
             <button
               type="button"
               className={
-                includeDismissed ? "text-accent underline" : "text-muted hover:text-ink"
+                includeDismissed ? "text-accent underline" : "text-ink-2 hover:text-ink"
               }
               onClick={() => setIncludeDismissed((current) => !current)}
             >
@@ -106,7 +106,7 @@ export function PatternsPage() {
       {calibration.data ? (
         <section className="flex flex-col gap-3">
           <SectionHeading>calibration — stated confidence against what happened</SectionHeading>
-          <p className="meta max-w-prose leading-relaxed text-muted">
+          <p className="meta max-w-prose leading-relaxed text-ink-2">
             A band is a finding only when the stated confidence falls <em>outside</em> the
             interval its sample supports. Anything inside is consistent with having been
             exactly as reliable as claimed — fourteen assumptions that all held cannot
@@ -126,7 +126,7 @@ export function PatternsPage() {
           ) : null}
           <CalibrationTable title="decisions" bands={calibration.data.decisions} />
           <CalibrationTable title="assumptions" bands={calibration.data.assumptions} />
-          <p className="meta max-w-prose leading-relaxed text-faint">
+          <p className="meta max-w-prose leading-relaxed text-ink-3">
             Calibration is only meaningful when the confidence was written down before the
             outcome was known. <code className="kbd">confidence_horizon</code> records
             which, derived from whether the decision&apos;s own date was asserted or
@@ -153,7 +153,7 @@ function PatternRow({
 
   return (
     <li className="border-b border-rule-strong pb-5">
-      <div className="meta mb-1 flex flex-wrap items-baseline gap-3 text-faint">
+      <div className="meta mb-1 flex flex-wrap items-baseline gap-3 text-ink-3">
         <Tag>{pattern.kind}</Tag>
         <span className="text-ink">
           confidence {pattern.confidence === null ? "—" : pattern.confidence.toFixed(2)}
@@ -221,7 +221,7 @@ function EvidenceColumn({
         {title} ({items.length})
       </p>
       {items.length === 0 ? (
-        <p className="meta text-faint">none found</p>
+        <p className="meta text-ink-3">none found</p>
       ) : (
         <ul className="flex flex-col gap-1.5">
           {items.map((item) => (
@@ -232,7 +232,7 @@ function EvidenceColumn({
               >
                 {item.decision_question}
               </Link>
-              <div className="meta text-faint">
+              <div className="meta text-ink-3">
                 <DateStamp value={item.decided_at} provenance="declared" />
                 {item.note ? <span className="ml-2">{item.note}</span> : null}
               </div>
@@ -253,14 +253,14 @@ function CalibrationTable({
 }) {
   if (bands.length === 0) {
     return (
-      <p className="meta text-faint">
+      <p className="meta text-ink-3">
         {title}: nothing recorded before its outcome.
       </p>
     );
   }
   return (
     <div>
-      <p className="meta-label mb-1 text-muted">{title} by stated confidence</p>
+      <p className="meta-label mb-1 text-ink-2">{title} by stated confidence</p>
       <table className="w-full border-collapse text-left">
         <thead>
           <tr className="border-b border-rule-strong">
@@ -277,17 +277,17 @@ function CalibrationTable({
               <td className="meta py-1 pr-4 text-ink">
                 {band.low.toFixed(2)}–{band.high.toFixed(2)}
               </td>
-              <td className="meta py-1 pr-4 text-faint">{band.n}</td>
+              <td className="meta py-1 pr-4 text-ink-3">{band.n}</td>
               <td className="meta py-1 pr-4 text-ink">{band.stated.toFixed(2)}</td>
               <td className="meta py-1 pr-4 text-ink">{percent(band.observed)}</td>
-              <td className="meta py-1 pr-4 text-faint">
+              <td className="meta py-1 pr-4 text-ink-3">
                 {percent(band.interval_low)}–{percent(band.interval_high)}
               </td>
               <td className="meta py-1">
                 {band.miscalibrated ? (
                   <span className="text-deny">outside the interval</span>
                 ) : (
-                  <span className="text-faint">within what the sample supports</span>
+                  <span className="text-ink-3">within what the sample supports</span>
                 )}
               </td>
             </tr>
