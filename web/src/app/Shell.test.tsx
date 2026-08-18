@@ -101,8 +101,11 @@ describe("navigation", () => {
   });
 
   it("sends an unbuilt route to a page that says so, rather than a blank one", async () => {
+    // `/graph` until M9.1 built it. `/insights` is the unbuilt route now, and
+    // the property under test is unchanged: a route with nothing behind it
+    // explains itself rather than rendering blank.
     stubEverything();
-    renderWithProviders(<App />, { route: "/graph" });
+    renderWithProviders(<App />, { route: "/insights" });
 
     expect(await screen.findByText(/what is missing/i)).toBeInTheDocument();
     // The distinguishing property: it explains rather than pretending.

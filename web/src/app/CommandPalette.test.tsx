@@ -122,8 +122,12 @@ describe("what it offers", () => {
     const results = await screen.findByTestId("palette-results");
     expect(within(results).getByText("overview")).toBeInTheDocument();
     expect(within(results).getByText("search")).toBeInTheDocument();
-    // Planned routes are offered and labelled, not hidden.
-    expect(within(results).getByText(/graph \(planned\)/)).toBeInTheDocument();
+    expect(within(results).getByText("graph")).toBeInTheDocument();
+    // Planned routes are offered and labelled, not hidden. M9.1 built the graph
+    // screen, so `insights` is the route carrying the marker now — the property
+    // being pinned is that the palette offers an unbuilt route and says it is
+    // unbuilt, not which route that happens to be.
+    expect(within(results).getByText(/insights \(planned\)/)).toBeInTheDocument();
   });
 
   it("finds a view by an alias rather than only by its label", async () => {

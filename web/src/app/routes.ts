@@ -99,7 +99,6 @@ export const ROUTES: ViewRoute[] = [
       "The entity graph: what the corpus talks about, and which claims connect two things.",
     group: "primary",
     icon: "graph",
-    planned: true,
     aliases: ["entities", "relationships", "neo4j"],
   },
   {

@@ -18,11 +18,12 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { Shell } from "./app/Shell";
-import { GraphPlaceholder, InsightsPlaceholder } from "./app/Placeholder";
+import { InsightsPlaceholder } from "./app/Placeholder";
 import { findRoute } from "./app/routes";
 import { AgentPage } from "./features/agent/AgentPage";
 import { ChatPage } from "./features/chat/ChatPage";
 import { CorpusPage } from "./features/corpus/CorpusPage";
+import { GraphPage } from "./features/graph/GraphPage";
 import { AssumptionsPage } from "./features/decisions/AssumptionsPage";
 import { DecisionForm } from "./features/decisions/DecisionForm";
 import { DecisionPage } from "./features/decisions/DecisionPage";
@@ -50,8 +51,7 @@ export function App() {
         <Route path="/search" element={<SearchPage />} />
         <Route path="/memory/:id" element={<MemoryPage />} />
 
-        {/* The only route in this table with nothing behind it. */}
-        <Route path="/graph" element={<GraphPlaceholder route={findRoute("/graph")!} />} />
+        <Route path="/graph" element={<GraphPage />} />
 
         <Route path="/timeline" element={<TimelinePage />} />
         <Route
