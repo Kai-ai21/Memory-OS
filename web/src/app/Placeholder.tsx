@@ -120,3 +120,43 @@ export function GraphPlaceholder({ route }: { route: ViewRoute }) {
     />
   );
 }
+
+/**
+ * The insights view.
+ *
+ * A route with three working endpoints behind it and no page in front of them.
+ * Unlike the graph, nothing here is missing from the API — patterns,
+ * reflections and the user model all answer — so this placeholder says exactly
+ * that, and is replaced in the next commit rather than waiting on a backend.
+ */
+export function InsightsPlaceholder({ route }: { route: ViewRoute }) {
+  return (
+    <Placeholder
+      route={route}
+      built={
+        <>
+          All three layers this view reads already answer. `/patterns` detects
+          behavioural patterns across recorded decisions and holds them below a
+          support threshold until there is evidence; `/reflections` holds those back
+          again until confidence clears its own bar; `/model` lists every dimension
+          the system tracks about you, with the support count behind each one and
+          the cause of each absence.
+        </>
+      }
+      missing={
+        <>
+          One page that reads all three together. They are currently spread across{" "}
+          <Link className="text-accent underline" to="/decisions/patterns">
+            patterns
+          </Link>{" "}
+          and{" "}
+          <Link className="text-accent underline" to="/model">
+            model
+          </Link>
+          , which is two places to look for one question — what has this system
+          concluded, and what is it still unable to conclude.
+        </>
+      }
+    />
+  );
+}

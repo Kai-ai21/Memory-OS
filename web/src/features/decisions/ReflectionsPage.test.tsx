@@ -181,18 +181,34 @@ describe("where reflections are not", () => {
       within(nav)
         .getAllByRole("link")
         .map((link) => link.textContent?.replace(/soon$/, "").trim()),
+    //
+    // M9.1 reorders this list and adds one to it, both deliberately. The
+    // Luminous reference draws a six-item nav — search, timeline, graph,
+    // decisions, insights, sources — so those six now lead, and everything else
+    // that works follows under a quieter heading rather than being cut. The
+    // addition is `insights`, and it is the one entry on this list that needs
+    // an argument, because it is a page *of claims about the person* and that
+    // is the register a reflection is written in.
+    //
+    // It is here for the same two reasons `model` is, and it is in fact mostly
+    // `model`: the person navigated to it, and every dimension on it carries
+    // either its evidence or the reason there is not enough of it. The rule
+    // this test protects is about *volunteering*. Nothing on that page speaks
+    // unasked, and the reflections section on it renders the count and the
+    // threshold — never the reflections themselves.
     ).toEqual([
       "chat",
-      "overview",
       "search",
-      "graph",
       "timeline",
-      "agent",
+      "graph",
       "decisions",
+      "insights",
+      "sources",
+      "overview",
+      "agent",
       "model",
       "judgements",
       "surfacing",
-      "sources",
       "corpus",
     ]);
   });

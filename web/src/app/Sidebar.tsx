@@ -1,10 +1,13 @@
 /**
  * The persistent column: what this is, where you can go, and what it holds.
  *
- * A ruled column rather than a panel. No card, no shadow, no filled pills — the
- * only things separating it from the page are a one-pixel rule and a half-step
- * of surface, because a sidebar that announces itself is a sidebar competing
- * with the content it exists to navigate to.
+ * A pane of glass at the edge of the screen, per the Luminous reference: the
+ * wordmark in glowing mono caps, one primary action, six nav items with icons,
+ * and settings and help pinned to the bottom rule. The active item takes a cyan
+ * left rule, a faint fill and an inner glow — which is a different argument
+ * from the ruled era's 2px bar. Against a dark void a hairline alone is not
+ * findable in peripheral vision, and the fill is what lets you see where you
+ * are without looking directly at the nav.
  *
  * **The corpus figures live down here rather than only on `/corpus`.** They are
  * the answer to "is this thing loaded and working", which is a question you ask
@@ -13,31 +16,39 @@
  * 282 memories means something different from three out of 30,000.
  */
 
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../api/client";
+import { Icon } from "../components/Icon";
 import { count } from "../lib/format";
 import { GROUPS, HOME, inGroup, type ViewRoute } from "./routes";
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   return (
-    /* `nav` rather than a translucent `sunken`. Beside the content the sidebar
-       only needs a half-step of tint to sit back from the page, and an alpha
-       would have done — but the same element is the mobile drawer, and a
-       translucent drawer over a scrim shows the article through the nav, which
-       reads as a rendering fault rather than as a layer. */
-    <div className="flex h-full flex-col gap-6 overflow-y-auto bg-nav pb-4">
+    /* Opaque-ish rather than fully translucent, and deliberately: the same
+       element is the mobile drawer, where glass over a scrim shows the article
+       through the navigation and reads as a rendering fault rather than as a
+       layer. `--color-nav` is the void at 40%, which is dark enough to hold the
+       drawer and light enough that the glow still moves behind it. */
+    <div className="flex h-full flex-col gap-6 overflow-y-auto bg-nav px-3 pt-6 pb-4 backdrop-blur-xl">
       <Wordmark onNavigate={onNavigate} />
+      <NewConversation onNavigate={onNavigate} />
 
       <nav className="flex flex-col gap-5" aria-label="Views">
-        <Item route={HOME} onNavigate={onNavigate} />
-        {GROUPS.map((group) => {
+        <div className="flex flex-col gap-1">
+          <Item route={HOME} onNavigate={onNavigate} />
+          {inGroup("primary").map((route) => (
+            <Item key={route.path} route={route} onNavigate={onNavigate} />
+          ))}
+        </div>
+
+        {GROUPS.filter((group) => group.id !== "primary").map((group) => {
           const routes = inGroup(group.id);
           if (routes.length === 0) return null;
           return (
             <div key={group.id} className="flex flex-col gap-1">
-              <p className="meta-label px-3">{group.label}</p>
+              <p className="meta-label px-3 pb-1">{group.label}</p>
               {routes.map((route) => (
                 <Item key={route.path} route={route} onNavigate={onNavigate} />
               ))}
@@ -48,9 +59,12 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
       {/* Pushed to the bottom, which is where a status line belongs: read when
           looked for, never in the way of the nav above it. */}
-      <div className="mt-auto flex flex-col gap-3 px-3 pt-4">
-        <CorpusFigures />
-        <Health />
+      <div className="mt-auto flex flex-col gap-3 border-t border-rule pt-3">
+        <Pinned onNavigate={onNavigate} />
+        <div className="flex flex-col gap-3 border-t border-rule px-3 pt-3">
+          <CorpusFigures />
+          <Health />
+        </div>
       </div>
     </div>
   );
@@ -61,13 +75,85 @@ function Wordmark({ onNavigate }: { onNavigate?: () => void }) {
     <NavLink
       to="/"
       onClick={onNavigate}
-      className="flex flex-col gap-0.5 px-3 pt-5"
-      aria-label="Memory OS, overview"
+      className="flex flex-col gap-1 px-3"
+      aria-label="Memory OS, chat"
     >
-      {/* The one place the display face appears at full size. */}
-      <span className="display text-xl">Memory OS</span>
-      <span className="meta text-faint">a corpus that remembers why</span>
+      {/* Mono rather than the display face, and glowing. The reference sets the
+          wordmark in the same face as the system labels, which is what makes it
+          read as a machine announcing itself rather than as a brand. */}
+      <span className="glow-cyan font-mono text-sm font-bold tracking-[0.18em] text-ink">
+        MEMORY OS
+      </span>
+      <span className="meta-label">a corpus that remembers why</span>
     </NavLink>
+  );
+}
+
+/**
+ * The one primary action in the interface.
+ *
+ * Starts a *new session* rather than merely navigating to chat — which is why
+ * this and the `chat` nav item both exist and are not redundant. The reference
+ * has only this button, because in the reference chat is the whole canvas; here
+ * there are sessions, and "go back to what I was saying" and "start something
+ * new" are different intentions. Dropping the session parameter is what makes
+ * it new: see `ChatPage`, which reads the session from the URL.
+ */
+function NewConversation({ onNavigate }: { onNavigate?: () => void }) {
+  const navigate = useNavigate();
+
+  return (
+    <button
+      type="button"
+      className="btn-primary mx-3 flex items-center justify-center gap-2"
+      onClick={() => {
+        navigate("/");
+        onNavigate?.();
+      }}
+    >
+      <Icon name="add" size={16} />
+      <span>New conversation</span>
+    </button>
+  );
+}
+
+/**
+ * The pair pinned to the bottom rule, as the reference draws them.
+ *
+ * **Wired to what exists rather than to what the reference invented.** The
+ * mockup shows Settings and Help as two more nav rows; this application has
+ * neither page. Help is real and is this: the command palette lists every view
+ * in the application with a sentence saying what it answers, which is the only
+ * help surface here and a better one than a page of prose would be.
+ *
+ * There is no settings row. Everything configurable in this system is an
+ * environment variable read at startup — weights, models, connection strings —
+ * and the one thing you can change from the interface, which directories get
+ * read, is `sources` in the nav above. A settings row would have to lead
+ * somewhere, and the honest options were a page saying "there are no settings"
+ * or a second link to a screen already two inches higher. Both are worse than
+ * the gap.
+ */
+function Pinned({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        className="nav-item w-full text-left"
+        onClick={() => {
+          onNavigate?.();
+          // The palette owns this shortcut; dispatching the key is how a button
+          // and a keystroke stay one implementation rather than two.
+          window.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }),
+          );
+        }}
+      >
+        <Icon name="help" size={18} />
+        <span>help</span>
+        <span className="kbd ml-auto normal-case">⌘K</span>
+      </button>
+    </div>
   );
 }
 
@@ -82,6 +168,7 @@ function Item({ route, onNavigate }: { route: ViewRoute; onNavigate?: () => void
         `nav-item ${isActive ? "nav-item-on" : ""} ${route.planned ? "nav-item-soon" : ""}`
       }
     >
+      <Icon name={route.icon} size={18} />
       <span>{route.label}</span>
       {/* Marked, not hidden. See `routes.ts` — a nav that omits what is not
           built misrepresents the shape of the application. */}
@@ -157,7 +244,7 @@ function Health() {
       ? { tone: "bg-affirm", label: "healthy", detail: "database and graph reachable" }
       : ready.data
         ? {
-            tone: "bg-accent-bright",
+            tone: "bg-warn",
             label: "degraded",
             detail: ready.data.database
               ? "graph unreachable — search and ingest still work"

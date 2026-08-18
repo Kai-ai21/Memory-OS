@@ -18,7 +18,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { Shell } from "./app/Shell";
-import { GraphPlaceholder } from "./app/Placeholder";
+import { GraphPlaceholder, InsightsPlaceholder } from "./app/Placeholder";
 import { findRoute } from "./app/routes";
 import { AgentPage } from "./features/agent/AgentPage";
 import { ChatPage } from "./features/chat/ChatPage";
@@ -54,6 +54,10 @@ export function App() {
         <Route path="/graph" element={<GraphPlaceholder route={findRoute("/graph")!} />} />
 
         <Route path="/timeline" element={<TimelinePage />} />
+        <Route
+          path="/insights"
+          element={<InsightsPlaceholder route={findRoute("/insights")!} />}
+        />
         <Route path="/agent" element={<AgentPage />} />
         {/* Where the agent lived before M9.0. */}
         <Route path="/ask" element={<Navigate to="/agent" replace />} />

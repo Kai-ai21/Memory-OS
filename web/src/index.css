@@ -62,6 +62,20 @@
     scrollbar-width: thin;
   }
 
+  /* The drift the shell's two glows run on.
+   *
+   * Small numbers on purpose: 5% of a 50vw circle over twenty seconds is
+   * movement you can only see by looking away and back, which is what makes it
+   * read as light rather than as an element sliding about. */
+  @keyframes drift {
+    0% {
+      transform: translate(0, 0) scale(1);
+    }
+    100% {
+      transform: translate(5%, 5%) scale(1.1);
+    }
+  }
+
   /* The glows drift, and the palette and drawer appear. Everything else is
    * still — and even these stop for anybody who has asked the OS for
    * stillness. `prefers-reduced-motion` also parks the glows mid-drift rather
