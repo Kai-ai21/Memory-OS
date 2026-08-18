@@ -211,6 +211,36 @@ describe("an answer", () => {
     expect(within(answer).getByText(/nothing was cited/i)).toBeInTheDocument();
   });
 
+  it("gives the refusal the magenta treatment and the mono label, not a quiet one", async () => {
+    // The point of M9.1's chat work, pinned. This state used to render in grey
+    // italic body text half-hidden behind the composer — the visual language of
+    // an apology. It is not one: it is the system reporting that nothing in the
+    // corpus supports a claim. It has to be the most confident thing on screen,
+    // because it is the product's most distinctive behaviour.
+    stubFetch(chatRoutes([QUESTION, REFUSAL]));
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
+
+    const refusal = await screen.findByTestId("refusal");
+
+    // The mono label, in the magenta this palette reserves for what the system
+    // does not have.
+    const label = within(refusal).getByTestId("refusal-label");
+    expect(label).toHaveTextContent(/no supporting memories/i);
+    expect(label.className).toMatch(/meta-label/);
+    expect(label.className).toMatch(/text-magenta/);
+
+    // The magenta rule down the left, which is what carries it at a glance.
+    const rule = refusal.querySelector('[aria-hidden="true"]');
+    expect(rule?.className).toMatch(/from-magenta/);
+
+    // And the sentence at full body size — the same size as an answer, because
+    // it is the answer. Never italic, never dimmed.
+    const body = within(refusal).getByTestId("refusal-text");
+    expect(body.className).toMatch(/text-base/);
+    expect(body.className).toMatch(/text-ink/);
+    expect(body.className).not.toMatch(/italic|text-faint|text-muted/);
+  });
+
   it("shows no stored line for a question, because nothing was stored", async () => {
     stubFetch(chatRoutes([QUESTION, REFUSAL]));
     renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });

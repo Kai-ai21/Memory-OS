@@ -10,7 +10,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { App } from "../App";
@@ -85,6 +85,30 @@ describe("navigation", () => {
     await userEvent.click(within(nav).getByRole("link", { name: label }));
 
     expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+  });
+
+  it("marks the item you are on, and only that one", async () => {
+    // The other half of navigation, and the half no route test catches: a nav
+    // that lands you correctly and marks nothing leaves you unable to tell
+    // where you are, and one that marks two items is worse than marking none.
+    //
+    // Asserted on `aria-current`, which `NavLink` sets from the same `isActive`
+    // the cyan treatment is driven by. Asserting the class instead would pin
+    // the styling rather than the state, and the styling is the thing this
+    // milestone changes.
+    stubEverything();
+    renderWithProviders(<App />, { route: "/" });
+
+    const nav = screen.getByRole("navigation");
+    await userEvent.click(within(nav).getByRole("link", { name: "timeline" }));
+
+    await waitFor(() => {
+      const current = within(nav)
+        .getAllByRole("link")
+        .filter((link) => link.getAttribute("aria-current") === "page");
+      expect(current).toHaveLength(1);
+      expect(current[0]).toHaveTextContent("timeline");
+    });
   });
 
   it("navigating to search renders the search view", async () => {
