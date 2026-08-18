@@ -37,7 +37,12 @@ export function DateStamp({
   // fact about the corpus: the date is not known and was not invented.
   if (!value) {
     return (
-      <span className="meta text-faint" title={title} data-provenance={provenance ?? "unknown"}>
+      <span
+        className="meta text-faint"
+        title={title}
+        data-testid="date-stamp"
+        data-provenance={provenance ?? "unknown"}
+      >
         no date{mark}
       </span>
     );
@@ -47,10 +52,11 @@ export function DateStamp({
     <span
       className={`meta ${dateClass(provenance)}`}
       title={title}
+      data-testid="date-stamp"
       data-provenance={provenance ?? "unknown"}
     >
       {utc ? timestampUtc(value) : timestamp(value)}
-      {mark ? <span className="text-amber">{mark}</span> : null}
+      {mark ? <span className="text-accent">{mark}</span> : null}
       {showProvenance ? <span className="ml-1.5 text-faint">{provenance}</span> : null}
     </span>
   );

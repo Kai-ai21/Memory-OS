@@ -63,7 +63,7 @@ export function VersionTimeline({ versions }: { versions: MemoryVersion[] }) {
                   aria-hidden="true"
                 />
                 <span
-                  className="absolute top-1 -ml-1 h-2 w-2 rounded-full border border-edge bg-paper"
+                  className="absolute top-1 -ml-1 h-2 w-2 rounded-full border border-edge bg-void"
                   style={{ left: `${occurred}%` }}
                   title={`occurred ${version.occurred_at ?? "unknown"} (${version.occurred_at_source})`}
                   data-testid="occurred-tick"
@@ -85,7 +85,7 @@ export function VersionTimeline({ versions }: { versions: MemoryVersion[] }) {
 
       <div className="meta flex flex-wrap items-baseline gap-x-4 text-faint">
         <span className="inline-flex items-baseline gap-1">
-          <span className="inline-block h-2 w-2 rounded-full border border-edge bg-paper" />
+          <span className="inline-block h-2 w-2 rounded-full border border-edge bg-void" />
           occurred
         </span>
         <span className="inline-flex items-baseline gap-1">
@@ -116,7 +116,7 @@ export function VersionTimeline({ versions }: { versions: MemoryVersion[] }) {
               {shortHash(version.content_hash, 8)}
             </span>
             <span className="meta text-muted">{changed(version, ordered)}</span>
-            {version.is_current ? <span className="meta text-amber">current</span> : null}
+            {version.is_current ? <span className="meta text-accent">current</span> : null}
             {version.deleted_at ? <span className="meta text-deny">tombstoned</span> : null}
           </li>
         ))}

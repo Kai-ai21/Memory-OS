@@ -122,8 +122,11 @@ describe("what it offers", () => {
     const results = await screen.findByTestId("palette-results");
     expect(within(results).getByText("overview")).toBeInTheDocument();
     expect(within(results).getByText("search")).toBeInTheDocument();
-    // Planned routes are offered and labelled, not hidden.
-    expect(within(results).getByText(/graph \(planned\)/)).toBeInTheDocument();
+    expect(within(results).getByText("graph")).toBeInTheDocument();
+    // M9.1 built the last two unbuilt routes, so there is no `(planned)` marker
+    // left to assert — the property that mattered was that the palette reaches
+    // every view in the table, which is what these three lines pin.
+    expect(within(results).getByText("insights")).toBeInTheDocument();
   });
 
   it("finds a view by an alias rather than only by its label", async () => {

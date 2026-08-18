@@ -79,7 +79,7 @@ export function ReviewQueue() {
               type="button"
               onClick={() => setStatus(value)}
               className={
-                value === status ? "text-amber underline" : "text-muted hover:text-ink"
+                value === status ? "text-accent underline" : "text-muted hover:text-ink"
               }
             >
               {value}
@@ -178,7 +178,7 @@ function SuggestionRow({
         <div className="flex flex-col gap-2">
           <p className="meta-label text-muted">draft</p>
           <p className="prose-content text-sm text-ink">{draft.question}</p>
-          <p className="prose-content text-sm text-amber">→ {draft.chosen}</p>
+          <p className="prose-content text-sm text-accent">→ {draft.chosen}</p>
           {(draft.options ?? []).map((option, index) => (
             <div key={index} className="border-l-2 border-rule pl-3">
               <p className="prose-content text-sm text-ink">{option.description}</p>
@@ -226,7 +226,7 @@ function SuggestionRow({
             type="button"
             disabled={busy}
             onClick={onEdit}
-            className="meta-label border border-rule px-3 py-1 text-amber"
+            className="meta-label border border-rule px-3 py-1 text-accent"
           >
             edit
           </button>

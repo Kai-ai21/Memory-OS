@@ -5,7 +5,7 @@
  * holding a whole version with the changes marked, and it does not survive
  * contact with this corpus: the README's two versions are 54,266 and 56,772
  * characters, so the reader gets two screens of identical prose to scroll
- * through looking for the amber. A diff is a list of changes, and the useful
+ * through looking for the accent. A diff is a list of changes, and the useful
  * view is that list — each row showing what the old version said on the left and
  * what the new one says on the right.
  *
@@ -327,7 +327,7 @@ function Side({
   const segments = segmentAll(text, [{ start: 0, end: text.length }]);
 
   return (
-    <div className={`px-3 py-2 ${removed ? "bg-paper" : "bg-raised"}`}>
+    <div className={`px-3 py-2 ${removed ? "bg-void" : "bg-raised"}`}>
       <p className="meta-label mb-1">{label}</p>
       {text.length === 0 ? (
         <p className="meta text-faint">{empty}</p>

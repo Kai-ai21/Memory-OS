@@ -70,7 +70,7 @@ export function SessionRail({
 
       <button
         type="button"
-        className="meta self-start text-faint hover:text-amber"
+        className="meta self-start text-faint hover:text-accent"
         onClick={() => setShowArchived(!showArchived)}
       >
         {showArchived ? "hide archived" : "show archived"}
@@ -124,7 +124,7 @@ function Row({
       </button>
       <button
         type="button"
-        className="meta shrink-0 text-faint hover:text-amber"
+        className="meta shrink-0 text-faint hover:text-accent"
         title={
           session.archived_at
             ? "Bring this conversation back into the list"

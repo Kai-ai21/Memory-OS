@@ -171,7 +171,7 @@ export function SearchPage() {
       {/* Timing, in small mono. Present always so it is noticed when it moves —
           the point of showing it is to see when something gets slow. */}
       {results.data ? (
-        <div className="meta flex items-baseline gap-4 border-y border-rule py-1 text-faint">
+        <div className="meta flex flex-wrap items-baseline justify-end gap-x-4 border-b border-rule pb-3 text-faint">
           <span data-testid="timing">
             embed {results.data.timing.embed_ms}ms · search {results.data.timing.search_ms}ms ·
             total {results.data.timing.total_ms}ms
@@ -181,7 +181,7 @@ export function SearchPage() {
             {count(results.data.hits.reduce((sum, hit) => sum + hit.matched_chunks.length, 0))}{" "}
             chunks matched
           </span>
-          {state.exact ? <span className="text-amber">exact scan</span> : null}
+          {state.exact ? <span className="text-cyan">exact scan</span> : null}
         </div>
       ) : null}
 
@@ -206,7 +206,7 @@ export function SearchPage() {
           search, so wording matters more than keywords.
         </Empty>
       ) : (
-        <div ref={list} onKeyDown={onArrow}>
+        <div ref={list} onKeyDown={onArrow} className="flex flex-col gap-4">
           {results.data?.hits.map((hit, index) => (
             <ResultRow
               key={hit.memory_id}

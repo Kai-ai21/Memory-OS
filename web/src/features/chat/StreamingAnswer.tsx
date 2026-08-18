@@ -19,25 +19,50 @@
 import { Link } from "react-router-dom";
 
 import { count } from "../../lib/format";
+import { Refusal } from "./Refusal";
 import type { AnswerStream } from "./useAnswerStream";
 
 export function StreamingAnswer({ state }: { state: AnswerStream }) {
   const withdrawn = state.done?.replacement != null;
 
   return (
-    <div className="flex flex-col gap-2" data-testid="streaming-answer">
+    <div className="flex flex-col gap-4" data-testid="streaming-answer">
       <div className="flex items-baseline gap-3">
         <span className="meta-label text-muted">you</span>
       </div>
-      <p className="whitespace-pre-wrap text-ink">{state.question}</p>
+      {/* The reader's own words, in the display face at reading size. The
+          reference sets these larger than the answer, and that is the right
+          ranking: the question is what the screen is about. */}
+      <p className="display text-xl whitespace-pre-wrap">{state.question}</p>
 
+      {/* A refusal that has finished streaming is a refusal, not a quiet
+          answer. Handed to the same component the stored transcript uses, so
+          the two cannot drift apart. */}
+      {state.done?.refused && !state.interrupted && !withdrawn ? (
+        <Refusal
+          footnote={
+            <p className="meta text-faint">
+              nothing was cited because nothing was used
+              {state.done.model_id ? ` · ${state.done.model_id}` : ""}
+            </p>
+          }
+        >
+          {state.text}
+        </Refusal>
+      ) : (
       <div
-        className={`border-l-2 pl-4 ${
-          state.interrupted || withdrawn ? "border-deny" : "border-rule-strong"
+        className={`relative pl-6 ${
+          state.interrupted || withdrawn ? "border-l-2 border-deny" : ""
         }`}
       >
+        {!state.interrupted && !withdrawn ? (
+          <span
+            className="absolute inset-y-0 left-0 w-0.5 rounded-full bg-gradient-to-b from-cyan via-cyan/25 to-transparent shadow-[0_0_8px_var(--color-cyan)]"
+            aria-hidden
+          />
+        ) : null}
         <div className="flex flex-wrap items-baseline gap-x-3">
-          <span className="meta-label text-muted">{label(state)}</span>
+          <span className="meta-label text-cyan">{label(state)}</span>
           {state.done?.model_id ? (
             <span className="meta text-faint">{state.done.model_id}</span>
           ) : null}
@@ -50,7 +75,7 @@ export function StreamingAnswer({ state }: { state: AnswerStream }) {
 
         {state.text ? (
           <p
-            className={`mt-1 leading-relaxed text-ink ${
+            className={`prose-content mt-2 text-base ${
               state.interrupted ? "border-b border-dashed border-deny pb-1" : ""
             }`}
             data-testid="answer-text"
@@ -78,6 +103,7 @@ export function StreamingAnswer({ state }: { state: AnswerStream }) {
 
         <Citations state={state} />
       </div>
+      )}
     </div>
   );
 }
@@ -150,7 +176,7 @@ function Citations({ state }: { state: AnswerStream }) {
         <li key={`${citation.locator}-${citation.excerpt.slice(0, 24)}`}>
           <Link
             to={`/memory/${citation.memory_id}`}
-            className="meta font-mono text-ink hover:text-amber hover:underline"
+            className="meta font-mono text-ink hover:text-accent hover:underline"
           >
             {citation.locator}
           </Link>

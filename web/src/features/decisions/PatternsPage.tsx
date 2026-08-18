@@ -62,16 +62,16 @@ export function PatternsPage() {
             <button
               type="button"
               className={
-                includeDismissed ? "text-amber underline" : "text-muted hover:text-ink"
+                includeDismissed ? "text-accent underline" : "text-muted hover:text-ink"
               }
               onClick={() => setIncludeDismissed((current) => !current)}
             >
               show dismissed
             </button>
-            <Link className="text-amber underline" to="/decisions/reflections">
+            <Link className="text-accent underline" to="/decisions/reflections">
               reflections
             </Link>
-            <Link className="text-amber underline" to="/decisions">
+            <Link className="text-accent underline" to="/decisions">
               decisions
             </Link>
           </span>
@@ -227,7 +227,7 @@ function EvidenceColumn({
           {items.map((item) => (
             <li key={`${item.decision_id}-${item.note ?? ""}`}>
               <Link
-                className="prose-content text-sm text-amber"
+                className="prose-content text-sm text-accent"
                 to={`/decisions/${item.decision_id}`}
               >
                 {item.decision_question}

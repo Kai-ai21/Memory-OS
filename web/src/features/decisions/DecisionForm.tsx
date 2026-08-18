@@ -189,7 +189,7 @@ export function DecisionForm() {
         ))}
         <button
           type="button"
-          className="meta self-start text-amber underline"
+          className="meta self-start text-accent underline"
           onClick={() =>
             setOptions((current) => [...current, { description: "", rejected_because: "" }])
           }
@@ -255,7 +255,7 @@ export function DecisionForm() {
         ))}
         <button
           type="button"
-          className="meta self-start text-amber underline"
+          className="meta self-start text-accent underline"
           onClick={() => setAssumptions((current) => [...current, ""])}
         >
           another assumption
@@ -271,7 +271,7 @@ export function DecisionForm() {
 
       <button
         type="submit"
-        className="meta-label self-start border border-edge px-3 py-1 text-amber"
+        className="meta-label self-start border border-edge px-3 py-1 text-accent"
         disabled={submit.isPending}
       >
         {submit.isPending

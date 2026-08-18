@@ -56,19 +56,19 @@ export function DecisionsPage() {
       <SectionHeading
         right={
           <span className="flex items-baseline gap-3">
-            <Link className="text-amber underline" to="/decisions/new">
+            <Link className="text-accent underline" to="/decisions/new">
               record one
             </Link>
-            <Link className="text-amber underline" to="/decisions/review">
+            <Link className="text-accent underline" to="/decisions/review">
               review queue{queued ? ` (${queued})` : ""}
             </Link>
-            <Link className="text-amber underline" to="/decisions/outcomes">
+            <Link className="text-accent underline" to="/decisions/outcomes">
               outcomes{outcomeQueue ? ` (${outcomeQueue})` : ""}
             </Link>
-            <Link className="text-amber underline" to="/decisions/assumptions">
+            <Link className="text-accent underline" to="/decisions/assumptions">
               assumptions
             </Link>
-            <Link className="text-amber underline" to="/decisions/patterns">
+            <Link className="text-accent underline" to="/decisions/patterns">
               patterns
             </Link>
           </span>
@@ -85,7 +85,7 @@ export function DecisionsPage() {
               type="button"
               onClick={() => setStatus(value)}
               className={
-                value === status ? "text-amber underline" : "text-muted hover:text-ink"
+                value === status ? "text-accent underline" : "text-muted hover:text-ink"
               }
             >
               {value}
@@ -106,7 +106,7 @@ export function DecisionsPage() {
         <div className="meta flex flex-wrap gap-4 text-faint">
           <span className="text-affirm">{rate.data.worked} worked</span>
           <span className="text-deny">{rate.data.failed} failed</span>
-          <span className="text-amber">{rate.data.mixed} mixed</span>
+          <span className="text-accent">{rate.data.mixed} mixed</span>
           <span>{rate.data.too_early} too early</span>
           <span>{rate.data.undecided} not looked at</span>
           <span className="text-ink">
@@ -141,7 +141,7 @@ export function DecisionsPage() {
             {rows.map((row) => (
               <tr key={row.id} className="border-b border-rule/60 align-top">
                 <td className="py-1.5 pr-4">
-                  <Link className="prose-content text-sm text-amber" to={`/decisions/${row.id}`}>
+                  <Link className="prose-content text-sm text-accent" to={`/decisions/${row.id}`}>
                     {row.question}
                   </Link>
                 </td>

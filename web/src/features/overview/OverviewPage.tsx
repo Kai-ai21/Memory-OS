@@ -61,10 +61,10 @@ function Statement() {
     <header className="flex flex-col gap-4">
       <h1 className="display-page">A corpus that remembers why.</h1>
       <p className="prose-lead">
-        Memory OS is something you <Link to="/" className="text-amber underline">talk to</Link>,
+        Memory OS is something you <Link to="/" className="text-accent underline">talk to</Link>,
         which can also read your files. A thought you type is kept as a memory and connected
         to everything already here that talks about the same things; a{" "}
-        <Link to="/sources" className="text-amber underline">directory you point it at</Link>{" "}
+        <Link to="/sources" className="text-accent underline">directory you point it at</Link>{" "}
         goes through the identical pipeline, which is still the right move for code. Nothing
         forgets its provenance: every chunk knows which document it came from and where in
         it, every date carries whether anybody actually stated it or the filesystem guessed,
@@ -171,7 +171,7 @@ function Figure({
         )}
       </dd>
       <dt className="flex flex-col gap-0.5">
-        <Link to={to} className="meta-label text-muted hover:text-amber">
+        <Link to={to} className="meta-label text-muted hover:text-accent">
           {label}
         </Link>
         {note ? <span className="meta text-faint">{note}</span> : null}
@@ -274,7 +274,7 @@ function Recent() {
           >
             <Link
               to={`/memory/${memory.id}`}
-              className="min-w-0 flex-1 truncate font-mono text-xs text-ink hover:text-amber hover:underline"
+              className="min-w-0 flex-1 truncate font-mono text-xs text-ink hover:text-accent hover:underline"
               title={memory.external_key}
             >
               {memory.external_key}
@@ -344,7 +344,7 @@ function Health() {
       </dl>
       <p className="meta text-faint">
         The standing checks live on{" "}
-        <Link to="/corpus" className="text-amber underline">
+        <Link to="/corpus" className="text-accent underline">
           corpus
         </Link>
         . They tokenize with the real tokenizer, so they run on request.

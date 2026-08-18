@@ -84,7 +84,15 @@ export function ResultRow({
   };
 
   return (
-    <article className="border-b border-rule py-3" data-testid="result">
+    /* A glass panel per result rather than a ruled row. The ruled sheet was
+       right when a result was a passage in one document; under Luminous each
+       result is a discrete object floating over the lit void, and the reference
+       draws it as one. The expanded state takes a cyan edge instead of a fill,
+       so emphasis costs nothing in contrast against the text inside. */
+    <article
+      className={`glass p-5 ${expanded !== null ? "glass-on" : ""}`}
+      data-testid="result"
+    >
       {/* Wraps, and the path is the thing that must survive it.
           Unwrapped, at 768 the flex row squeezed `flex-1 min-w-0 truncate` to
           zero and the external key — the one element that says *which result
@@ -95,8 +103,11 @@ export function ResultRow({
         {/* Rank and score in a fixed-width gutter, so scores form a column that
             can be compared down the page rather than a ragged edge. */}
         <span className="meta w-6 shrink-0 text-right text-faint">{rank}</span>
+        {/* The reference sets the score in cyan at the head of the row: it is
+            what the eye scans down, and a column of cyan numbers is findable in
+            a way a column of white ones is not. */}
         <span
-          className="w-16 shrink-0 font-mono text-sm font-medium text-ink"
+          className="w-16 shrink-0 font-mono text-base font-medium text-cyan"
           data-testid="score"
         >
           {fmtScore(hit.score)}
@@ -107,7 +118,7 @@ export function ResultRow({
           // controls are reachable by tab, but the arrows move between results
           // rather than between every focusable thing inside one.
           data-result-link
-          className="min-w-48 flex-1 basis-48 truncate font-mono text-sm text-ink underline decoration-rule-strong decoration-1 underline-offset-2 hover:decoration-edge"
+          className="min-w-48 flex-1 basis-48 truncate font-mono text-sm text-cyan underline decoration-rule-strong decoration-1 underline-offset-2 hover:decoration-edge"
           title={hit.external_key}
         >
           {hit.external_key}
@@ -159,7 +170,7 @@ export function ResultRow({
         {hidden > 0 ? (
           <button
             type="button"
-            className="meta text-amber hover:text-amber-bright"
+            className="meta text-magenta hover:underline"
             onClick={() => setShowAllChunks(true)}
           >
             + {hidden} more matched {hidden === 1 ? "chunk" : "chunks"} in this memory
@@ -217,7 +228,7 @@ function ChunkBlock({
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
         <button
           type="button"
-          className="meta text-amber hover:text-amber-bright"
+          className="meta text-accent hover:text-accent-bright"
           onClick={onToggle}
           aria-expanded={expanded}
         >
@@ -229,7 +240,7 @@ function ChunkBlock({
             the function it came from rather than only the file. */}
         {definition ? (
           <span
-            className="meta min-w-0 max-w-full truncate text-amber"
+            className="meta min-w-0 max-w-full truncate text-accent"
             data-testid="definition"
             title={`${definition}()`}
           >

@@ -63,7 +63,7 @@ export function SurfacingPage() {
         right={
           <button
             type="button"
-            className={includeRefused ? "text-amber underline" : "text-muted hover:text-ink"}
+            className={includeRefused ? "text-accent underline" : "text-muted hover:text-ink"}
             onClick={() => setIncludeRefused((current) => !current)}
           >
             show refusals

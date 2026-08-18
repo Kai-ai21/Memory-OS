@@ -210,14 +210,24 @@ describe("provenance", () => {
     // The mtime carries the approximation mark and says why on hover. An
     // interface that rendered this identically to the line below it would be
     // asserting the two dates are the same kind of claim.
-    const inferred = within(rows[0]).getByTitle(/filesystem/);
+    //
+    // Scoped to the date stamp by test id rather than found by its title.
+    // M9.1 added the reference's provenance chip to the same row, which also
+    // carries the provenance and the same explanatory title — so the title
+    // alone now matches two elements. Both assertions below are unchanged.
+    const inferred = within(rows[0]).getByTestId("date-stamp");
     expect(inferred).toHaveAttribute("data-provenance", "filesystem");
     expect(inferred).toHaveTextContent("~");
 
     // The declared one is unmarked, and the absence of the mark is the signal:
     // marking every date would make the mark invisible.
-    const stated = within(rows[1]).getByTitle(/declared/);
+    const stated = within(rows[1]).getByTestId("date-stamp");
     expect(stated).toHaveAttribute("data-provenance", "declared");
     expect(stated).not.toHaveTextContent("~");
+
+    // And the new chip states the same claim in a word, which is the reference's
+    // treatment: a stated date is chipped in cyan, an inferred one is not.
+    expect(within(rows[0]).getByTestId("provenance-chip")).toHaveTextContent("filesystem");
+    expect(within(rows[1]).getByTestId("provenance-chip")).toHaveTextContent("declared");
   });
 });

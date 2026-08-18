@@ -63,6 +63,12 @@ export function TimelinePage() {
 
   const data = timeline.data;
   const kinds = kindsPresent(data.buckets);
+  // The longest run of empty buckets, counted from the response rather than
+  // requested. `/gaps` answers "is there a silence of at least N days" and says
+  // nothing when the answer is no; this is the follow-up question a reader
+  // immediately has, and the buckets already on screen contain it. Derived, not
+  // invented — it moves when the data does.
+  const longestQuiet = longestEmptyRun(data.buckets);
   const dated = data.provenance.filter((band) => band.provenance !== "unknown");
   const undated = data.provenance.find((band) => band.provenance === "unknown");
   const total = data.provenance.reduce((sum, band) => sum + band.count, 0);
@@ -82,7 +88,7 @@ export function TimelinePage() {
                 title={explain(band.provenance)}
               >
                 {band.provenance}
-                <span className="text-amber">{marker(band.provenance)}</span>
+                <span className="text-accent">{marker(band.provenance)}</span>
               </span>
               <span className="meta text-faint">
                 {count(band.count)} ({total ? ((band.count / total) * 100).toFixed(1) : "0.0"}%)
@@ -92,7 +98,7 @@ export function TimelinePage() {
           {undated ? (
             <span className="inline-flex items-baseline gap-1.5">
               <span className="meta text-faint" title={explain("unknown")}>
-                undated<span className="text-amber">?</span>
+                undated<span className="text-accent">?</span>
               </span>
               <span className={`meta ${undated.count ? "text-deny" : "text-faint"}`}>
                 {count(undated.count)}
@@ -205,10 +211,30 @@ export function TimelinePage() {
         <SectionHeading right={`${minDays}d or longer`}>gaps</SectionHeading>
         {gaps.isError ? <Failure error={gaps.error} /> : null}
         {gaps.data && gaps.data.length === 0 ? (
-          <p className="meta text-faint">
-            None at this threshold. A gap needs activity on both sides — the silence since the
-            newest memory is not one, however long it has run.
-          </p>
+          /* Not a blank section, and not "no data". Which threshold produced
+             this answer is the whole of what the reader needs, because it is
+             adjustable and sitting a few inches above — and the second sentence
+             is the rule people get wrong: trailing silence is not a gap. */
+          <div className="glass flex flex-col gap-2 border-dashed p-5" data-testid="no-gaps">
+            <p className="meta-label text-magenta">No silence this long</p>
+            <p className="prose-content max-w-prose text-sm text-muted">
+              Nothing in this corpus is quiet for {minDays} days or more. Lower the
+              threshold above to see shorter silences
+              {longestQuiet !== null && longestQuiet > 0 ? (
+                <>
+                  {" "}
+                  — the longest run of empty {period}
+                  {longestQuiet === 1 ? "" : "s"} in the window is{" "}
+                  <span className="text-ink">
+                    {longestQuiet} {period}
+                    {longestQuiet === 1 ? "" : "s"}
+                  </span>
+                </>
+              ) : null}
+              . A gap also needs activity on both sides: the silence since the newest
+              memory is not one, however long it has run.
+            </p>
+          </div>
         ) : null}
         <ul>
           {(gaps.data ?? []).map((gap) => (
@@ -233,11 +259,11 @@ export function TimelinePage() {
               </span>
               <span className="meta flex-1 truncate text-faint">
                 after{" "}
-                <Link to={`/memory/${gap.before.id}`} className="text-amber underline">
+                <Link to={`/memory/${gap.before.id}`} className="text-accent underline">
                   {gap.before.external_key}
                 </Link>
                 , next{" "}
-                <Link to={`/memory/${gap.after.id}`} className="text-amber underline">
+                <Link to={`/memory/${gap.after.id}`} className="text-accent underline">
                   {gap.after.external_key}
                 </Link>
               </span>
@@ -247,6 +273,46 @@ export function TimelinePage() {
       </section>
 
     </div>
+  );
+}
+
+/**
+ * The longest consecutive run of empty buckets in a window.
+ *
+ * Counts periods rather than days on purpose: it is reported beside the grain
+ * the reader chose, so "3 days" and "3 months" are both answerable from the
+ * same number without the page claiming a precision the buckets do not have.
+ */
+function longestEmptyRun(buckets: Bucket[]): number {
+  let longest = 0;
+  let run = 0;
+  for (const bucket of buckets) {
+    run = bucket.count === 0 ? run + 1 : 0;
+    if (run > longest) longest = run;
+  }
+  return longest;
+}
+
+/**
+ * The reference's provenance chip: DECLARED, FILESYSTEM, PARSED.
+ *
+ * Cyan when the source actually said when this happened, neutral when nobody
+ * did and the date came from metadata about the container. Never colour alone —
+ * the word is the label, and `DateStamp` beside it carries the glyph too, so a
+ * reader who cannot see the difference in hue still gets the difference in
+ * claim.
+ */
+function ProvenanceChip({ provenance }: { provenance: string | null | undefined }) {
+  const tier = confidence(provenance);
+  return (
+    <span
+      className={`chip shrink-0 uppercase ${tier === "stated" ? "chip-cyan" : ""}`}
+      title={explain(provenance)}
+      data-testid="provenance-chip"
+      data-provenance={provenance ?? "unknown"}
+    >
+      {provenance ?? "unknown"}
+    </span>
   );
 }
 
@@ -304,23 +370,35 @@ function PeriodDetail({
         {(detail.data?.memories ?? []).map((memory) => (
           <li
             key={memory.id}
-            className="flex flex-wrap items-baseline gap-x-4 border-b border-rule/60 py-1"
+            className="glass-card flex flex-wrap items-center gap-x-4 gap-y-2 p-4"
           >
-            <span className="w-44 shrink-0">
+            <div className="flex min-w-0 flex-1 basis-64 flex-col gap-1">
+              <Link
+                to={`/memory/${memory.id}`}
+                className="meta truncate text-cyan hover:underline"
+              >
+                {memory.external_key}
+              </Link>
+              {memory.title ? (
+                <span className="prose-content truncate text-sm">{memory.title}</span>
+              ) : null}
+            </div>
+            <Tag>{memory.kind}</Tag>
+            {/* The reference's DECLARED / FILESYSTEM chip, and it is the real
+                `occurred_at_source` rather than a label. A stated date takes the
+                cyan chip; an inferred one stays neutral. That difference is the
+                whole reason M1.1 stored the column: an mtime is a fact about a
+                file on a disk, not about when the work happened, and two dates
+                rendered identically assert they are the same kind of claim. */}
+            <ProvenanceChip provenance={memory.occurred_at_source} />
+            <span className="shrink-0">
               <DateStamp
                 value={memory.occurred_at}
                 provenance={memory.occurred_at_source}
                 utc
               />
             </span>
-            <Tag>{memory.kind}</Tag>
-            <Link
-              to={`/memory/${memory.id}`}
-              className="meta flex-1 truncate text-ink hover:text-amber hover:underline"
-            >
-              {memory.external_key}
-            </Link>
-            <span className="meta text-faint" title="when this system learned about it">
+            <span className="meta shrink-0 text-faint" title="when this system learned about it">
               ingested {memory.ingested_at ? isoDate(memory.ingested_at) : "—"}
             </span>
           </li>

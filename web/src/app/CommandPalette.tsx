@@ -105,7 +105,10 @@ export function CommandPalette({
         if (event.target === dialog.current) onClose();
       }}
       aria-label="Command palette"
-      className="m-0 w-full max-w-xl border border-rule-strong bg-float p-0 text-ink backdrop:bg-scrim sm:mt-[12vh] sm:ml-[max(0px,calc(50%-18rem))]"
+      /* Level 3 in the elevation model: the palette is the only surface that
+         overlaps another, so it takes the heavier blur and brighter edge that
+         say "closer to the reader" without a drop shadow. */
+      className="glass-float m-0 w-full max-w-xl p-0 text-ink backdrop:bg-scrim sm:mt-[12vh] sm:ml-[max(0px,calc(50%-18rem))]"
     >
       <div
         onKeyDown={(event) => {
@@ -218,7 +221,7 @@ function match(
     (route) => ({
       id: `view:${route.path}`,
       kind: "view",
-      label: route.planned ? `${route.label} (planned)` : route.label,
+      label: route.label,
       detail: route.blurb,
       to: route.path,
     }),

@@ -1,15 +1,18 @@
 /* Memory OS — the visual language, as classes.
  *
  * The values all live in `styles/tokens.css`; this file spends them. It is
- * deliberately the only place a border, a surface or a text role is defined, so
- * that "make the rules lighter" is one edit here rather than a search across
- * fifty components.
+ * deliberately the only place a surface, a border or a text role is defined, so
+ * that "make the glass lighter" is one edit here rather than a search across
+ * sixty components.
  *
- * The structural device throughout is a **ruled sheet**: sections are separated
- * by hairlines, never by cards. No `rounded-xl`, no drop shadows, no elevation
- * scale. A card says "this is a discrete object you might rearrange", which is
- * true of a dashboard widget and false of everything here — a search result, a
- * chunk, a decision are all passages in one document.
+ * The structural device throughout is a **pane of glass over a lit void**.
+ * Sections are discrete translucent panels with a 1px white edge, floating over
+ * two slow radial glows painted on the shell. This replaced the ruled-sheet
+ * language wholesale at M9: there, a card was wrong because a search result and
+ * a decision are passages in one document; here, the panel *is* the device, and
+ * what keeps it from becoming a dashboard of widgets is that the panels are
+ * translucent — you can see the same light through all of them, so they read as
+ * one surface at different depths rather than as a tray of tiles.
  */
 
 @import "./styles/tokens.css";
@@ -22,7 +25,7 @@
   }
 
   body {
-    background-color: var(--color-paper);
+    background-color: var(--color-void);
     color: var(--color-ink);
     font-family: var(--font-mono);
     font-size: 0.8125rem;
@@ -35,53 +38,141 @@
    * figures are tabular everywhere by default rather than per-component. */
   body,
   input,
-  button {
+  button,
+  textarea {
     font-variant-numeric: tabular-nums;
   }
 
   ::selection {
-    background: color-mix(in oklab, var(--color-amber-bright) 30%, transparent);
+    background: color-mix(in oklab, var(--color-cyan) 30%, transparent);
+    color: var(--color-ink);
   }
 
   /* Visible focus, and only for keyboard users. This UI is driven from the
    * keyboard, so the focus ring is functional rather than an accessibility
    * afterthought — but a mouse click on a button should not leave one behind. */
   :focus-visible {
-    outline: 2px solid var(--color-amber-bright);
+    outline: 2px solid var(--color-cyan);
     outline-offset: 1px;
   }
 
-  /* A dense list of rules is the main structural device, so scrollbars are
-   * quietened to stop them competing with it. */
+  /* Quietened so they do not cut a bright line down the edge of a dark panel. */
   * {
     scrollbar-color: var(--color-rule-strong) transparent;
     scrollbar-width: thin;
   }
 
-  /* Nothing in this interface animates except the two things that appear and
-   * disappear — the palette and the drawer — and even those stop for anybody
-   * who has asked the OS for stillness. */
+  /* The drift the shell's two glows run on.
+   *
+   * Small numbers on purpose: 5% of a 50vw circle over twenty seconds is
+   * movement you can only see by looking away and back, which is what makes it
+   * read as light rather than as an element sliding about. */
+  @keyframes drift {
+    0% {
+      transform: translate(0, 0) scale(1);
+    }
+    100% {
+      transform: translate(5%, 5%) scale(1.1);
+    }
+  }
+
+  /* The glows drift, and the palette and drawer appear. Everything else is
+   * still — and even these stop for anybody who has asked the OS for
+   * stillness. `prefers-reduced-motion` also parks the glows mid-drift rather
+   * than removing them: they are the light source, not an animation. */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
     *::after {
       animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
     }
   }
 }
 
 @layer components {
+  /* --- The glass surface ---------------------------------------------------
+   * The single most repeated element in the interface: it is on nearly every
+   * panel on every screen, which is exactly why it is one class and not a
+   * six-utility incantation copied sixty times.
+   *
+   * Three properties do the work, and all three are load-bearing. The
+   * background is white at 3% rather than a dark grey, so the glow behind
+   * tints it and two panels in different corners of the screen are visibly
+   * different colours. The blur is what makes it *glass* rather than a tinted
+   * box. The 1px white edge at 10% is what makes it an object — without it the
+   * panel has no boundary at all against the void.
+   */
+  .glass {
+    background-color: var(--color-glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-md);
+  }
+
+  /* The same construction one step lighter, for a card *inside* a panel — a
+   * source block under an answer, a result inside a list. Less blur because it
+   * is not over the void, it is over glass that has already blurred it once,
+   * and blurring a blur costs a second pass for no visible gain. */
+  .glass-card {
+    background-color: var(--color-glass);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid rgb(255 255 255 / 6%);
+    border-radius: var(--radius-md);
+  }
+
+  /* Level 3: the two things that overlap another surface. Brighter edge and
+   * more blur, which is how the design system says "closer to the reader"
+   * without a drop shadow. */
+  .glass-float {
+    background-color: var(--color-float);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--color-rule-strong);
+    border-radius: var(--radius-lg);
+  }
+
+  /* A panel the reader is currently acting on — the expanded search result, the
+   * focused entity. The edge takes the accent rather than the panel taking a
+   * fill, so the emphasis costs no contrast against the text inside it. */
+  .glass-on {
+    border-color: color-mix(in oklab, var(--color-cyan) 50%, transparent);
+  }
+
+  /* --- Glow ----------------------------------------------------------------
+   * Neon, used sparingly. `glow-cyan` on text is for the wordmark and live
+   * figures; the box variants are for the thin bars and rules that the design
+   * system asks to look "etched into the glass".
+   */
+  .glow-cyan {
+    text-shadow: 0 0 10px color-mix(in oklab, var(--color-cyan) 50%, transparent);
+  }
+
+  .glow-magenta {
+    text-shadow: 0 0 10px color-mix(in oklab, var(--color-magenta) 50%, transparent);
+  }
+
+  .glow-box-cyan {
+    box-shadow: 0 0 8px color-mix(in oklab, var(--color-cyan) 60%, transparent);
+  }
+
+  .glow-box-magenta {
+    box-shadow: 0 0 8px color-mix(in oklab, var(--color-magenta) 60%, transparent);
+  }
+
   /* --- The highlight -------------------------------------------------------
-   * The most important element in the UI. A wash plus a solid bottom edge, so
-   * it reads as a physical highlighter mark and survives being printed,
-   * screenshotted, or looked at quickly. `box-decoration-break` keeps the mark
-   * continuous when a span wraps across lines, which is the common case in a
-   * chunk of prose.
+   * The most important element in the UI. A cyan wash plus a solid cyan edge,
+   * so it reads as a physical highlighter mark and survives being screenshotted
+   * or looked at quickly. `box-decoration-break` keeps the mark continuous when
+   * a span wraps across lines, which is the common case in a chunk of prose.
    */
   .mark {
     background-color: var(--color-wash);
-    border-bottom: 1.5px solid var(--color-edge);
+    border-bottom: 1px solid var(--color-edge);
+    color: var(--color-ink);
     padding: 0.05em 0.08em;
     margin: 0 -0.08em;
     border-radius: 1px;
@@ -91,13 +182,14 @@
 
   /* The removal counterpart of `.mark`, for the left side of a diff.
    *
-   * The same physical-highlighter construction — a wash plus a solid bottom
-   * edge — in the verdict red rather than the accent amber, and struck through.
-   * The strike is what carries it without a legend: a red wash alone reads as
-   * "look here", which is the opposite of "this is gone". */
+   * The same physical-highlighter construction in the verdict red rather than
+   * the accent cyan, and struck through. The strike is what carries it without
+   * a legend: a red wash alone reads as "look here", which is the opposite of
+   * "this is gone". */
   .mark-removed {
-    background-color: color-mix(in oklab, var(--color-deny) 16%, transparent);
-    border-bottom: 1.5px solid color-mix(in oklab, var(--color-deny) 55%, transparent);
+    background-color: color-mix(in oklab, var(--color-deny) 18%, transparent);
+    border-bottom: 1px solid color-mix(in oklab, var(--color-deny) 60%, transparent);
+    color: var(--color-ink);
     text-decoration: line-through;
     text-decoration-color: color-mix(in oklab, var(--color-deny) 60%, transparent);
     padding: 0.05em 0.08em;
@@ -116,12 +208,29 @@
     color: var(--color-muted);
   }
 
+  /* The uppercase mono micro-label. There is more of this in the interface than
+   * of any other single register — it is every section heading, every nav item,
+   * every field name — and it is what carries the "OS" narrative the design
+   * system asks for. */
   .meta-label {
     font-family: var(--font-mono);
-    font-size: var(--text-meta);
-    letter-spacing: 0.09em;
+    font-size: var(--text-label);
+    letter-spacing: var(--text-label--letter-spacing);
+    font-weight: var(--text-label--font-weight);
     text-transform: uppercase;
     color: var(--color-faint);
+  }
+
+  /* The same label with the accent, for a heading that names a live section
+   * rather than an inert field. Used for the section rules on insights and the
+   * timeline, where the reference sets them in cyan. */
+  .meta-label-on {
+    font-family: var(--font-mono);
+    font-size: var(--text-label);
+    letter-spacing: var(--text-label--letter-spacing);
+    font-weight: var(--text-label--font-weight);
+    text-transform: uppercase;
+    color: var(--color-cyan);
   }
 
   .prose-content {
@@ -143,6 +252,7 @@
     color: var(--color-ink);
     background-color: var(--color-sunken);
     border-left: 2px solid var(--color-rule-strong);
+    border-radius: var(--radius-sm);
     padding: 0.5rem 0.75rem;
     /* Wide code scrolls in its own box; the page never scrolls sideways.
      *
@@ -155,17 +265,15 @@
     overflow-x: auto;
   }
 
-  /* The display face, at the three sizes it is used at and nowhere else.
+  /* The display face, at the sizes it is used at and nowhere else.
    *
-   * Confined deliberately. Fraunces has enough character that it reads as a
-   * voice rather than as a font, and a voice used on every heading in a
-   * fourteen-view tool becomes wallpaper. It marks *the top of a page* — the
-   * wordmark, a page title, the overview's one statement — and section
-   * headings stay in the mono label register they were already in.
+   * Space Grotesk is geometric enough to read as "technical" rather than as a
+   * voice, so it is less confined than Fraunces was — it marks the top of a
+   * page and the user's own words in the chat thread, which is the one place
+   * the reader's writing should outweigh the system's.
    */
   .display {
     font-family: var(--font-display);
-    font-optical-sizing: auto;
     color: var(--color-ink);
     letter-spacing: -0.015em;
     line-height: 1.12;
@@ -173,16 +281,16 @@
 
   .display-page {
     font-family: var(--font-display);
-    font-size: 1.75rem;
-    font-weight: 400;
-    letter-spacing: -0.015em;
-    line-height: 1.15;
+    font-size: var(--text-headline-lg);
+    font-weight: var(--text-headline-lg--font-weight);
+    letter-spacing: var(--text-headline-lg--letter-spacing);
+    line-height: var(--text-headline-lg--line-height);
     color: var(--color-ink);
   }
 
-  /* The one paragraph on the overview that has to be *read* rather than
-   * scanned. Larger and looser than `.prose-content`, with a measure that stops
-   * well short of the column so the line length stays in the fifties. */
+  /* The one paragraph on a page that has to be *read* rather than scanned.
+   * Larger and looser than `.prose-content`, with a measure that stops well
+   * short of the column so the line length stays in the fifties. */
   .prose-lead {
     font-family: var(--font-prose);
     font-size: 1.0625rem;
@@ -192,37 +300,43 @@
   }
 
   /* --- Controls -----------------------------------------------------------
-   * Square, ruled, flat. No rounded-xl, no shadows: the visual language is
-   * ruled paper, and a drop shadow would put a card on top of it.
+   * Rounded, glassy, and lit on focus. The design system's rule for inputs is
+   * "darker glass than the panel around it, border glows when focused" — which
+   * is the opposite of the ruled underline this interface used before, and is
+   * what makes a control legible when it sits on a translucent panel rather
+   * than on paper.
    */
   .field {
-    background-color: var(--color-raised);
+    background-color: var(--color-sunken);
     border: 1px solid var(--color-rule);
+    border-radius: var(--radius-DEFAULT);
     color: var(--color-ink);
-    padding: 0.3rem 0.5rem;
+    padding: 0.35rem 0.6rem;
+  }
+
+  .field::placeholder {
+    color: var(--color-faint);
+    font-family: var(--font-mono);
   }
 
   .field:focus {
-    border-color: var(--color-amber-bright);
+    border-color: var(--color-cyan);
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-cyan) 40%, transparent);
     outline: none;
   }
 
-  /* The search box on the overview and the search page.
-   *
-   * A ruled underline rather than a box. A bordered input is a form control and
-   * reads as one of several; this is the primary act of the whole application,
-   * and a single heavy rule under a large line of type says so without a filled
-   * button shouting it. The rule thickens and turns amber on focus, which is
-   * the only place interaction colour appears on the page.
-   */
+  /* The search box: the primary act of the whole application, so it is a full
+   * glass panel rather than a form control, and it lights up when focused. */
   .field-prominent {
-    background-color: transparent;
-    border: 0;
-    border-bottom: 1.5px solid var(--color-rule-strong);
+    background-color: var(--color-glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-md);
     color: var(--color-ink);
     font-family: var(--font-mono);
     font-size: 1rem;
-    padding: 0.4rem 0 0.5rem;
+    padding: 0.9rem 1rem;
     width: 100%;
   }
 
@@ -231,94 +345,123 @@
   }
 
   .field-prominent:focus {
-    border-bottom-color: var(--color-edge);
+    border-color: var(--color-cyan);
+    box-shadow: 0 0 30px color-mix(in oklab, var(--color-cyan) 15%, transparent);
     outline: none;
   }
 
   .btn {
     border: 1px solid var(--color-rule);
-    background-color: var(--color-raised);
+    background-color: var(--color-glass);
+    border-radius: var(--radius-DEFAULT);
     color: var(--color-muted);
-    padding: 0.2rem 0.5rem;
-    font-size: var(--text-meta);
-    letter-spacing: 0.04em;
+    padding: 0.25rem 0.6rem;
+    font-family: var(--font-mono);
+    font-size: var(--text-label);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     cursor: pointer;
+    transition:
+      color 150ms,
+      border-color 150ms,
+      background-color 150ms;
   }
 
   .btn:hover:not(:disabled) {
-    border-color: var(--color-rule-strong);
-    color: var(--color-ink);
+    border-color: var(--color-cyan);
+    color: var(--color-cyan);
+    background-color: color-mix(in oklab, var(--color-cyan) 8%, transparent);
   }
 
   .btn:disabled {
     cursor: default;
-    opacity: 0.5;
+    opacity: 0.4;
   }
 
   .btn-on {
-    border-color: var(--color-amber-bright);
-    color: var(--color-amber);
-    background-color: color-mix(in oklab, var(--color-amber-bright) 9%, var(--color-raised));
+    border-color: color-mix(in oklab, var(--color-cyan) 60%, transparent);
+    color: var(--color-cyan);
+    background-color: color-mix(in oklab, var(--color-cyan) 12%, transparent);
+  }
+
+  /* The one solid button in the interface: the design system reserves a filled
+   * cyan for the primary action, and there is one primary action per screen. */
+  .btn-primary {
+    border: 1px solid color-mix(in oklab, var(--color-cyan) 40%, transparent);
+    background-color: color-mix(in oklab, var(--color-cyan) 12%, transparent);
+    border-radius: var(--radius-md);
+    color: var(--color-cyan);
+    padding: 0.6rem 1rem;
+    font-family: var(--font-mono);
+    font-size: var(--text-label);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+    box-shadow: 0 0 15px color-mix(in oklab, var(--color-cyan) 15%, transparent);
+    transition:
+      background-color 200ms,
+      border-color 200ms,
+      box-shadow 200ms;
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background-color: color-mix(in oklab, var(--color-cyan) 20%, transparent);
+    border-color: var(--color-cyan);
+    box-shadow: 0 0 20px color-mix(in oklab, var(--color-cyan) 30%, transparent);
   }
 
   .btn-affirm-on {
     border-color: var(--color-affirm);
     color: var(--color-affirm);
-    background-color: color-mix(in oklab, var(--color-affirm) 9%, var(--color-raised));
+    background-color: color-mix(in oklab, var(--color-affirm) 12%, transparent);
   }
 
   .btn-deny-on {
     border-color: var(--color-deny);
     color: var(--color-deny);
-    background-color: color-mix(in oklab, var(--color-deny) 9%, var(--color-raised));
+    background-color: color-mix(in oklab, var(--color-deny) 12%, transparent);
   }
 
   /* --- Navigation ----------------------------------------------------------
-   * A nav item is a line of type with a marker, not a filled pill.
-   *
-   * The active state is a 2px amber bar on the leading edge and a shift to full
-   * ink. A filled background would put eight coloured rectangles down the left
-   * of every screen, which is the admin-panel look this interface is built to
-   * avoid — and it would spend the accent on saying "you are here", which the
-   * reader already knows.
+   * A nav item is an icon, an uppercase mono label, and — when active — a cyan
+   * left rule with a faint fill and an inner glow. That is the reference's
+   * treatment exactly, and it is a different argument from the ruled era's:
+   * against a dark void a 2px bar alone is not enough to find at a glance, and
+   * the fill is what makes the active row locatable in peripheral vision.
    */
   .nav-item {
     display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
+    align-items: center;
+    gap: 0.75rem;
     border-left: 2px solid transparent;
-    padding: 0.3rem 0.75rem;
+    border-radius: 0 var(--radius-DEFAULT) var(--radius-DEFAULT) 0;
+    padding: 0.6rem 0.75rem;
     font-family: var(--font-mono);
-    font-size: 0.75rem;
-    letter-spacing: 0.02em;
+    font-size: var(--text-label);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: var(--color-muted);
+    transition:
+      color 150ms,
+      background-color 150ms;
   }
 
   .nav-item:hover {
     color: var(--color-ink);
-    background-color: color-mix(in oklab, var(--color-rule) 28%, transparent);
+    background-color: rgb(255 255 255 / 5%);
   }
 
   .nav-item-on {
-    border-left-color: var(--color-edge);
-    color: var(--color-ink);
-    background-color: color-mix(in oklab, var(--color-rule) 34%, transparent);
-  }
-
-  /* A route that exists but has nothing behind it yet. Same type as a live
-   * item, dimmed and marked — hiding it would misrepresent the shape of the
-   * application, and styling it identically would misrepresent its state. */
-  .nav-item-soon {
-    color: var(--color-faint);
+    border-left-color: var(--color-cyan);
+    color: var(--color-cyan);
+    background-color: rgb(255 255 255 / 5%);
+    box-shadow: inset 0 0 10px color-mix(in oklab, var(--color-cyan) 10%, transparent);
   }
 
   /* --- Figures -------------------------------------------------------------
-   * A live count, at the size that makes it the thing you see first.
-   *
-   * Mono rather than the display face: these are numbers to be compared, and
-   * tabular figures in a column that lines up beat a prettier proportional
-   * numeral. The label sits *under* the number in small caps — above it, the
-   * eye reads the label first and the number becomes a footnote.
+   * A live count, at the size that makes it the thing you see first. Mono
+   * rather than the display face: these are numbers to be compared, and tabular
+   * figures in a column that lines up beat a prettier proportional numeral.
    */
   .figure-value {
     font-family: var(--font-mono);
@@ -360,23 +503,65 @@
     mask-image: linear-gradient(to bottom, black 72%, transparent 100%);
   }
 
-  /* --- The gap hatch -------------------------------------------------------
+  /* --- The gap band --------------------------------------------------------
    * A period with nothing in it, drawn rather than left blank.
    *
    * The whole argument of M4.0's `find_gaps` is that absence is the signal, and
    * absence rendered as absence is indistinguishable from the edge of the data
-   * or from a chart that failed to load. Diagonal rule lines say "this is a
-   * region, and it is empty" — the visual convention for a void on a drawing,
-   * borrowed because it already means that.
+   * or from a chart that failed to load. A magenta dashed enclosure says "this
+   * is a region, and it is empty" — dashed because a dashed boundary is the
+   * drawing convention for a region that is inferred rather than measured, and
+   * magenta because that is this palette's colour for what the system does not
+   * have. It is the most important element on the timeline.
    */
+  .gap-band {
+    border: 1px dashed color-mix(in oklab, var(--color-magenta) 70%, transparent);
+    border-radius: var(--radius-sm);
+    background-color: color-mix(in oklab, var(--color-magenta) 7%, transparent);
+  }
+
+  /* Kept for the diagonal hatch the evolution view uses on an absent version.
+   * Distinct from the gap band on purpose: that is a measured silence in the
+   * corpus, this is a row that does not apply. */
   .hatch {
     background-image: repeating-linear-gradient(
       45deg,
       transparent,
       transparent 4px,
-      var(--color-rule-strong) 4px,
-      var(--color-rule-strong) 5px
+      var(--color-rule) 4px,
+      var(--color-rule) 5px
     );
+  }
+
+  /* --- Chips ---------------------------------------------------------------
+   * A small semi-transparent pill with a saturated accent border, per the
+   * design system. Two colours, and they mean what they mean everywhere else:
+   * cyan is something the system found, magenta is something it inferred or
+   * lacks.
+   */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border: 1px solid var(--color-rule-strong);
+    border-radius: var(--radius-full, 9999px);
+    padding: 0.15rem 0.5rem;
+    font-family: var(--font-mono);
+    font-size: var(--text-label);
+    letter-spacing: 0.06em;
+    color: var(--color-muted);
+  }
+
+  .chip-cyan {
+    border-color: color-mix(in oklab, var(--color-cyan) 55%, transparent);
+    background-color: color-mix(in oklab, var(--color-cyan) 10%, transparent);
+    color: var(--color-cyan);
+  }
+
+  .chip-magenta {
+    border-color: color-mix(in oklab, var(--color-magenta) 55%, transparent);
+    background-color: color-mix(in oklab, var(--color-magenta) 10%, transparent);
+    color: var(--color-magenta);
   }
 
   /* A key cap, for the shortcut hints that make the keyboard model visible. */
@@ -384,6 +569,7 @@
     font-family: var(--font-mono);
     font-size: 0.625rem;
     border: 1px solid var(--color-rule-strong);
+    border-radius: var(--radius-sm);
     background-color: var(--color-sunken);
     padding: 0.05rem 0.25rem;
     color: var(--color-muted);

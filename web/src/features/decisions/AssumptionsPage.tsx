@@ -44,7 +44,7 @@ export function AssumptionsPage() {
     <div className="flex flex-col gap-5">
       <SectionHeading
         right={
-          <Link className="text-amber underline" to="/decisions">
+          <Link className="text-accent underline" to="/decisions">
             decisions
           </Link>
         }
@@ -55,7 +55,7 @@ export function AssumptionsPage() {
       <div className="meta flex flex-wrap items-baseline gap-4 text-faint">
         <span className="text-affirm">{count(data.held)} held</span>
         <span className="text-deny">{count(data.failed)} failed</span>
-        <span className="text-amber">{count(data.partially)} partially</span>
+        <span className="text-accent">{count(data.partially)} partially</span>
         {/* In neither half of any rate on this page. */}
         <span>{count(data.unevaluated)} unevaluated</span>
         <span className="text-ink">
@@ -146,7 +146,7 @@ function UnevaluatedRow({ row }: { row: AssumptionDetail }) {
     <li className="flex items-baseline gap-3 border-b border-rule/60 pb-1">
       <span className="prose-content flex-1 text-sm text-ink">{row.statement}</span>
       <Link
-        className="meta shrink-0 text-amber underline"
+        className="meta shrink-0 text-accent underline"
         to={`/decisions/${row.decision_id}`}
       >
         {row.decision_question.slice(0, 40)}

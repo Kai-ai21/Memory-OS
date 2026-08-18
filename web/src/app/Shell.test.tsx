@@ -10,7 +10,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { App } from "../App";
@@ -87,6 +87,30 @@ describe("navigation", () => {
     expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
   });
 
+  it("marks the item you are on, and only that one", async () => {
+    // The other half of navigation, and the half no route test catches: a nav
+    // that lands you correctly and marks nothing leaves you unable to tell
+    // where you are, and one that marks two items is worse than marking none.
+    //
+    // Asserted on `aria-current`, which `NavLink` sets from the same `isActive`
+    // the cyan treatment is driven by. Asserting the class instead would pin
+    // the styling rather than the state, and the styling is the thing this
+    // milestone changes.
+    stubEverything();
+    renderWithProviders(<App />, { route: "/" });
+
+    const nav = screen.getByRole("navigation");
+    await userEvent.click(within(nav).getByRole("link", { name: "timeline" }));
+
+    await waitFor(() => {
+      const current = within(nav)
+        .getAllByRole("link")
+        .filter((link) => link.getAttribute("aria-current") === "page");
+      expect(current).toHaveLength(1);
+      expect(current[0]).toHaveTextContent("timeline");
+    });
+  });
+
   it("navigating to search renders the search view", async () => {
     // Asserted on the control rather than on prose: "search" is a word the
     // sidebar also says, and a text match would pass without the route
@@ -100,13 +124,18 @@ describe("navigation", () => {
     expect(await screen.findByText(/nothing searched yet/i)).toBeInTheDocument();
   });
 
-  it("sends an unbuilt route to a page that says so, rather than a blank one", async () => {
+  it("sends a route whose data is missing to a page that says so, rather than a blank one", async () => {
+    // Was `/graph` against the generic placeholder, which M9.1 deleted along
+    // with the `planned` flag — every route now has a real page. The property
+    // survives and is sharper: `/graph` has a page, and that page explains
+    // which endpoint is absent and which count is zero instead of rendering an
+    // empty three-pane frame that reads as a bug.
     stubEverything();
     renderWithProviders(<App />, { route: "/graph" });
 
-    expect(await screen.findByText(/what is missing/i)).toBeInTheDocument();
-    // The distinguishing property: it explains rather than pretending.
-    expect(screen.getByText(/what is already there/i)).toBeInTheDocument();
+    expect(await screen.findByTestId("graph-empty")).toBeInTheDocument();
+    expect(screen.getByText(/the api exposes no entity route/i)).toBeInTheDocument();
+    expect(screen.getByText(/and there are no relationships yet/i)).toBeInTheDocument();
   });
 
   it("forwards a search bookmarked at the old root path", async () => {

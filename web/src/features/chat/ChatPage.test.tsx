@@ -179,9 +179,14 @@ describe("the connection line", () => {
     stubFetch(chatRoutes([STATEMENT]));
     renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
 
-    expect(
-      await screen.findByText(/connects to 3 earlier memories via postgres/i),
-    ).toBeInTheDocument();
+    // Matched on the line's text content rather than with `findByText`,
+    // because M9.1 sets the entity names in cyan and they are therefore in
+    // their own spans. The sentence is the assertion; which elements carry it
+    // is not.
+    const line = await screen.findByTestId("connection-line");
+    await waitFor(() =>
+      expect(line.textContent).toMatch(/connects to 3 earlier memories via postgres/i),
+    );
   });
 });
 
@@ -191,14 +196,49 @@ describe("an answer", () => {
     renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
 
     const answer = await screen.findByTestId("answer");
-    // Labelled `declined`, and carrying the API's own words. Nothing here may
-    // wrap them in "hmm, I'm not sure, but maybe" — that softening is how the
-    // guardrail stops being read as one.
-    expect(within(answer).getByText(/declined/i)).toBeInTheDocument();
+    // Labelled, and carrying the API's own words. Nothing here may wrap them in
+    // "hmm, I'm not sure, but maybe" — that softening is how the guardrail
+    // stops being read as one.
+    //
+    // M9.1 changed the label from `declined` to `NO SUPPORTING MEMORIES` and
+    // the assertion follows it. The old word described the system's behaviour;
+    // the new one names what was actually found, which is the part a reader can
+    // act on — add a source, or ask a different question.
+    expect(within(answer).getByText(/no supporting memories/i)).toBeInTheDocument();
     expect(
       within(answer).getByText(/do not contain anything about this/i),
     ).toBeInTheDocument();
     expect(within(answer).getByText(/nothing was cited/i)).toBeInTheDocument();
+  });
+
+  it("gives the refusal the magenta treatment and the mono label, not a quiet one", async () => {
+    // The point of M9.1's chat work, pinned. This state used to render in grey
+    // italic body text half-hidden behind the composer — the visual language of
+    // an apology. It is not one: it is the system reporting that nothing in the
+    // corpus supports a claim. It has to be the most confident thing on screen,
+    // because it is the product's most distinctive behaviour.
+    stubFetch(chatRoutes([QUESTION, REFUSAL]));
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
+
+    const refusal = await screen.findByTestId("refusal");
+
+    // The mono label, in the magenta this palette reserves for what the system
+    // does not have.
+    const label = within(refusal).getByTestId("refusal-label");
+    expect(label).toHaveTextContent(/no supporting memories/i);
+    expect(label.className).toMatch(/meta-label/);
+    expect(label.className).toMatch(/text-magenta/);
+
+    // The magenta rule down the left, which is what carries it at a glance.
+    const rule = refusal.querySelector('[aria-hidden="true"]');
+    expect(rule?.className).toMatch(/from-magenta/);
+
+    // And the sentence at full body size — the same size as an answer, because
+    // it is the answer. Never italic, never dimmed.
+    const body = within(refusal).getByTestId("refusal-text");
+    expect(body.className).toMatch(/text-base/);
+    expect(body.className).toMatch(/text-ink/);
+    expect(body.className).not.toMatch(/italic|text-faint|text-muted/);
   });
 
   it("shows no stored line for a question, because nothing was stored", async () => {

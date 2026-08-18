@@ -224,7 +224,7 @@ function SourceOperations({ source }: { source: Source }) {
         />
       ) : null}
       {note ? (
-        <span className="meta text-amber" role="status">
+        <span className="meta text-accent" role="status">
           {note}
         </span>
       ) : null}
@@ -263,7 +263,7 @@ function DeleteSourcePanel({
 
   return (
     <div
-      className="flex max-w-prose flex-col gap-2 border-l-2 border-deny bg-paper p-3"
+      className="flex max-w-prose flex-col gap-2 border-l-2 border-deny bg-void p-3"
       role="alertdialog"
       aria-label={`Delete the source ${source.name}`}
     >
@@ -318,7 +318,7 @@ function DeleteSourcePanel({
       </label>
       <input
         id={`confirm-source-${source.id}`}
-        className="w-56 border border-deny bg-paper p-2 font-mono text-sm text-ink"
+        className="w-56 border border-deny bg-void p-2 font-mono text-sm text-ink"
         value={typed}
         onChange={(event) => setTyped(event.target.value)}
         autoComplete="off"
