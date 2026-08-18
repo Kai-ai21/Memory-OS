@@ -179,9 +179,14 @@ describe("the connection line", () => {
     stubFetch(chatRoutes([STATEMENT]));
     renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
 
-    expect(
-      await screen.findByText(/connects to 3 earlier memories via postgres/i),
-    ).toBeInTheDocument();
+    // Matched on the line's text content rather than with `findByText`,
+    // because M9.1 sets the entity names in cyan and they are therefore in
+    // their own spans. The sentence is the assertion; which elements carry it
+    // is not.
+    const line = await screen.findByTestId("connection-line");
+    await waitFor(() =>
+      expect(line.textContent).toMatch(/connects to 3 earlier memories via postgres/i),
+    );
   });
 });
 
@@ -191,10 +196,15 @@ describe("an answer", () => {
     renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
 
     const answer = await screen.findByTestId("answer");
-    // Labelled `declined`, and carrying the API's own words. Nothing here may
-    // wrap them in "hmm, I'm not sure, but maybe" — that softening is how the
-    // guardrail stops being read as one.
-    expect(within(answer).getByText(/declined/i)).toBeInTheDocument();
+    // Labelled, and carrying the API's own words. Nothing here may wrap them in
+    // "hmm, I'm not sure, but maybe" — that softening is how the guardrail
+    // stops being read as one.
+    //
+    // M9.1 changed the label from `declined` to `NO SUPPORTING MEMORIES` and
+    // the assertion follows it. The old word described the system's behaviour;
+    // the new one names what was actually found, which is the part a reader can
+    // act on — add a source, or ask a different question.
+    expect(within(answer).getByText(/no supporting memories/i)).toBeInTheDocument();
     expect(
       within(answer).getByText(/do not contain anything about this/i),
     ).toBeInTheDocument();

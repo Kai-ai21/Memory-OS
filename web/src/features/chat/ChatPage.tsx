@@ -39,10 +39,12 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, type ChatMessage, type MessageIntent } from "../../api/client";
+import { Icon } from "../../components/Icon";
 import { Empty, Failure } from "../../components/primitives";
-import { describeConnections } from "../../lib/connections";
+import { connectionParts } from "../../lib/connections";
 import { fileSize, timestamp } from "../../lib/format";
 import { AttachmentList } from "./Attachments";
+import { Refusal } from "./Refusal";
 import { SessionRail } from "./SessionRail";
 import { StreamingAnswer } from "./StreamingAnswer";
 import { MemoryActions } from "./MemoryActions";
@@ -384,11 +386,15 @@ function Turn({ message }: { message: ChatMessage }) {
           </span>
         ) : null}
       </div>
+      {/* The reader's own words, in the display face and larger than the
+          answer under them. The reference ranks it this way and the ranking is
+          right: the question is what the exchange is about, and the answer is
+          derived from it. */}
       <p
         className={
           superseded
-            ? "whitespace-pre-wrap text-faint line-through decoration-1"
-            : "whitespace-pre-wrap text-ink"
+            ? "display text-xl whitespace-pre-wrap text-faint line-through decoration-1"
+            : "display text-xl whitespace-pre-wrap"
         }
       >
         {message.content}
@@ -529,14 +535,35 @@ function StoredLine({ memoryId }: { memoryId: string }) {
 
   if (status.isError) return null;
   const data = status.data;
+  const parts = data ? connectionParts(data) : null;
 
   return (
-    <p className="meta text-faint" data-testid="connection-line">
-      <Link to={`/memory/${memoryId}`} className="hover:text-accent hover:underline">
+    /* The reference's treatment: a magenta rule down the left of the line.
+       Magenta rather than cyan and the choice is not arbitrary — this line is
+       the system reporting the *edges of what it knows*, which is the same
+       register as a refusal and as a gap in the timeline. The entity names
+       inside it are cyan, because those are things it found. */
+    <p
+      className="meta border-l-2 border-magenta/50 py-1 pl-4 text-faint"
+      data-testid="connection-line"
+    >
+      <Link to={`/memory/${memoryId}`} className="hover:text-cyan hover:underline">
         stored
       </Link>
       {" · "}
-      {!data ? "checking…" : describeConnections(data)}
+      {!parts ? (
+        "checking…"
+      ) : (
+        <>
+          {parts.lead}
+          {parts.entities.map((entity, index) => (
+            <span key={entity}>
+              {index > 0 ? ", " : ""}
+              <span className="glow-cyan text-cyan">{entity}</span>
+            </span>
+          ))}
+        </>
+      )}
     </p>
   );
 }
@@ -552,12 +579,36 @@ function StoredLine({ memoryId }: { memoryId: string }) {
  * something a reader will act on.
  */
 function Answer({ message }: { message: ChatMessage }) {
+  // A refusal is not a quieter answer, so it does not render as one. See
+  // `Refusal` — the whole argument is in there.
+  if (message.refused) {
+    return (
+      <div data-testid="answer">
+        <Refusal
+          footnote={
+            <p className="meta text-faint">
+              nothing was cited because nothing was used
+              {message.answer_model ? ` · ${message.answer_model}` : ""}
+            </p>
+          }
+        >
+          {message.content}
+        </Refusal>
+      </div>
+    );
+  }
+
   return (
-    <div className="border-l-2 border-rule-strong pl-4" data-testid="answer">
+    <div className="relative pl-6" data-testid="answer">
+      {/* The reference's lit rule: full strength at the label, fading down the
+          length of the answer. Cyan, because this is the system reporting what
+          it found. */}
+      <span
+        className="absolute inset-y-0 left-0 w-0.5 rounded-full bg-gradient-to-b from-cyan via-cyan/25 to-transparent shadow-[0_0_8px_var(--color-cyan)]"
+        aria-hidden
+      />
       <div className="flex items-baseline gap-3">
-        <span className="meta-label text-muted">
-          {message.refused ? "declined" : "answer"}
-        </span>
+        <span className="meta-label text-cyan">answer</span>
         {message.answer_model ? (
           <span className="meta text-faint">{message.answer_model}</span>
         ) : null}
@@ -565,36 +616,38 @@ function Answer({ message }: { message: ChatMessage }) {
           <span className="meta text-deny">not fully cited</span>
         ) : null}
       </div>
-      <p className="mt-1 leading-relaxed text-ink">{message.content}</p>
+      <p className="prose-content mt-2 text-base">{message.content}</p>
 
       {message.citations.length > 0 ? (
-        <ul className="mt-2 flex flex-col gap-1" data-testid="citations">
-          {message.citations.map((citation) => (
-            <li key={`${citation.locator}-${citation.excerpt.slice(0, 24)}`}>
-              {citation.memory_id ? (
-                <Link
-                  to={`/memory/${citation.memory_id}`}
-                  className="meta font-mono text-ink hover:text-accent hover:underline"
-                >
-                  {citation.locator}
-                </Link>
-              ) : (
-                <span className="meta font-mono text-ink">{citation.locator}</span>
-              )}
-              <span className="meta ml-2 text-faint">
-                {citation.excerpt.slice(0, 140)}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <div className="mt-5 flex flex-col gap-3">
+          <p className="meta-label">sources</p>
+          <ul className="flex flex-col gap-3" data-testid="citations">
+            {message.citations.map((citation) => (
+              <li
+                key={`${citation.locator}-${citation.excerpt.slice(0, 24)}`}
+                className="glass-card flex flex-col gap-2 p-4"
+              >
+                {citation.memory_id ? (
+                  <Link
+                    to={`/memory/${citation.memory_id}`}
+                    className="meta font-mono text-cyan hover:underline"
+                  >
+                    {citation.locator}
+                  </Link>
+                ) : (
+                  <span className="meta font-mono text-cyan">{citation.locator}</span>
+                )}
+                <span className="prose-content text-sm text-muted">
+                  {citation.excerpt.slice(0, 140)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : (
         // Said rather than omitted. An answer with no citation list looks
         // exactly like an answer whose citations have not rendered.
-        <p className="meta mt-2 text-faint">
-          {message.refused
-            ? "nothing was cited because nothing was used"
-            : "the answer cited no passage"}
-        </p>
+        <p className="meta mt-2 text-faint">the answer cited no passage</p>
       )}
     </div>
   );
@@ -653,12 +706,13 @@ function Composer({
 
   return (
     <form
-      // `bg-void` and not `bg-page`: the page background token is `--color-void`,
-      // and a class naming a token that does not exist compiles to nothing — which
-      // makes a sticky element transparent, so the messages scroll visibly through
-      // the box you are typing into.
-      className={`sticky bottom-0 flex flex-col gap-1 border-t bg-void pt-2 pb-3 ${
-        over ? "border-accent-bright" : "border-rule-strong"
+      /* A glass panel rather than a ruled bar, per the reference: rounded, lit
+         at the edge when focused, and floating over the thread rather than
+         closing it off with a rule.
+         The gradient wash behind the field is the reference's, and it is what
+         keeps a large empty box from reading as a hole in the page. */
+      className={`glass sticky bottom-4 flex flex-col gap-2 rounded-xl p-4 relative transition-all focus-within:border-cyan/50 focus-within:shadow-[0_0_30px_color-mix(in_oklab,var(--color-cyan)_15%,transparent)] ${
+        over ? "border-cyan" : ""
       }`}
       onSubmit={(event) => {
         event.preventDefault();
@@ -678,6 +732,17 @@ function Composer({
         onQueue(Array.from(event.dataTransfer.files));
       }}
     >
+      {/* The reference's mask, and it earns its place rather than softening an
+          edge for taste. The composer is translucent, so the thread scrolls
+          *through* it — which is the glass working, until a line of the answer
+          is half-visible behind the box and reads as a rendering fault. This
+          fades the last inch of the thread into the void before it reaches the
+          panel, so what shows through the glass is the void and not a
+          bisected sentence. */}
+      <div
+        className="pointer-events-none absolute inset-x-0 bottom-full h-24 bg-gradient-to-t from-void to-transparent"
+        aria-hidden
+      />
       {queued.length > 0 ? (
         <ul className="flex flex-col gap-0.5 pb-1" data-testid="queued">
           {queued.map((file, index) => (
@@ -717,7 +782,10 @@ function Composer({
               : "Attach a file"
           }
         >
-          📎 attach
+          <span className="inline-flex items-center gap-1">
+            <Icon name="attach" size={14} />
+            attach
+          </span>
         </button>
       </div>
       <input
@@ -755,7 +823,7 @@ function Composer({
             ? "say something about these files, or just send them"
             : "postgres full-text search is faster than I expected"
         }
-        className="field resize-y"
+        className="w-full resize-y bg-transparent font-prose text-base text-ink placeholder:font-mono placeholder:text-sm placeholder:text-faint focus:outline-none"
         aria-label="Message"
         spellCheck={false}
         autoFocus
