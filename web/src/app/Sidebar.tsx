@@ -26,12 +26,16 @@ import { GROUPS, HOME, inGroup, type ViewRoute } from "./routes";
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   return (
-    /* Opaque-ish rather than fully translucent, and deliberately: the same
-       element is the mobile drawer, where glass over a scrim shows the article
-       through the navigation and reads as a rendering fault rather than as a
-       layer. `--color-nav` is the void at 40%, which is dark enough to hold the
-       drawer and light enough that the glow still moves behind it. */
-    <div className="flex h-full flex-col gap-6 overflow-y-auto bg-nav px-3 pt-6 pb-4 backdrop-blur-xl">
+    /* Glass beside the content, near-opaque over it.
+       On desktop the sidebar sits *next to* the page and `--color-nav` — the
+       void at 40% — lets the shell's glow move behind the nav, which is what
+       makes it part of the same surface as everything else. As the mobile
+       drawer the same element sits *over* the article, and there translucency
+       stops being a layer and starts looking like a rendering fault: you read
+       the search results through the navigation. Measured at 375px before
+       fixing it. So below `md` it takes the void almost solid, and the glass
+       comes back at the breakpoint where the drawer becomes a column. */
+    <div className="flex h-full flex-col gap-6 overflow-y-auto bg-void/95 px-3 pt-6 pb-4 backdrop-blur-xl md:bg-nav">
       <Wordmark onNavigate={onNavigate} />
       <NewConversation onNavigate={onNavigate} />
 
