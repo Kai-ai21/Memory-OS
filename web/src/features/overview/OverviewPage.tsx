@@ -61,7 +61,7 @@ function Statement() {
     <header className="flex flex-col gap-4">
       <h1 className="display-page">A corpus that remembers why.</h1>
       <p className="prose-lead">
-        Memory OS is something you <Link to="/" className="text-accent underline">talk to</Link>,
+        MEMO is something you <Link to="/" className="text-accent underline">talk to</Link>,
         which can also read your files. A thought you type is kept as a memory and connected
         to everything already here that talks about the same things; a{" "}
         <Link to="/sources" className="text-accent underline">directory you point it at</Link>{" "}

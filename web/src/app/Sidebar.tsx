@@ -80,15 +80,18 @@ function Wordmark({ onNavigate }: { onNavigate?: () => void }) {
       to="/"
       onClick={onNavigate}
       className="flex flex-col gap-1 px-3"
-      aria-label="Memory OS, chat"
+      aria-label="MEMO, chat"
     >
-      {/* Mono rather than the display face, and glowing. The reference sets the
-          wordmark in the same face as the system labels, which is what makes it
-          read as a machine announcing itself rather than as a brand. */}
-      <span className="glow-cyan font-mono text-sm font-bold tracking-[0.18em] text-ink">
-        MEMORY OS
+      {/* The display face, and larger than the mono wordmark it replaced.
+          MEMORY OS was eleven characters and filled the column at 14px; MEMO is
+          four, and at that size it sat in the top-left corner looking like a
+          truncation rather than a name. At 22px in Space Grotesk it occupies
+          roughly the width the old wordmark did, which is what keeps the
+          sidebar's top block balanced against the button below it. */}
+      <span className="display glow-cyan text-[1.375rem] font-bold tracking-[0.14em] text-ink">
+        MEMO
       </span>
-      <span className="meta-label">a corpus that remembers why</span>
+      <span className="meta-label">Everything you&rsquo;ve thought</span>
     </NavLink>
   );
 }

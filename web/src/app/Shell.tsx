@@ -116,8 +116,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <Icon name="menu" size={16} />
           menu
         </button>
-        <span className="glow-cyan font-mono text-xs font-bold tracking-[0.18em]">
-          MEMORY OS
+        <span className="display glow-cyan text-base font-bold tracking-[0.14em]">
+          MEMO
         </span>
         <button
           type="button"
