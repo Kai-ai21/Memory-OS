@@ -122,10 +122,10 @@ export function EntityGraph({ nodes, edges, focusId, onFocus }: Props) {
                 x2={x}
                 y2={y}
                 /* Darker and thicker than the dark theme's. A 1px line at 35%
-                   opacity glowed against a void and vanishes against #F7F8FA —
-                   measured by looking at it. `ink-3` at 1.5px is the lightest
-                   an edge can be here and still be traceable across the
-                   canvas. */
+                   opacity glowed against a void and vanishes against the light
+                   ground — measured by looking at it. `ink-3` at 1.5px is the
+                   lightest an edge can be here and still be traceable across
+                   the canvas. */
                 stroke="var(--color-ink-3)"
                 strokeWidth={1.5}
               />

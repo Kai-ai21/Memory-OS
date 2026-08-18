@@ -111,6 +111,33 @@ describe("navigation", () => {
     });
   });
 
+  it("marks the active item without spending the accent on it", async () => {
+    // **Rule 1 of the light theme, pinned.** The accent means "you can do
+    // something here". Where you already are is not an action, so the active
+    // item is an ink left rule and a weight change — and if the accent creeps
+    // back onto it, the one blue thing on screen becomes the one thing you
+    // cannot click, and every real affordance loses its signal.
+    //
+    // Asserted on the class contract rather than on computed colour: jsdom does
+    // not apply the stylesheet, and the class is what selects the treatment.
+    stubEverything();
+    renderWithProviders(<App />, { route: "/" });
+
+    const nav = screen.getByRole("navigation");
+    await userEvent.click(within(nav).getByRole("link", { name: "timeline" }));
+
+    await waitFor(() => {
+      const current = within(nav)
+        .getAllByRole("link")
+        .filter((link) => link.getAttribute("aria-current") === "page");
+      expect(current).toHaveLength(1);
+      expect(current[0]).toHaveTextContent("timeline");
+      expect(current[0].className).toMatch(/nav-item-on/);
+      // No accent, in any of the spellings that would put it there.
+      expect(current[0].className).not.toMatch(/accent/);
+    });
+  });
+
   it("navigating to search renders the search view", async () => {
     // Asserted on the control rather than on prose: "search" is a word the
     // sidebar also says, and a text match would pass without the route
