@@ -18,12 +18,11 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { Shell } from "./app/Shell";
-import { InsightsPlaceholder } from "./app/Placeholder";
-import { findRoute } from "./app/routes";
 import { AgentPage } from "./features/agent/AgentPage";
 import { ChatPage } from "./features/chat/ChatPage";
 import { CorpusPage } from "./features/corpus/CorpusPage";
 import { GraphPage } from "./features/graph/GraphPage";
+import { InsightsPage } from "./features/insights/InsightsPage";
 import { AssumptionsPage } from "./features/decisions/AssumptionsPage";
 import { DecisionForm } from "./features/decisions/DecisionForm";
 import { DecisionPage } from "./features/decisions/DecisionPage";
@@ -54,10 +53,7 @@ export function App() {
         <Route path="/graph" element={<GraphPage />} />
 
         <Route path="/timeline" element={<TimelinePage />} />
-        <Route
-          path="/insights"
-          element={<InsightsPlaceholder route={findRoute("/insights")!} />}
-        />
+        <Route path="/insights" element={<InsightsPage />} />
         <Route path="/agent" element={<AgentPage />} />
         {/* Where the agent lived before M9.0. */}
         <Route path="/ask" element={<Navigate to="/agent" replace />} />

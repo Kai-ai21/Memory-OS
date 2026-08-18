@@ -100,16 +100,18 @@ describe("navigation", () => {
     expect(await screen.findByText(/nothing searched yet/i)).toBeInTheDocument();
   });
 
-  it("sends an unbuilt route to a page that says so, rather than a blank one", async () => {
-    // `/graph` until M9.1 built it. `/insights` is the unbuilt route now, and
-    // the property under test is unchanged: a route with nothing behind it
-    // explains itself rather than rendering blank.
+  it("sends a route whose data is missing to a page that says so, rather than a blank one", async () => {
+    // Was `/graph` against the generic placeholder, which M9.1 deleted along
+    // with the `planned` flag — every route now has a real page. The property
+    // survives and is sharper: `/graph` has a page, and that page explains
+    // which endpoint is absent and which count is zero instead of rendering an
+    // empty three-pane frame that reads as a bug.
     stubEverything();
-    renderWithProviders(<App />, { route: "/insights" });
+    renderWithProviders(<App />, { route: "/graph" });
 
-    expect(await screen.findByText(/what is missing/i)).toBeInTheDocument();
-    // The distinguishing property: it explains rather than pretending.
-    expect(screen.getByText(/what is already there/i)).toBeInTheDocument();
+    expect(await screen.findByTestId("graph-empty")).toBeInTheDocument();
+    expect(screen.getByText(/the api exposes no entity route/i)).toBeInTheDocument();
+    expect(screen.getByText(/and there are no relationships yet/i)).toBeInTheDocument();
   });
 
   it("forwards a search bookmarked at the old root path", async () => {

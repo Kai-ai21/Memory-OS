@@ -218,7 +218,7 @@ function match(
     (route) => ({
       id: `view:${route.path}`,
       kind: "view",
-      label: route.planned ? `${route.label} (planned)` : route.label,
+      label: route.label,
       detail: route.blurb,
       to: route.path,
     }),

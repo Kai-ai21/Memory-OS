@@ -123,11 +123,10 @@ describe("what it offers", () => {
     expect(within(results).getByText("overview")).toBeInTheDocument();
     expect(within(results).getByText("search")).toBeInTheDocument();
     expect(within(results).getByText("graph")).toBeInTheDocument();
-    // Planned routes are offered and labelled, not hidden. M9.1 built the graph
-    // screen, so `insights` is the route carrying the marker now — the property
-    // being pinned is that the palette offers an unbuilt route and says it is
-    // unbuilt, not which route that happens to be.
-    expect(within(results).getByText(/insights \(planned\)/)).toBeInTheDocument();
+    // M9.1 built the last two unbuilt routes, so there is no `(planned)` marker
+    // left to assert — the property that mattered was that the palette reaches
+    // every view in the table, which is what these three lines pin.
+    expect(within(results).getByText("insights")).toBeInTheDocument();
   });
 
   it("finds a view by an alias rather than only by its label", async () => {

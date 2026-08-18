@@ -165,14 +165,11 @@ function Item({ route, onNavigate }: { route: ViewRoute; onNavigate?: () => void
       onClick={onNavigate}
       title={route.blurb}
       className={({ isActive }) =>
-        `nav-item ${isActive ? "nav-item-on" : ""} ${route.planned ? "nav-item-soon" : ""}`
+        `nav-item ${isActive ? "nav-item-on" : ""}`
       }
     >
       <Icon name={route.icon} size={18} />
       <span>{route.label}</span>
-      {/* Marked, not hidden. See `routes.ts` — a nav that omits what is not
-          built misrepresents the shape of the application. */}
-      {route.planned ? <span className="meta ml-auto text-faint">soon</span> : null}
     </NavLink>
   );
 }

@@ -19,6 +19,13 @@
  * one flat list is the scannability problem the reference's six exist to solve.
  * So `PRIMARY` is the reference's nav, `SECONDARY` is everything else that
  * works, and both are in the sidebar with the second group set quieter.
+ *
+ * There is no longer a `planned` flag. Every route in this table has a page
+ * behind it, and the two that were marked — `/graph` and `/insights` — got one
+ * in M9.1. The flag existed so a route with nothing behind it could say so
+ * rather than render blank, and that job is now done better by the pages
+ * themselves: `/graph` explains which endpoint is missing and which count is
+ * zero, which is more useful than a generic "not built yet" ever was.
  */
 
 import type { IconName } from "../components/Icon";
@@ -32,15 +39,6 @@ export interface ViewRoute {
   group: GroupId;
   /** The glyph beside it in the sidebar. See `components/Icon`. */
   icon: IconName;
-  /**
-   * Nothing is built behind this yet.
-   *
-   * Marked rather than omitted. A nav that hides what does not exist tells the
-   * reader the application is smaller than it is; one that renders a fake
-   * screenshot tells them it is bigger. This says "planned", and the page says
-   * what will be there and what it is waiting on.
-   */
-  planned?: boolean;
   /** Extra terms the palette matches on, for things called two names. */
   aliases?: string[];
 }
@@ -117,7 +115,6 @@ export const ROUTES: ViewRoute[] = [
       "What the system has concluded about how you work — and, for every dimension, whether it has enough evidence to conclude anything.",
     group: "primary",
     icon: "insights",
-    planned: true,
     aliases: ["patterns", "reflections", "model", "beliefs", "calibration"],
   },
   {

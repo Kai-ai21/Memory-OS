@@ -458,13 +458,6 @@
     box-shadow: inset 0 0 10px color-mix(in oklab, var(--color-cyan) 10%, transparent);
   }
 
-  /* A route that exists but has nothing behind it yet. Same type as a live
-   * item, dimmed and marked — hiding it would misrepresent the shape of the
-   * application, and styling it identically would misrepresent its state. */
-  .nav-item-soon {
-    color: var(--color-faint);
-  }
-
   /* --- Figures -------------------------------------------------------------
    * A live count, at the size that makes it the thing you see first. Mono
    * rather than the display face: these are numbers to be compared, and tabular
