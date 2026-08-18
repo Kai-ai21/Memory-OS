@@ -28,17 +28,20 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
+import { makeMask, readShelters } from "../../lib/mask";
 import { noise3 } from "../../lib/noise";
+import { buildSprite } from "../../lib/particles";
 import { readGround, readInk } from "../../lib/tokens";
+import { CursorLayer } from "../../lib/trail";
 import { cn } from "../../lib/utils";
 
 export interface FluidParticlesProps {
   children?: ReactNode;
   /**
-   * The reference shipped 2000. Eight hundred reads the same and costs 40% of
-   * the draw calls — with a trail buffer the density you perceive is the smear,
-   * not the particle count, so the last twelve hundred were paying to be
-   * averaged into a mark the first eight hundred had already made.
+   * The reference shipped 2000 and M9.4 cut it to 800; M9.5 put it back to
+   * 1200. With a trail buffer the density you perceive is the smear rather than
+   * the count, so this is the least effective of the three levers — the ones
+   * that changed the picture were opacity and, far more, the clear alpha.
    */
   particleCount?: number;
   /** Field scale. Larger means the flow turns over a shorter distance. */
@@ -48,38 +51,45 @@ export interface FluidParticlesProps {
 }
 
 /**
- * Peak opacity of one particle. **0.06, tuned down from the specified 0.08.**
+ * Peak opacity of one ambient particle. **0.22, from 0.06.**
  *
- * The reference's 0.15 is nearly three times what a light ground will take.
- * 0.08 is close, and it was still too much for a reason the single-particle
- * number does not show: with a trail buffer the mark you see is not one
- * particle, it is every particle that has crossed that pixel in the last
- * second, and a flow field funnels them. Measured over 72 seconds at 0.08 the
- * darkest pixel on the page reached luminance 93 against a ground of 248 —
- * effectively a black scratch. At 0.06 it settles near 200.
+ * Nearly four times what M9.4 shipped, and it is affordable here for a reason
+ * that does not hold inside the application: this page is a wordmark, a card
+ * and a link on an otherwise empty screen, and everything that has to be read
+ * sits inside a shelter the field is not drawn over at all. The particles are
+ * the page.
  *
- * The failure mode to tune against is *not* "individual particles are
- * countable" here; they never were. It is the opposite — they merge into a
- * scribbled mat. Both are cured by taking ink out.
+ * It is not affordable *everywhere* on the page, and the clear alpha below is
+ * what makes that statement true rather than hopeful.
  */
-const PEAK_OPACITY = 0.06;
+const PEAK_OPACITY = 0.22;
 
 /**
  * How much page colour is laid over the previous frame each 60fps frame.
- * **0.3, tuned up from the reference's 0.12.**
+ * **0.18, down from M9.4's 0.30. The brief suggested 0.04; that does not work.**
  *
- * This is the knob for trail *length*, and it is inverted: lower is longer. It
- * is also the only thing stopping the buffer silting up: a pixel's composited
- * darkness settles at roughly the ink arriving per frame divided by this
- * number, so too low and the flow field's contour lines are painted onto the
- * page and left there. At the reference's 0.12 — and at 0.1, which is where
- * this started — nine seconds is enough to turn the whole viewport into a
- * scratched mat covering 75% of the page in visible ink.
+ * This is the knob for trail *length*, inverted: lower is longer. It is also
+ * the only thing stopping the buffer silting up, because a pixel's composited
+ * darkness settles at roughly the ink arriving per frame over this number — and
+ * M9.5 nearly quadrupled the ink arriving, from a peak of 0.06 to 0.22. Lowering
+ * the clear at the same time compounds both.
  *
- * Measured, over a full minute rather than the first few seconds, which is
- * where an accumulation bug hides.
+ * Measured on a 1440x900 viewport, letting each value run long enough to settle:
+ *
+ * | clear | mean luminance | share of viewport below 230 |
+ * |-------|----------------|-----------------------------|
+ * | 0.04  |      230.3     |            13.7%            |
+ * | 0.18  |      244.9     |             2.7%            |
+ * | 0.30  |      246.3     |             1.9%            |
+ *
+ * Ground is 248. At 0.04 the page is not a flow field, it is a grey fog with a
+ * flow field somewhere inside it — an eighth of the screen darkened and still
+ * drifting downward. 0.18 is where the filaments are long and clearly
+ * directional, which is what "legible as moving structure rather than scattered
+ * dots" was asking for, and where the numbers stop moving between six seconds
+ * and eighteen.
  */
-const TRAIL_ALPHA = 0.3;
+const TRAIL_ALPHA = 0.18;
 
 /** Drift speed, in CSS pixels per millisecond — about 110px a second. */
 const SPEED = 0.11;
@@ -105,6 +115,36 @@ const LIFE_MAX = 2800;
 /** The largest step one frame may claim, in ms. A backgrounded tab hands back
  *  minutes on its first frame, and every particle would jump across the page. */
 const MAX_STEP = 64;
+
+/**
+ * How far outside the centred content the field climbs back to full strength.
+ *
+ * 280px, per the brief, and the reason it can be this wide is that there is
+ * nothing else on this page to protect: the wordmark, the card and the link all
+ * live in one box, so one shelter covers everything that has to be read and the
+ * entire remaining screen is free to be dramatic.
+ */
+const SHELTER_FEATHER = 280;
+
+/** How often the shelter is re-measured, in frames. Four times a second. */
+const REMEASURE_EVERY = 15;
+
+/**
+ * The drift gets a shelter too, but a much tighter one than the trail's.
+ *
+ * **Measured, after trying both extremes.** With no shelter at all the field
+ * reads beautifully and the small type does not survive it: a filament crossing
+ * the "sign-in isn't active yet" line takes it to 1.37:1, which is not "harder
+ * to read", it is gone. With the trail's full 280px feather the field is damped
+ * across the entire viewport — the content box is 440px wide, so 280 on each
+ * side is a thousand pixels of a 1440px screen — and a change that asked for a
+ * stronger effect produces a weaker one than it replaced.
+ *
+ * 45% of the trail's feather is the setting where both hold: about 125px, which
+ * clears the type and leaves roughly half the screen at full strength. The
+ * drift needs less room than the trail because it is less than half as dark.
+ */
+const AMBIENT_SHELTER_SCALE = 0.45;
 
 interface Particle {
   x: number;
@@ -141,9 +181,9 @@ function useReducedMotion(): boolean {
 
 export function FluidParticles({
   children,
-  particleCount = 800,
+  particleCount = 1200,
   noiseIntensity = 0.003,
-  particleSize = { min: 0.5, max: 2 },
+  particleSize = { min: 1, max: 3.5 },
   className,
 }: FluidParticlesProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -164,6 +204,13 @@ export function FluidParticles({
 
     const ink = readInk();
     const ground = readGround();
+    const sprite = buildSprite();
+    // The same trail as the application background, riding this page's field
+    // rather than the app's — a fading particle should dissolve into the
+    // weather it is actually in.
+    const cursor = new CursorLayer((x, y, t) =>
+      noise3(x * noiseIntensity, y * noiseIntensity, t * FIELD_DRIFT) * Math.PI * 4,
+    );
     let width = 0;
     let height = 0;
     let particles: Particle[] = [];
@@ -229,10 +276,28 @@ export function FluidParticles({
 
     let frameId: number | null = null;
     let previous = 0;
+    let sinceMeasure = REMEASURE_EVERY;
+    /** Two shelters from one set of rectangles: see `AMBIENT_SHELTER_SCALE`. */
+    let driftMask: (x: number, y: number) => number = () => 1;
 
     function frame(now: number) {
       const dt = previous === 0 ? 1000 / 60 : Math.min(now - previous, MAX_STEP);
       previous = now;
+
+      // The shelter is read off the DOM a few times a second rather than
+      // configured, so it follows the layout instead of duplicating it.
+      sinceMeasure += 1;
+      if (sinceMeasure >= REMEASURE_EVERY) {
+        sinceMeasure = 0;
+        const shelters = readShelters(SHELTER_FEATHER);
+        cursor.setMask(makeMask(shelters));
+        driftMask = makeMask(
+          shelters.map((shelter) => ({
+            ...shelter,
+            feather: shelter.feather * AMBIENT_SHELTER_SCALE,
+          })),
+        );
+      }
 
       // The trail. Page colour at low alpha rather than a clear: this is the
       // whole reason the effect reads as ink rather than as dots.
@@ -245,9 +310,13 @@ export function FluidParticles({
           Object.assign(particle, spawn(false));
         }
 
-        // Fade in and out over a life, so nothing pops into or out of being.
+        // Fade in and out over a life, so nothing pops into or out of being,
+        // and again by the drift's own shelter, so the small type on this page
+        // is not crossed by a filament.
         const opacity =
-          Math.sin((particle.life / particle.maxLife) * Math.PI) * PEAK_OPACITY;
+          Math.sin((particle.life / particle.maxLife) * Math.PI) *
+          PEAK_OPACITY *
+          driftMask(particle.x, particle.y);
 
         // The field is sampled in three dimensions, the third being time, so it
         // turns over instead of being a fixed pattern the particles slide along
@@ -273,21 +342,47 @@ export function FluidParticles({
         if (particle.y < 0) particle.y = height;
         else if (particle.y > height) particle.y = 0;
 
-        context!.fillStyle = `rgba(${ink}, ${opacity})`;
-        context!.beginPath();
-        context!.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
-        context!.fill();
+        if (opacity > 0.002) {
+          context!.fillStyle = `rgba(${ink}, ${opacity})`;
+          context!.beginPath();
+          context!.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+          context!.fill();
+        }
+      }
+
+      // The trail, over the drift. Drawn after so a fresh stroke sits on top of
+      // the weather rather than being averaged into it.
+      if (sprite) {
+        cursor.step(dt, now);
+        cursor.draw(context!, sprite);
       }
 
       frameId = requestAnimationFrame(frame);
     }
 
+    function onMove(event: MouseEvent) {
+      cursor.push(event.clientX, event.clientY, performance.now());
+    }
+
+    /** Leaving the window breaks the trail: the pointer's next appearance is
+     *  somewhere unrelated, and a segment drawn between the two would lay a
+     *  stroke across a screen it never crossed. */
+    function onLeave() {
+      cursor.breakTrail();
+    }
+
     resize();
     window.addEventListener("resize", resize);
+    window.addEventListener("mousemove", onMove, { passive: true });
+    document.addEventListener("mouseleave", onLeave);
+    window.addEventListener("blur", onLeave);
     frameId = requestAnimationFrame(frame);
 
     return () => {
       window.removeEventListener("resize", resize);
+      window.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseleave", onLeave);
+      window.removeEventListener("blur", onLeave);
       // **Defect 2.** The reference returns a cleanup that removes the resize
       // listener and nothing else, so the loop it started keeps running for the
       // life of the tab — through every navigation away from this page, at

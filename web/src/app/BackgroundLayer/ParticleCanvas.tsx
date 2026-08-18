@@ -38,9 +38,11 @@
 
 import { useEffect, useRef } from "react";
 
+import { makeMask, readShelters } from "../../lib/mask";
+import { CursorLayer } from "../../lib/trail";
 import { AmbientLayer } from "./ambient";
-import { CursorLayer } from "./cursor";
 import { buildSprite } from "./field";
+import { flowAngle } from "./noise";
 
 /**
  * How much of the buffer is erased per 60fps frame. **Settled at 0.14.**
@@ -66,6 +68,26 @@ const CLEAR_ALPHA = 0.14;
 /** The largest step one frame may claim, in milliseconds. */
 const MAX_STEP = 64;
 
+/**
+ * How far outside the reading column the trail climbs back to full strength.
+ *
+ * **The trail is at 0.55 ink as of M9.5 and that is not survivable over text.**
+ * The answer is not a lower number — that would make the margins as timid as
+ * the column and lose the whole change — it is that the column is off limits.
+ * `Shell` marks its content wrapper as a shelter; inside it the trail is
+ * multiplied by zero, and it reaches full strength 160px outside, which on any
+ * layout this application uses lands in the gutter or behind the sidebar.
+ *
+ * 160 rather than the landing page's 280 because the app's margins are
+ * narrower: a wider feather here would mean the trail never actually reaches
+ * full strength anywhere on a laptop screen, which is the same failure as
+ * turning it down.
+ */
+const SHELTER_FEATHER = 160;
+
+/** How often the shelter is re-measured, in frames. Four times a second. */
+const REMEASURE_EVERY = 15;
+
 export function ParticleCanvas() {
   const ref = useRef<HTMLCanvasElement>(null);
 
@@ -77,7 +99,9 @@ export function ParticleCanvas() {
     if (!context || !sprite) return;
 
     const ambient = new AmbientLayer();
-    const cursor = new CursorLayer();
+    // The app's own flow field, so a fading trail dissolves into the same
+    // weather the ambient layer is riding rather than into a different one.
+    const cursor = new CursorLayer(flowAngle);
     let frameId: number | null = null;
     let lastFrameAt = 0;
     let width = 0;
@@ -106,10 +130,22 @@ export function ParticleCanvas() {
       ambient.resize(width, height);
     }
 
+    let sinceMeasure = REMEASURE_EVERY;
+
     function frame(now: number) {
       frameId = null;
       const dt = Math.min(now - lastFrameAt, MAX_STEP);
       lastFrameAt = now;
+
+      // Re-read the shelter from the DOM rather than being told about it. The
+      // composer is sticky, routes change the column, windows resize — none of
+      // which need to know this exists. Two `getBoundingClientRect` calls four
+      // times a second does not appear in a frame profile.
+      sinceMeasure += 1;
+      if (sinceMeasure >= REMEASURE_EVERY) {
+        sinceMeasure = 0;
+        cursor.setMask(makeMask(readShelters(SHELTER_FEATHER)));
+      }
 
       // Fade the previous frame. `destination-out` scales the alpha already in
       // the buffer; the colour of the fill is irrelevant, only its alpha counts.

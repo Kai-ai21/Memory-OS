@@ -71,18 +71,22 @@ describe("accent means interaction, never position", () => {
 });
 
 describe("hairlines, not shadows", () => {
-  it("declares no drop shadow that is not one of the four sanctioned ones", () => {
+  it("declares no drop shadow that is not sanctioned", () => {
     // Shadows accumulate into noise on light faster than anything else. The
     // allowed ones: the glass button's two-part shadow, its hover, the panel
     // inset that marks an opened row, the focus rings — which are rings rather
     // than drop shadows and are how `accent` says "you are here now" — and, as
     // of M9.4, `.panel-raised`.
     //
-    // **`.panel-raised` is the only true drop shadow in the system and it is
-    // used on exactly one element**, the landing page's sign-in card. It earns
-    // the exception by being the one panel that floats over a moving canvas
-    // rather than sitting on paper, where a hairline reads as a shape the
-    // background is making. The row below is what stops it becoming two.
+    // Two of them are real drop shadows and each is used on exactly one
+    // element: `.panel-raised` on the landing page's sign-in card, which floats
+    // over a moving canvas where a hairline would read as a shape the
+    // background is making, and `.pearl` on the send button, whose entire
+    // subject is being a lit object above the paper. The two rows below are
+    // what stop either becoming three.
+    //
+    // `none` is allowed because it is the absence of one: `.pearl:disabled`
+    // switches every light off rather than dimming them.
     const shadows = [...INDEX_CSS.matchAll(/^\s*box-shadow:([^;]+);/gm)].map((m) =>
       m[1].replace(/\s+/g, " ").trim(),
     );
@@ -90,28 +94,34 @@ describe("hairlines, not shadows", () => {
     for (const shadow of shadows) {
       const isRing = shadow.includes("0 0 0 3px");
       const isInset = shadow.startsWith("inset");
+      const isNone = shadow === "none";
       // Both remaining users draw in ink at low alpha rather than in black: a
       // neutral shadow on a warm white ground goes grey, and the palette has
       // one darkness for everything.
       const isInkShadow = shadow.includes("15 23 42");
       expect(
-        isRing || isInset || isInkShadow,
+        isRing || isInset || isInkShadow || isNone,
         `unexpected drop shadow: ${shadow}`,
       ).toBe(true);
     }
   });
 
-  it("raises exactly one thing, on exactly one screen", () => {
+  it.each([
+    ["panel-raised", /WelcomePage\.tsx$/],
+    ["pearl", /ChatPage\.tsx$/],
+  ])("%s is used by exactly one component", (klass, expected) => {
     // The other half of the rule above, and the half a colour check cannot
-    // see: `.panel-raised` could spread to a dozen components without changing
-    // a single declared value. One class, one user, and that user is the
-    // landing card.
+    // see: either class could spread to a dozen components without changing a
+    // single declared value, and the argument for each is that it is the only
+    // one of its kind on its screen.
     const users = components()
-      .filter(([, source]) => /className=[^>]*\bpanel-raised\b/.test(source))
+      .filter(([, source]) =>
+        new RegExp(`className=[^>]*\\b${klass}\\b`).test(source),
+      )
       .map(([path]) => path);
 
     expect(users).toHaveLength(1);
-    expect(users[0]).toMatch(/WelcomePage\.tsx$/);
+    expect(users[0]).toMatch(expected);
   });
 
   it("uses the hairline token for panel edges", () => {

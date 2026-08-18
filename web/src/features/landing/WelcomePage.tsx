@@ -32,7 +32,14 @@ import { FluidParticles } from "./FluidParticles";
 export function WelcomePage() {
   return (
     <FluidParticles>
-      <main className="flex w-full max-w-110 flex-col items-center gap-8 px-6 py-12 text-center">
+      <main
+        /* The shelter, with its own feather: the field fades to nothing over
+           this box and takes 280px to reach full strength again, which on this
+           page means the whole centre is quiet and the edges are not. Wider
+           than the app's 160 because there is far more room here to spend. */
+        data-particle-shelter="280"
+        className="flex w-full max-w-110 flex-col items-center gap-8 px-6 py-12 text-center"
+      >
         {/* --- The mark ---------------------------------------------------- */}
         <header className="flex flex-col items-center gap-2">
           <h1 className="display text-headline-xl font-bold tracking-[0.06em]">MEMO</h1>

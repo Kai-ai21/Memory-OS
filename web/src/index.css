@@ -146,6 +146,118 @@
       0 16px 40px -12px rgb(15 23 42 / 12%);
   }
 
+  /* --- The send button ------------------------------------------------------
+   * "Pearl": a small round object with a light source above it, rather than a
+   * flat disc with an arrow on it.
+   *
+   * **Adapted, not pasted.** The reference is a dark-theme component — a near
+   * black body, a pink-white sheen, forty-five pixels of padding and a shadow
+   * stack tuned against `#080808`. Dropped onto a warm white ground that reads
+   * as a hole with a smudge on it. What survives translation is the *model*,
+   * which is four lights and is what makes a pearl look spherical:
+   *
+   *   1. an inset highlight along the top edge — the light source;
+   *   2. an inset shadow along the bottom edge — the body turning away from it;
+   *   3. an inset bounce along the bottom — light returning off the surface
+   *      underneath, which is the one that stops it reading as a flat gradient;
+   *   4. an outer drop shadow — the object being above the paper.
+   *
+   * Rendered here in the accent, because this is the send button and rule 1 of
+   * this theme reserves the accent for exactly that: the thing you can do. The
+   * sheen is white at low alpha rather than a second hue, so the object stays
+   * one colour lit from one direction.
+   */
+  .pearl {
+    position: relative;
+    border-radius: 100px;
+    background-color: var(--color-accent);
+    border: 1px solid rgb(255 255 255 / 35%);
+    color: var(--color-surface);
+    cursor: pointer;
+    transition:
+      transform 160ms ease,
+      box-shadow 160ms ease,
+      background-color 160ms ease;
+    box-shadow:
+      inset 0 0.3rem 0.55rem -0.25rem rgb(255 255 255 / 55%),
+      inset 0 -0.15rem 0.3rem -0.1rem rgb(15 23 42 / 45%),
+      inset 0 -0.4rem 0.7rem -0.35rem rgb(255 255 255 / 35%),
+      0 2px 3px -1px rgb(15 23 42 / 25%),
+      0 8px 16px -6px rgb(15 23 42 / 35%);
+  }
+
+  /* The gloss: a bright cap over the top half, masked so it fades out rather
+   * than ending on a line. This is the highlight you see *on* a pearl as
+   * opposed to the light *in* it, and it is the difference between a sphere
+   * and a circle with a gradient. */
+  .pearl::after {
+    content: "";
+    position: absolute;
+    inset: 1px 12% 42%;
+    border-radius: 100px 100px 60% 60% / 100px 100px 40% 40%;
+    background: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 55%) 0%,
+      rgb(255 255 255 / 8%) 60%,
+      rgb(255 255 255 / 0%) 100%
+    );
+    pointer-events: none;
+    transition:
+      opacity 160ms ease,
+      transform 160ms ease;
+  }
+
+  /* Hover: the sheen brightens and the object lifts. One pixel — a pearl this
+   * size that rises further stops being a button and becomes a balloon. */
+  .pearl:hover:not(:disabled) {
+    transform: translateY(-1px);
+    background-color: var(--color-accent-strong);
+    box-shadow:
+      inset 0 0.3rem 0.55rem -0.25rem rgb(255 255 255 / 75%),
+      inset 0 -0.15rem 0.3rem -0.1rem rgb(15 23 42 / 45%),
+      inset 0 -0.4rem 0.7rem -0.35rem rgb(255 255 255 / 50%),
+      0 3px 5px -1px rgb(15 23 42 / 28%),
+      0 12px 22px -8px rgb(15 23 42 / 40%);
+  }
+
+  .pearl:hover:not(:disabled)::after {
+    opacity: 1;
+    transform: translateY(-4%);
+  }
+
+  /* Press: it settles onto the paper and the sheen dims. The outer shadow
+   * collapses because the gap it was describing is gone. */
+  .pearl:active:not(:disabled) {
+    transform: translateY(1px);
+    box-shadow:
+      inset 0 0.25rem 0.5rem -0.25rem rgb(255 255 255 / 35%),
+      inset 0 -0.1rem 0.3rem -0.1rem rgb(15 23 42 / 55%),
+      inset 0 -0.3rem 0.6rem -0.35rem rgb(255 255 255 / 25%),
+      0 1px 1px 0 rgb(15 23 42 / 20%);
+  }
+
+  .pearl:active:not(:disabled)::after {
+    opacity: 0.45;
+    transform: translateY(3%);
+  }
+
+  /* Disabled: not a dimmed pearl but a flat disc. Every light is switched off —
+   * no sheen, no lift, no shadow — because a pearl you cannot press is an
+   * object making a promise it will not keep, and reducing its opacity would
+   * leave it three-quarters of the way to keeping it. */
+  .pearl:disabled {
+    cursor: default;
+    transform: none;
+    background-color: var(--color-surface-tint);
+    border-color: var(--color-rule-strong);
+    color: var(--color-ink-3);
+    box-shadow: none;
+  }
+
+  .pearl:disabled::after {
+    display: none;
+  }
+
   /* --- The one glass element ----------------------------------------------
    * NEW CONVERSATION, and nothing else, ever, until we decide otherwise
    * deliberately.

@@ -149,7 +149,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
         tabIndex={-1}
         className="min-w-0 flex-1 px-5 py-6 outline-none sm:px-8 md:px-8 md:py-10"
       >
-        <div className="mx-auto max-w-300">{children}</div>
+        {/* Marked as a shelter for the background field: the cursor trail is
+            multiplied to zero inside this box and climbs back to full strength
+            in the gutters and behind the sidebar. Measured off the DOM by
+            `lib/mask`, so this stays true when the column changes width and
+            nothing has to be told about it. */}
+        <div className="mx-auto max-w-300" data-particle-shelter>
+          {children}
+        </div>
       </main>
 
       <CommandPalette open={paletteOpen} onClose={closePalette} />

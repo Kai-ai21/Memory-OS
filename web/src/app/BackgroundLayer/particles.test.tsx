@@ -22,7 +22,14 @@ import { fireEvent, render, screen } from "@testing-library/react";
 
 import { BackgroundLayer } from ".";
 import { AMBIENT_ALPHA_MAX, AMBIENT_COUNT, AmbientLayer } from "./ambient";
-import { CURSOR_ALPHA_MAX, CursorLayer, EMIT_DISTANCE, MAX_PARTICLES } from "./cursor";
+import { makeMask } from "../../lib/mask";
+import {
+  CursorLayer,
+  EMIT_DISTANCE,
+  MAX_PARTICLES,
+  PEAK_ALPHA as CURSOR_ALPHA_MAX,
+} from "../../lib/trail";
+import { flowAngle } from "./noise";
 import { INK_FALLBACK } from "./field";
 import { noise3 } from "../../lib/noise";
 
@@ -162,7 +169,7 @@ describe("the cursor layer", () => {
     // The cap is the only thing standing between this and an unbounded array
     // that grows for as long as the tab is open. At one particle per eight
     // pixels, an energetic cursor reaches the cap in under two seconds.
-    const layer = new CursorLayer(() => 0.5);
+    const layer = new CursorLayer(flowAngle, () => 0.5);
 
     for (let i = 0; i < 2000; i += 1) {
       layer.push(i * 10, 0, i * 8);
@@ -179,7 +186,7 @@ describe("the cursor layer", () => {
   it("emits on distance travelled rather than per frame", () => {
     // A still cursor must cost nothing. Two events at the same point is not
     // movement, whatever the frame rate is.
-    const layer = new CursorLayer(() => 0.5);
+    const layer = new CursorLayer(flowAngle, () => 0.5);
 
     layer.push(10, 10, 0);
     layer.push(10, 10, 16);
@@ -201,7 +208,7 @@ describe("the cursor layer", () => {
     // is treated as a teleport and emits nothing — which is the right rule for
     // a tab switch and a trap for a test written as one giant jump.
     function sweep(durationMs: number) {
-      const layer = new CursorLayer(() => 0.5);
+      const layer = new CursorLayer(flowAngle, () => 0.5);
       layer.push(0, 0, 0);
       layer.push(300, 0, durationMs);
       const last = layer.particles[layer.particles.length - 1];
@@ -223,12 +230,16 @@ describe("the cursor layer", () => {
     // which means an old particle must still be moving after its inherited
     // momentum is gone. A particle emitted with no cursor velocity at all has
     // nothing to move it *except* the field.
-    const layer = new CursorLayer(() => 0.5);
+    const layer = new CursorLayer(flowAngle, () => 0.5);
     layer.emit(400, 300);
     const particle = layer.particles[0];
     const from = { x: particle.x, y: particle.y };
 
-    for (let i = 0; i < 50; i += 1) layer.step(16, i * 16);
+    // A hundred frames rather than fifty: the handover weight is the square of
+    // the fraction of life elapsed, and M9.5 lengthened the life from ~1.2s to
+    // ~1.8s. Same property, later in wall-clock time — which is the point of
+    // the longer fade, so the test moved with it rather than the code.
+    for (let i = 0; i < 100; i += 1) layer.step(16, i * 16);
 
     expect(Math.hypot(particle.x - from.x, particle.y - from.y)).toBeGreaterThan(1);
   });
@@ -446,13 +457,48 @@ describe("what a particle costs the text under it", () => {
     expect(INK).toEqual(channels("ink"));
   });
 
-  it("leaves body text above AA under one particle from either layer", () => {
-    // The gate. Prose is what this application is for, and `ink` has enough
-    // headroom that a single particle of either kind cannot touch it — the
-    // ambient ceiling is a sixth of the crossing point and the cursor ceiling
-    // is two thirds of it.
+  it("leaves body text above AA under one ambient particle", () => {
+    // The ambient layer is permanent and unmasked, so its ceiling still has to
+    // clear the bar on its own. It does, with room: 0.08 against a crossing
+    // point of 0.536.
     expect(ratio("ink", AMBIENT_ALPHA_MAX)).toBeGreaterThanOrEqual(4.5);
-    expect(ratio("ink", CURSOR_ALPHA_MAX)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("records that the cursor layer alone would not, and why that is survivable", () => {
+    // **M9.5 took the trail past the point where opacity alone is safe.** At
+    // 0.55 a single trail particle behind body text measures 4.28:1, just under
+    // AA — `ink` crosses at α 0.536. Every lighter role went under long before.
+    //
+    // What replaced the opacity ceiling as the protection is positional: the
+    // reading column is a shelter and the trail is multiplied by zero inside
+    // it. That is asserted below rather than here, because it is the thing that
+    // is actually true — "the trail is never dark over text" is now a fact
+    // about *where* it is drawn, not about how dark it is.
+    expect(CURSOR_ALPHA_MAX).toBe(0.55);
+    expect(ratio("ink", CURSOR_ALPHA_MAX)).toBeLessThan(4.5);
+    expect(ratio("ink", CURSOR_ALPHA_MAX)).toBeGreaterThan(4);
+  });
+
+  it("draws no trail ink at all inside a shelter", () => {
+    // The replacement gate, and the reason 0.55 can ship. A reading column is
+    // a shelter; inside one the multiplier is exactly zero, at the centre and
+    // hard against every edge, so no peak opacity anywhere above can put ink
+    // behind a paragraph.
+    const column = { left: 300, top: 100, right: 900, bottom: 700, feather: 160 };
+    const mask = makeMask([column]);
+
+    expect(mask(600, 400)).toBe(0);
+    expect(mask(300, 100)).toBe(0);
+    expect(mask(900, 700)).toBe(0);
+    // And it is full strength once clear of the feather, which is what keeps
+    // the margins dramatic rather than merely less timid.
+    expect(mask(900 + 160, 400)).toBe(1);
+    expect(mask(60, 400)).toBe(1);
+    // Monotonic in between, with no crease: a linear ramp is visible as one.
+    const ramp = [40, 80, 120].map((d) => mask(900 + d, 400));
+    expect(ramp[0]).toBeLessThan(ramp[1]);
+    expect(ramp[1]).toBeLessThan(ramp[2]);
+    expect(ramp[2]).toBeLessThan(1);
   });
 
   it("pins where each role crosses AA, so a palette change cannot move it quietly", () => {
@@ -478,7 +524,7 @@ describe("what a particle costs the text under it", () => {
     // which micro-labels and links stop clearing AA against darkened paper.
     // Recorded so the cost stays a known quantity rather than a surprise.
     expect(AMBIENT_ALPHA_MAX).toBe(0.08);
-    expect(CURSOR_ALPHA_MAX).toBe(0.35);
+    expect(CURSOR_ALPHA_MAX).toBe(0.55);
 
     expect(ratio("ink-3", AMBIENT_ALPHA_MAX)).toBeLessThan(4.5);
     expect(ratio("accent", AMBIENT_ALPHA_MAX)).toBeLessThan(4.5);

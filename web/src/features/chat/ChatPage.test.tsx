@@ -552,3 +552,71 @@ describe("attachments", () => {
     );
   });
 });
+
+/**
+ * The send button, added in M9.5.
+ *
+ * Two properties, and they are the two that a screenshot cannot show: that the
+ * button agrees with the keyboard about when a message is sendable, and that it
+ * is the *same* code path rather than a second copy of it. A button with its own
+ * notion of "empty" is the kind of bug that stays wrong for months, because
+ * both halves work and only their disagreement is broken.
+ */
+describe("the send button", () => {
+  it("is disabled while there is nothing to send, and enabled once there is", async () => {
+    stubFetch(chatRoutes([]));
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
+
+    const send = await screen.findByRole("button", { name: "Send" });
+    expect(send).toBeDisabled();
+
+    await userEvent.type(await screen.findByLabelText("Message"), "a thought");
+    expect(send).toBeEnabled();
+
+    // Whitespace is not a message. The keyboard has always trimmed; the button
+    // has to agree, or one of them is lying about the same string.
+    await userEvent.clear(screen.getByLabelText("Message"));
+    await userEvent.type(screen.getByLabelText("Message"), "   ");
+    expect(send).toBeDisabled();
+  });
+
+  it("sends exactly what Enter sends", async () => {
+    // Asserted on the request rather than on a spy, so it exercises the real
+    // path: click and keypress both reach `submit()` through the form, and the
+    // proof is that the two produce byte-identical POST bodies.
+    function post() {
+      return stubFetch([
+        ...chatRoutes([STATEMENT]),
+        {
+          match: "/chat",
+          body: { session_id: SESSION_ID, messages: [STATEMENT] },
+          status: 201,
+        },
+      ]);
+    }
+
+    const typed = post();
+    const first = renderWithProviders(<ChatPage />, {
+      route: `/?session=${SESSION_ID}`,
+    });
+    await userEvent.type(
+      await screen.findByLabelText("Message"),
+      "a thought worth keeping{Enter}",
+    );
+    const viaKeyboard = typed.find((call) => call.method === "POST")?.body;
+    first.unmount();
+    vi.unstubAllGlobals();
+
+    const clicked = post();
+    renderWithProviders(<ChatPage />, { route: `/?session=${SESSION_ID}` });
+    await userEvent.type(
+      await screen.findByLabelText("Message"),
+      "a thought worth keeping",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    const viaButton = clicked.find((call) => call.method === "POST")?.body;
+
+    expect(viaButton).toEqual(viaKeyboard);
+    expect(viaButton).toMatchObject({ text: "a thought worth keeping" });
+  });
+});

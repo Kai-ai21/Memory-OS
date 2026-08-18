@@ -691,13 +691,22 @@ function Composer({
     staleTime: Infinity,
   });
 
+  /**
+   * Whether there is anything to send.
+   *
+   * Files alone are a message. A note is optional — "here is the proposal" is
+   * frequently the whole of what somebody wants to say, and requiring text
+   * would make dropping a file a two-step act.
+   *
+   * Hoisted out of `submit` because the send button's disabled state is the
+   * same question, and a button that looks pressable while `submit` would
+   * silently return is the same bug as one that looks dead while it would not.
+   */
+  const sendable = (text.trim().length > 0 || queued.length > 0) && !busy;
+
   function submit() {
-    const typed = text.trim();
-    // Files alone are a message. A note is optional — "here is the proposal" is
-    // frequently the whole of what somebody wants to say, and requiring text
-    // would make dropping a file a two-step act.
-    if ((!typed && queued.length === 0) || busy) return;
-    onSend(typed);
+    if (!sendable) return;
+    onSend(text.trim());
     setText("");
   }
 
@@ -815,17 +824,43 @@ function Composer({
             ? "say something about these files, or just send them"
             : "postgres full-text search is faster than I expected"
         }
-        className="w-full resize-y bg-transparent font-prose text-base text-ink placeholder:font-mono placeholder:text-sm placeholder:text-ink-3 focus:outline-none"
+        className="w-full resize-y bg-transparent pr-14 font-prose text-base text-ink placeholder:font-mono placeholder:text-sm placeholder:text-ink-3 focus:outline-none"
         aria-label="Message"
         spellCheck={false}
         autoFocus
       />
-      <p className="meta text-ink-3">
+      <p className="meta text-ink-3 pr-14">
         <span className="kbd">enter</span> sends, <span className="kbd">shift</span>
         <span className="kbd">enter</span> starts a line. A question is answered
         and not stored; anything else is kept. Drop a file here and it becomes a
         memory too — a note beside it is kept as its own.
       </p>
+
+      {/* **`type="submit"`, and that is the whole of the wiring.** The form
+          already has an `onSubmit` that calls `submit()`, and the textarea's
+          Enter handler calls the same function — so the button is a third
+          entry point to one implementation rather than a second copy of the
+          rules about when a message is sendable. Anything else would mean the
+          button and the keyboard could disagree about whether a file with no
+          note counts, which is exactly the sort of thing that stays wrong for
+          months.
+
+          Sitting inside the composer's padding at the bottom right, over the
+          hint rather than beside it: the hint is a paragraph you read once and
+          the button is a control you use every time, and giving the control its
+          own row would push the box taller for something that fits in a corner
+          that was already empty. */}
+      <button
+        type="submit"
+        className="pearl absolute right-4 bottom-4 flex size-9 items-center justify-center"
+        disabled={!sendable}
+        aria-label="Send"
+        title={sendable ? "Send — or press enter" : "Nothing to send yet"}
+      >
+        <span className="relative z-10 flex">
+          <Icon name="send" size={17} />
+        </span>
+      </button>
     </form>
   );
 }
