@@ -16,8 +16,8 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from memoryos.adapters.db.models import Base
+from memoryos.adapters.db.scoping import CURRENT_USER_ID
 from memoryos.api.app import create_app
-from memoryos.application.auth import CreateUser
 from memoryos.config import Settings, get_settings
 
 # The account the signed-in `client` fixture uses. Not a secret and not
@@ -64,6 +64,26 @@ def settings() -> Settings:
     return Settings()
 
 
+async def give_the_fixture_account_a_password(app: object) -> None:
+    """Make `clean_database`'s account loggable-in.
+
+    The account itself is created by `clean_database` with a placeholder hash,
+    because M11.1 needs *every* test to have a user in context and hashing a
+    password with argon2 twelve hundred times to produce one that is never
+    verified costs about two minutes of suite time. The API tests are the ones
+    that actually log in, so they are the ones that pay for a real hash.
+    """
+    container = app.state.container  # type: ignore[attr-defined]
+    async with container.database.session_factory.begin() as db:
+        await db.execute(
+            text("UPDATE users SET password_hash = :hash WHERE email = :email"),
+            {
+                "hash": container.password_hasher.hash(TEST_ACCOUNT_PASSWORD),
+                "email": TEST_ACCOUNT_EMAIL,
+            },
+        )
+
+
 async def sign_in(app: object, http_client: AsyncClient) -> None:
     """Create the account on `app` and log `http_client` into it.
 
@@ -73,11 +93,7 @@ async def sign_in(app: object, http_client: AsyncClient) -> None:
     login, which is three places for the fixture's account to drift from the
     suite's.
     """
-    container = app.state.container  # type: ignore[attr-defined]
-    async with container.database.session_factory.begin() as db:
-        await CreateUser(db, container.password_hasher)(
-            TEST_ACCOUNT_EMAIL, TEST_ACCOUNT_PASSWORD
-        )
+    await give_the_fixture_account_a_password(app)
     response = await http_client.post(
         "/auth/login",
         json={"email": TEST_ACCOUNT_EMAIL, "password": TEST_ACCOUNT_PASSWORD},
@@ -127,11 +143,7 @@ async def client(
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http_client,
     ):
-        container = app.state.container
-        async with container.database.session_factory.begin() as db:
-            await CreateUser(db, container.password_hasher)(
-                TEST_ACCOUNT_EMAIL, TEST_ACCOUNT_PASSWORD
-            )
+        await give_the_fixture_account_a_password(app)
         response = await http_client.post(
             "/auth/login",
             json={"email": TEST_ACCOUNT_EMAIL, "password": TEST_ACCOUNT_PASSWORD},
@@ -148,6 +160,13 @@ def migrated_database() -> None:
 
 @pytest.fixture
 async def engine(migrated_database: None, settings: Settings) -> AsyncIterator[AsyncEngine]:
+    """The application role, which is the point.
+
+    M11.1 pointed `database_url` at `memos_app`, a role with DML and nothing
+    else, because row-level security is skipped for superusers — so a suite
+    that connected as the owner would pass every isolation test by not having
+    any policies applied to it.
+    """
     async_engine = create_async_engine(settings.database_url)
     try:
         yield async_engine
@@ -156,8 +175,38 @@ async def engine(migrated_database: None, settings: Settings) -> AsyncIterator[A
 
 
 @pytest.fixture
-async def clean_database(engine: AsyncEngine) -> AsyncIterator[None]:
-    """Empty every table before the test runs.
+async def admin_engine(
+    migrated_database: None, settings: Settings
+) -> AsyncIterator[AsyncEngine]:
+    """The owner, for the two things the application role cannot do.
+
+    Truncating with `RESTART IDENTITY` needs ownership of the sequences, and
+    creating an account writes a table the application is not the owner of.
+    Both are test-harness operations rather than application ones, and giving
+    `memos_app` the privileges to do them would weaken the role this milestone
+    exists to introduce.
+    """
+    async_engine = create_async_engine(settings.database_admin_url)
+    try:
+        yield async_engine
+    finally:
+        await async_engine.dispose()
+
+
+@pytest.fixture
+async def clean_database(admin_engine: AsyncEngine) -> AsyncIterator[None]:
+    """Empty every table before the test runs, then run as one account.
+
+    **M11.1 added the second half and it is not optional.** Every scoped table
+    now has a row-level policy comparing `user_id` against
+    `app.current_user_id`, and a connection that never sets it sees nothing and
+    can insert nothing. Without an account in context every one of the twelve
+    hundred tests below would fail on an empty result or a NOT NULL violation —
+    not because scoping is wrong, but because a test is a user too.
+
+    Creating it here rather than in each test keeps the change to one fixture.
+    Tests that need *two* users ask for `second_user`, which is the whole of
+    `test_user_scoping.py`.
 
     One isolation strategy for the whole suite, on purpose. Until M1.3 there
     were two: repository tests rolled back an outer transaction while queue
@@ -169,8 +218,27 @@ async def clean_database(engine: AsyncEngine) -> AsyncIterator[None]:
     Truncation is the strategy that survives code under test committing, which
     is why it is the one that generalises.
     """
-    await truncate_all(engine)
-    yield
+    await truncate_all(admin_engine)
+
+    # Made directly rather than through `CreateUser`, which hashes a password
+    # with argon2 — a hundred milliseconds per test, twelve hundred times, to
+    # produce a hash nothing in most of these tests will ever verify.
+    async with admin_engine.begin() as connection:
+        owner = (
+            await connection.execute(
+                text(
+                    "INSERT INTO users (id, email, password_hash) "
+                    "VALUES (gen_random_uuid(), :email, 'x') RETURNING id"
+                ),
+                {"email": TEST_ACCOUNT_EMAIL},
+            )
+        ).scalar_one()
+
+    token = CURRENT_USER_ID.set(owner)
+    try:
+        yield
+    finally:
+        CURRENT_USER_ID.reset(token)
 
 
 async def truncate_all(engine: AsyncEngine) -> None:

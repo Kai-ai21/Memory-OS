@@ -234,20 +234,25 @@ async def test_the_token_is_never_stored_in_the_database(
     assert token not in stored[0].token_hash
 
 
-async def test_a_second_account_is_refused_by_name(session: AsyncSession) -> None:
-    """Single-user, and the refusal says which account already exists.
+async def test_a_second_account_is_allowed_but_a_repeated_address_is_not(
+    session: AsyncSession,
+) -> None:
+    """**M11.1 inverted this test, which is the clearest measure of the change.**
 
-    "A user already exists" without naming it is a message that sends somebody
-    to psql.
+    M11.0 refused a second account of any kind, because nothing was scoped and a
+    second account would have read the first one's corpus. Every row now has an
+    owner and a policy enforcing it, so a second account is the supported case —
+    and the only thing left to refuse is two accounts on one address.
     """
-    from memoryos.application.auth import UserAlreadyExists
+    from memoryos.application.auth import EmailAlreadyRegistered
 
     hasher = Argon2PasswordHasher()
     await CreateUser(session, hasher)(EMAIL, PASSWORD)
+    await CreateUser(session, hasher)("someone.else@example.invalid", PASSWORD)
     await session.commit()
 
-    with pytest.raises(UserAlreadyExists) as raised:
-        await CreateUser(session, hasher)("someone.else@example.invalid", PASSWORD)
+    with pytest.raises(EmailAlreadyRegistered) as raised:
+        await CreateUser(session, hasher)(EMAIL, PASSWORD)
 
     assert EMAIL in str(raised.value)
 

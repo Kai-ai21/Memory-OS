@@ -101,6 +101,16 @@ class Source(Base):
 
     __tablename__ = "sources"
 
+    # M11.1. Every row belongs to somebody; row-level security compares this
+    # against `app.current_user_id` and the server default supplies it, which is
+    # why no `INSERT` in this codebase mentions it. See `adapters/db/scoping`.
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_sources_user_id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("memos_current_user_id()"),
+    )
+
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     kind: Mapped[str] = mapped_column(Text, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -121,7 +131,7 @@ class Source(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("kind", "name", name="uq_sources_kind_name"),
+        UniqueConstraint("user_id", "kind", "name", name="uq_sources_kind_name"),
         _enum_check("kind", SourceKind, "ck_sources_kind"),
     )
 
@@ -162,6 +172,16 @@ class IngestionEvent(Base):
     """
 
     __tablename__ = "ingestion_events"
+
+    # M11.1. Every row belongs to somebody; row-level security compares this
+    # against `app.current_user_id` and the server default supplies it, which is
+    # why no `INSERT` in this codebase mentions it. See `adapters/db/scoping`.
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_ingestion_events_user_id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("memos_current_user_id()"),
+    )
 
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     # Replay order, and the database's alone to assign. Replay reads these
@@ -206,8 +226,8 @@ class IngestionEvent(Base):
             "(occurred_at IS NULL) = (occurred_at_source = 'unknown')",
             name="ck_ingestion_events_occurred_at_provenance",
         ),
-        Index("ix_ingestion_events_source_id_external_key", "source_id", "external_key"),
-        Index("ix_ingestion_events_recorded_at", "recorded_at"),
+        Index("ix_ingestion_events_source_id_external_key", "user_id", "source_id", "external_key"),
+        Index("ix_ingestion_events_recorded_at", "user_id", "recorded_at"),
     )
 
 
@@ -215,6 +235,16 @@ class Memory(Base):
     """One version of one item, projected from the event log."""
 
     __tablename__ = "memories"
+
+    # M11.1. Every row belongs to somebody; row-level security compares this
+    # against `app.current_user_id` and the server default supplies it, which is
+    # why no `INSERT` in this codebase mentions it. See `adapters/db/scoping`.
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_memories_user_id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("memos_current_user_id()"),
+    )
 
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     source_id: Mapped[UUID] = mapped_column(
@@ -270,8 +300,15 @@ class Memory(Base):
     relationship_extractor_version: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
+        # M11.1 puts `user_id` first: two people must be able to have a file at
+        # the same path, and a query for *this* user's copy has to seek rather
+        # than scan every user's entries for that key.
         UniqueConstraint(
-            "source_id", "external_key", "version", name="uq_memories_source_key_version"
+            "user_id",
+            "source_id",
+            "external_key",
+            "version",
+            name="uq_memories_source_key_version",
         ),
         CheckConstraint("version >= 1", name="ck_memories_version_positive"),
         CheckConstraint("importance BETWEEN 0.0 AND 1.0", name="ck_memories_importance_range"),
@@ -287,13 +324,14 @@ class Memory(Base):
         # Exactly one current version per item.
         Index(
             "uq_memories_current_version",
+            "user_id",
             "source_id",
             "external_key",
             unique=True,
             postgresql_where=text("is_current"),
         ),
-        Index("ix_memories_occurred_at", "occurred_at"),
-        Index("ix_memories_ingested_at", "ingested_at"),
+        Index("ix_memories_occurred_at", "user_id", "occurred_at"),
+        Index("ix_memories_ingested_at", "user_id", "ingested_at"),
     )
 
 
@@ -301,6 +339,16 @@ class MemoryChunk(Base):
     """A retrievable span of one memory's text."""
 
     __tablename__ = "memory_chunks"
+
+    # M11.1. Every row belongs to somebody; row-level security compares this
+    # against `app.current_user_id` and the server default supplies it, which is
+    # why no `INSERT` in this codebase mentions it. See `adapters/db/scoping`.
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_memory_chunks_user_id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("memos_current_user_id()"),
+    )
 
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     # CASCADE is required by the deletion guardrail. Without it a deleted
@@ -370,8 +418,8 @@ class MemoryChunk(Base):
         CheckConstraint(
             "prefix_chars >= 0", name="ck_memory_chunks_prefix_chars_non_negative"
         ),
-        Index("ix_memory_chunks_chunker_version", "chunker_version"),
-        Index("ix_memory_chunks_content_hash", "content_hash"),
+        Index("ix_memory_chunks_chunker_version", "user_id", "chunker_version"),
+        Index("ix_memory_chunks_content_hash", "user_id", "content_hash"),
     )
 
 
@@ -394,6 +442,16 @@ class Job(Base):
     """
 
     __tablename__ = "jobs"
+
+    # M11.1. Every row belongs to somebody; row-level security compares this
+    # against `app.current_user_id` and the server default supplies it, which is
+    # why no `INSERT` in this codebase mentions it. See `adapters/db/scoping`.
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_jobs_user_id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("memos_current_user_id()"),
+    )
 
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     job_type: Mapped[str] = mapped_column(Text, nullable=False)
@@ -454,6 +512,7 @@ class Job(Base):
 # weight.
 Index(
     "ix_jobs_claim",
+    Job.user_id,
     Job.priority.desc(),
     Job.run_after,
     postgresql_where=text("status = 'pending'"),
@@ -463,6 +522,7 @@ Index(
 # still in flight. Once it finishes, the key is free again.
 Index(
     "uq_jobs_dedupe",
+    Job.user_id,
     Job.job_type,
     Job.dedupe_key,
     unique=True,
@@ -470,10 +530,15 @@ Index(
 )
 
 # The sweeper's index: find running jobs whose lease has expired.
-Index("ix_jobs_lease", Job.lease_expires_at, postgresql_where=text("status = 'running'"))
+Index(
+    "ix_jobs_lease",
+    Job.user_id,
+    Job.lease_expires_at,
+    postgresql_where=text("status = 'running'"),
+)
 
 # Observability. `SELECT status, count(*) FROM jobs GROUP BY 1` and its friends.
-Index("ix_jobs_status_type", Job.status, Job.job_type)
+Index("ix_jobs_status_type", Job.user_id, Job.status, Job.job_type)
 
 
 class EmbeddingCacheEntry(Base):
@@ -556,6 +621,16 @@ class QueryJudgement(Base):
 
     __tablename__ = "query_judgements"
 
+    # M11.1. Every row belongs to somebody; row-level security compares this
+    # against `app.current_user_id` and the server default supplies it, which is
+    # why no `INSERT` in this codebase mentions it. See `adapters/db/scoping`.
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_query_judgements_user_id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("memos_current_user_id()"),
+    )
+
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     query_text: Mapped[str] = mapped_column(Text, nullable=False)
     # The durable identity of the judged item, stable across rebuilds.
@@ -597,6 +672,7 @@ class QueryJudgement(Base):
         # so every memory-level row — the overwhelming majority — would stop
         # colliding with itself and the upsert would append instead of replace.
         UniqueConstraint(
+            "user_id",
             "query_text",
             "source_name",
             "external_key",
@@ -622,7 +698,7 @@ class QueryJudgement(Base):
             "verdict <> 'missing' OR rank_at_judgement IS NULL",
             name="ck_query_judgements_missing_has_no_rank",
         ),
-        Index("ix_query_judgements_query_text", "query_text"),
+        Index("ix_query_judgements_query_text", "user_id", "query_text"),
     )
 
 
@@ -683,6 +759,16 @@ class Entity(Base):
 
     __tablename__ = "entities"
 
+    # M11.1. Every row belongs to somebody; row-level security compares this
+    # against `app.current_user_id` and the server default supplies it, which is
+    # why no `INSERT` in this codebase mentions it. See `adapters/db/scoping`.
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_entities_user_id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("memos_current_user_id()"),
+    )
+
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     # The surface form as first seen. Kept alongside the canonical form because
     # losing what the text actually said loses the evidence for any later
@@ -713,7 +799,7 @@ class Entity(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("canonical_name", "type", name="uq_entities_canonical_type"),
+        UniqueConstraint("user_id", "canonical_name", "type", name="uq_entities_canonical_type"),
         # An entity merged into itself is unreachable through any read that
         # follows the pointer, and would loop one that followed it repeatedly.
         CheckConstraint(
@@ -758,6 +844,16 @@ class EntityMention(Base):
     """
 
     __tablename__ = "entity_mentions"
+
+    # M11.1. Every row belongs to somebody; row-level security compares this
+    # against `app.current_user_id` and the server default supplies it, which is
+    # why no `INSERT` in this codebase mentions it. See `adapters/db/scoping`.
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_entity_mentions_user_id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("memos_current_user_id()"),
+    )
 
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     entity_id: Mapped[UUID] = mapped_column(
@@ -815,24 +911,25 @@ class EntityMention(Base):
 # is a sequential scan of the mentions table on every job.
 Index(
     "ix_entity_mentions_memory_version",
+    EntityMention.user_id,
     EntityMention.memory_id,
     EntityMention.extractor_version,
 )
 
 # "The twenty most-mentioned entities", and every later traversal that starts
 # from an entity and asks where it was seen.
-Index("ix_entity_mentions_entity", EntityMention.entity_id)
+Index("ix_entity_mentions_entity", EntityMention.user_id, EntityMention.entity_id)
 
 # Resolution's read pattern in M3.2: find the candidates a name might collapse
 # into. Also what makes the duplicate measurement cheap.
-Index("ix_entities_canonical_name", Entity.canonical_name)
+Index("ix_entities_canonical_name", Entity.user_id, Entity.canonical_name)
 
 # Every read of *active* entities filters on this column, which after a
 # resolution run is most reads in the system.
-Index("ix_entities_merged_into", Entity.merged_into_id)
+Index("ix_entities_merged_into", Entity.user_id, Entity.merged_into_id)
 
 # The extraction queue's predicate: memories not yet extracted at this version.
-Index("ix_memories_entity_extractor_version", Memory.entity_extractor_version)
+Index("ix_memories_entity_extractor_version", Memory.user_id, Memory.entity_extractor_version)
 
 
 class MemoryTag(Base):
@@ -1049,6 +1146,16 @@ class EntityRelationship(Base):
 
     __tablename__ = "entity_relationships"
 
+    # M11.1. Every row belongs to somebody; row-level security compares this
+    # against `app.current_user_id` and the server default supplies it, which is
+    # why no `INSERT` in this codebase mentions it. See `adapters/db/scoping`.
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_entity_relationships_user_id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("memos_current_user_id()"),
+    )
+
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     subject_id: Mapped[UUID] = mapped_column(
         _UUID,
@@ -1133,11 +1240,13 @@ class EntityRelationship(Base):
 # to it. Two indexes because direction means the two questions are different.
 Index(
     "ix_entity_relationships_subject",
+    EntityRelationship.user_id,
     EntityRelationship.subject_id,
     EntityRelationship.predicate,
 )
 Index(
     "ix_entity_relationships_object",
+    EntityRelationship.user_id,
     EntityRelationship.object_id,
     EntityRelationship.predicate,
 )
@@ -1145,6 +1254,7 @@ Index(
 # The skip check, and the per-memory delete that replaces a version's output.
 Index(
     "ix_entity_relationships_memory_version",
+    EntityRelationship.user_id,
     EntityRelationship.memory_id,
     EntityRelationship.extractor_version,
 )
@@ -1263,6 +1373,16 @@ class Decision(Base):
 
     __tablename__ = "decisions"
 
+    # M11.1. Every row belongs to somebody; row-level security compares this
+    # against `app.current_user_id` and the server default supplies it, which is
+    # why no `INSERT` in this codebase mentions it. See `adapters/db/scoping`.
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_decisions_user_id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("memos_current_user_id()"),
+    )
+
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     chosen: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1310,7 +1430,7 @@ class Decision(Base):
         ),
         CheckConstraint("length(btrim(question)) > 0", name="ck_decisions_question"),
         CheckConstraint("length(btrim(chosen)) > 0", name="ck_decisions_chosen"),
-        Index("ix_decisions_status_decided_at", "status", "decided_at"),
+        Index("ix_decisions_status_decided_at", "user_id", "status", "decided_at"),
     )
 
 
@@ -2239,6 +2359,16 @@ class Pattern(Base):
 
     __tablename__ = "patterns"
 
+    # M11.1. Every row belongs to somebody; row-level security compares this
+    # against `app.current_user_id` and the server default supplies it, which is
+    # why no `INSERT` in this codebase mentions it. See `adapters/db/scoping`.
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_patterns_user_id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("memos_current_user_id()"),
+    )
+
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     statement: Mapped[str] = mapped_column(Text, nullable=False)
     kind: Mapped[str] = mapped_column(Text, nullable=False)
@@ -2299,9 +2429,9 @@ class Pattern(Base):
             name="ck_patterns_observation_order",
         ),
         UniqueConstraint(
-            "detector", "subject_key", name="uq_patterns_detector_subject"
+            "user_id", "detector", "subject_key", name="uq_patterns_detector_subject"
         ),
-        Index("ix_patterns_kind", "kind"),
+        Index("ix_patterns_kind", "user_id", "kind"),
     )
 
 
@@ -2801,6 +2931,16 @@ class UserModelFacet(Base):
 
     __tablename__ = "user_model_facets"
 
+    # M11.1. Every row belongs to somebody; row-level security compares this
+    # against `app.current_user_id` and the server default supplies it, which is
+    # why no `INSERT` in this codebase mentions it. See `adapters/db/scoping`.
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_user_model_facets_user_id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("memos_current_user_id()"),
+    )
+
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     dimension: Mapped[str] = mapped_column(Text, nullable=False)
     statement: Mapped[str] = mapped_column(Text, nullable=False)
@@ -2890,6 +3030,7 @@ class UserModelFacet(Base):
         ),
         Index(
             "ix_user_model_facets_live",
+            "user_id",
             "dimension",
             postgresql_where=text("superseded_at IS NULL AND dismissed_at IS NULL"),
         ),
@@ -2898,6 +3039,7 @@ class UserModelFacet(Base):
         # inserting a twin, and supersedes it only if the statement moved.
         Index(
             "uq_user_model_facets_live_subject",
+            "user_id",
             "detector",
             "subject_key",
             unique=True,
@@ -2909,6 +3051,7 @@ class UserModelFacet(Base):
         # rather than by dimension, with a range predicate on this column.
         Index(
             "ix_user_model_facets_superseded_at",
+            "user_id",
             "superseded_at",
             postgresql_where=text("superseded_at IS NOT NULL"),
         ),
@@ -2980,6 +3123,16 @@ class ChatSession(Base):
 
     __tablename__ = "chat_sessions"
 
+    # M11.1. Every row belongs to somebody; row-level security compares this
+    # against `app.current_user_id` and the server default supplies it, which is
+    # why no `INSERT` in this codebase mentions it. See `adapters/db/scoping`.
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_chat_sessions_user_id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("memos_current_user_id()"),
+    )
+
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     # Derived from the first user message. Null for a session whose first message
     # was whitespace-shaped, which the rail renders as "untitled" rather than
@@ -3001,6 +3154,7 @@ class ChatSession(Base):
         # The rail's only read: unarchived, newest activity first.
         Index(
             "ix_chat_sessions_live",
+            "user_id",
             "last_activity",
             postgresql_where=text("archived_at IS NULL"),
         ),
@@ -3042,6 +3196,16 @@ class ChatMessage(Base):
     """
 
     __tablename__ = "chat_messages"
+
+    # M11.1. Every row belongs to somebody; row-level security compares this
+    # against `app.current_user_id` and the server default supplies it, which is
+    # why no `INSERT` in this codebase mentions it. See `adapters/db/scoping`.
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_chat_messages_user_id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("memos_current_user_id()"),
+    )
 
     id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
     session_id: Mapped[UUID] = mapped_column(
@@ -3185,8 +3349,8 @@ class ChatMessage(Base):
             name="ck_chat_messages_only_user_corrects",
         ),
         # The session's own read, in order.
-        Index("ix_chat_messages_session", "session_id", "ordinal"),
-        Index("ix_chat_messages_created_at", "created_at"),
+        Index("ix_chat_messages_session", "user_id", "session_id", "ordinal"),
+        Index("ix_chat_messages_created_at", "user_id", "created_at"),
         # "Has this turn been superseded by a correction?", asked once per rendered
         # message. Partial, because the column is null on nearly every row.
         Index(
@@ -3198,6 +3362,7 @@ class ChatMessage(Base):
         # what resolves a message to its memory on read.
         Index(
             "ix_chat_messages_external_key",
+            "user_id",
             "external_key",
             postgresql_where=text("external_key IS NOT NULL"),
         ),

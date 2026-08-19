@@ -25,6 +25,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request, Response, status
 
 from memoryos.adapters.db import models
+from memoryos.adapters.db.scoping import CURRENT_USER_ID
 from memoryos.application import auth
 from memoryos.container import Container
 
@@ -85,9 +86,20 @@ async def require_session(request: Request) -> models.User | None:
         if found is None:
             raise Unauthenticated()
         _, user = found
-        # Stashed so a route that wants the user does not repeat the lookup.
-        request.state.user = user
-        return user
+
+    # **M11.1: this is where the request becomes scoped.** Everything the route
+    # goes on to do — through fifty-nine modules that have never heard of a
+    # user — runs with `app.current_user_id` set to this one, because every
+    # transaction reads it from here. Set after the lookup rather than before,
+    # since the lookup itself reads `users` and `sessions`, which are the two
+    # tables that cannot be scoped.
+    #
+    # No reset: Starlette gives each request its own context, so there is
+    # nothing to leak into.
+    CURRENT_USER_ID.set(user.id)
+    # Stashed so a route that wants the user does not repeat the lookup.
+    request.state.user = user
+    return user
 
 
 def current_user(request: Request) -> models.User:

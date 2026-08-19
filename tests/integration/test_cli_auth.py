@@ -17,6 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from memoryos import cli
 from memoryos.adapters.db import models
 
+# The suite's own fixture account exists in every test as of M11.1 — scoping
+# needs somebody to be — so these assertions name the address the CLI made
+# rather than counting rows in `users`.
+
 pytestmark = pytest.mark.integration
 
 EMAIL = "cli@example.invalid"
@@ -56,8 +60,9 @@ async def test_create_user_prompts_twice_and_creates_the_account(
 
     assert code == 0
     assert not answers, "both prompts should have been consumed"
-    user = (await session.execute(select(models.User))).scalar_one()
-    assert user.email == EMAIL
+    user = (
+        await session.execute(select(models.User).where(models.User.email == EMAIL))
+    ).scalar_one()
     # The hash, not the password. Asserted because it is the whole point.
     assert GOOD not in user.password_hash
     assert user.password_hash.startswith("$argon2id$")
@@ -74,7 +79,9 @@ async def test_mismatched_confirmation_creates_nothing(
     answers.extend([GOOD, "something else entirely"])
 
     assert run_cli(["auth", "create-user", "--email", EMAIL]) == 1
-    assert (await session.execute(select(models.User))).first() is None
+    assert (
+        await session.execute(select(models.User).where(models.User.email == EMAIL))
+    ).first() is None
 
 
 async def test_a_short_password_is_refused_before_anything_is_written(
@@ -83,17 +90,20 @@ async def test_a_short_password_is_refused_before_anything_is_written(
     answers.append("short")
 
     assert run_cli(["auth", "create-user", "--email", EMAIL]) == 1
-    assert (await session.execute(select(models.User))).first() is None
+    assert (
+        await session.execute(select(models.User).where(models.User.email == EMAIL))
+    ).first() is None
 
 
-async def test_a_second_account_is_refused(
+async def test_a_second_account_is_allowed_and_a_repeated_address_is_not(
     settings: object, clean_database: None, answers: list[str], session: AsyncSession
 ) -> None:
-    answers.extend([GOOD, GOOD, GOOD, GOOD])
+    answers.extend([GOOD, GOOD, GOOD, GOOD, GOOD, GOOD])
     assert run_cli(["auth", "create-user", "--email", EMAIL]) == 0
-
-    assert run_cli(["auth", "create-user", "--email", "other@example.invalid"]) == 1
-    assert len((await session.execute(select(models.User))).scalars().all()) == 1
+    # M11.1: a second account is the supported case now that rows have owners.
+    assert run_cli(["auth", "create-user", "--email", "other@example.invalid"]) == 0
+    # The same address twice is still refused.
+    assert run_cli(["auth", "create-user", "--email", EMAIL]) == 1
 
 
 async def test_reset_password_changes_the_hash_and_revokes_sessions(
@@ -101,12 +111,16 @@ async def test_reset_password_changes_the_hash_and_revokes_sessions(
 ) -> None:
     answers.extend([GOOD, GOOD, "a different long password", "a different long password"])
     assert run_cli(["auth", "create-user", "--email", EMAIL]) == 0
-    before = (await session.execute(select(models.User))).scalar_one().password_hash
+    before = (
+        await session.execute(select(models.User).where(models.User.email == EMAIL))
+    ).scalar_one().password_hash
 
     assert run_cli(["auth", "reset-password", "--email", EMAIL]) == 0
 
     session.expire_all()
-    after = (await session.execute(select(models.User))).scalar_one().password_hash
+    after = (
+        await session.execute(select(models.User).where(models.User.email == EMAIL))
+    ).scalar_one().password_hash
     assert after != before
 
 

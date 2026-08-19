@@ -29,6 +29,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
+from memoryos.adapters.db.scoping import scoped_to
 from memoryos.api.security import (
     SESSION_COOKIE,
     clear_session_cookie,
@@ -180,6 +181,88 @@ async def login(
         max_age_seconds=int(auth.SESSION_TTL.total_seconds()),
     )
     logger.info("auth.login.ok", user_id=str(out.id))
+    return out
+
+
+class RegisterIn(BaseModel):
+    email: str
+    password: str
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+async def register(
+    body: RegisterIn,
+    request: Request,
+    container: ContainerDep,
+    limiter: LimiterDep,
+) -> UserOut:
+    """Create an account, if this deployment allows it.
+
+    **404 rather than 403 when registration is off.** A 403 confirms the
+    endpoint exists and is merely closed, which tells somebody probing exactly
+    what to come back for; a deployment with registration disabled should look
+    like a deployment that never had it.
+
+    Rate limited on the same counter as login. Registration is the other way to
+    spend argon2 time at an attacker's chosen rate, and leaving it uncounted
+    would put the hole back next to the door that was just closed.
+
+    **Creating the account creates its sources**, inside `scoped_to` so the rows
+    land owned by the user being created rather than by whoever is asking. A new
+    account sees an empty system, not somebody else's.
+    """
+    if not container.settings.allow_registration:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Not found."
+        )
+
+    key = client_key(request)
+    if limiter.blocked(key):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many attempts. Try again later.",
+            headers={"Retry-After": str(limiter.retry_after(key))},
+        )
+
+    async with container.database.session_factory() as db:
+        try:
+            user = await auth.CreateUser(db, container.password_hasher)(
+                body.email, body.password
+            )
+        except auth.WeakPassword as exc:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+        except auth.EmailAlreadyRegistered as exc:
+            await db.rollback()
+            limiter.record_failure(key)
+            # Deliberately vague, and it costs nothing here: an attacker who can
+            # register can enumerate addresses by trying them, so the honest
+            # mitigation is the rate limit above rather than a coy message.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="That address is already registered.",
+            ) from exc
+
+        out = UserOut(
+            id=str(user.id),
+            email=user.email,
+            created_at=user.created_at,
+            last_login_at=user.last_login_at,
+        )
+        created_id = user.id
+        await db.commit()
+
+    # A second transaction, opened while the new account is the current one:
+    # `SET LOCAL` runs when a transaction begins, so entering `scoped_to` inside
+    # one already in flight would change the context variable and nothing about
+    # the session the insert goes through.
+    with scoped_to(created_id):
+        async with container.database.session_factory.begin() as db:
+            await auth.create_default_sources(db, created_id)
+
+    logger.info("auth.registered", user_id=out.id)
     return out
 
 

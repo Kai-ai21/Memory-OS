@@ -54,7 +54,35 @@ class Settings(BaseSettings):
     )
 
     environment: str = "local"
-    database_url: str = "postgresql+asyncpg://memos:memos@localhost:5433/memos"
+
+    # **The application connects as `memos_app`, which is not a superuser, and
+    # that is not cosmetic.** Row-level security is skipped entirely for
+    # superusers and for any role with BYPASSRLS — `FORCE ROW LEVEL SECURITY`
+    # does not change that. Until M11.1 this pointed at `memos`, the owning
+    # superuser, which means every policy would have been enabled, visible in
+    # `pg_policies`, and enforcing nothing. The role is created by migration
+    # 0032 and holds DML rights and nothing else.
+    database_url: str = "postgresql+asyncpg://memos_app:memos_app@localhost:5433/memos"
+
+    # The owner, used by Alembic and by nothing else. DDL needs privileges the
+    # application must not have, and a migration that ran under the policies it
+    # is in the middle of creating would be unable to see the rows it is
+    # backfilling.
+    database_admin_url: str = "postgresql+asyncpg://memos:memos@localhost:5433/memos"
+
+    # The password migration 0032 gives `memos_app` when it creates it. A fixed
+    # default because a local Postgres bound to localhost with a `memos:memos`
+    # superuser beside it is not made safer by a random one; set it for anything
+    # that is not a laptop.
+    app_db_password: str = "memos_app"
+
+    # **Registration is off unless somebody turns it on.** M11.1 makes a second
+    # account safe, which is not the same as wanting one: the deployment this is
+    # written for is one person on one laptop, and an open registration endpoint
+    # on it is a way for anybody who can reach the port to help themselves to an
+    # account. Off by default, and the accounts that do exist are made with
+    # `memoryos auth create-user` from a shell.
+    allow_registration: bool = False
     # Where the test suite writes. Its own database rather than its own
     # isolation strategy: the integration tests truncate every table, which is
     # the only strategy that survives code under test committing, and pointing
@@ -64,7 +92,10 @@ class Settings(BaseSettings):
     # Compose creates it; `MEMOS_ENVIRONMENT=test` selects it. CI sets neither
     # and is unaffected — its database is disposable, and a second one there
     # would only be a second thing to migrate.
-    test_database_url: str = "postgresql+asyncpg://memos:memos@localhost:5433/memos_test"
+    # `memos_app`, like `database_url`, and for the same reason: a suite that
+    # ran as the superuser would pass every isolation test by not having any
+    # policies applied to it.
+    test_database_url: str = "postgresql+asyncpg://memos_app:memos_app@localhost:5433/memos_test"
     db_echo: bool = False
     # Where artifact bytes live. Local directory for now; the BlobStore port is
     # what lets this become object storage without a use case changing.
@@ -323,6 +354,12 @@ class Settings(BaseSettings):
         """
         if self.environment == "test":
             self.database_url = self.test_database_url
+            # The admin URL follows it. Alembic runs against the test database
+            # too, and a migration pointed at the development one would be the
+            # exact failure this hook exists to prevent — with DDL rights.
+            self.database_admin_url = self.test_database_url.replace(
+                "memos_app:memos_app@", "memos:memos@"
+            )
         return self
 
 
