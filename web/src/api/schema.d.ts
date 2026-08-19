@@ -150,6 +150,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register
+         * @description Create an account, if this deployment allows it.
+         *
+         *     **404 rather than 403 when registration is off.** A 403 confirms the
+         *     endpoint exists and is merely closed, which tells somebody probing exactly
+         *     what to come back for; a deployment with registration disabled should look
+         *     like a deployment that never had it.
+         *
+         *     Rate limited on the same counter as login. Registration is the other way to
+         *     spend argon2 time at an attacker's chosen rate, and leaving it uncounted
+         *     would put the hole back next to the door that was just closed.
+         *
+         *     **Creating the account creates its sources**, inside `scoped_to` so the rows
+         *     land owned by the user being created rather than by whoever is asking. A new
+         *     account sees an empty system, not somebody else's.
+         */
+        post: operations["register_auth_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat": {
         parameters: {
             query?: never;
@@ -3285,6 +3318,13 @@ export interface components {
             /** Uncited */
             uncited: string[];
         };
+        /** RegisterIn */
+        RegisterIn: {
+            /** Email */
+            email: string;
+            /** Password */
+            password: string;
+        };
         /** ReindexAccepted */
         ReindexAccepted: {
             /** Jobs */
@@ -4392,6 +4432,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserOut"];
+                };
+            };
+        };
+    };
+    register_auth_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

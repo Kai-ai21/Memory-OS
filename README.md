@@ -3835,6 +3835,136 @@ produces an account or a login, so a replay that truncated them would lock the
 operator out of their own system with no way back in but the CLI.
 
 
+## User scoping
+
+M11.1. M11.0 put a login on the front door; behind it every row still belonged
+to nobody, so a second account would have read the first one's corpus. This is
+the milestone that makes a second account safe.
+
+### Which mechanism, and why
+
+**Postgres row-level security**, not a repository base class.
+
+The brief offered both. The deciding fact is the shape of this codebase: it has
+**three repository classes and fifty-nine modules that build `select()`
+directly**. "Add the filter to the base class" would therefore have meant
+rewriting the fifty-nine — and the result would still not bind the CLI, the
+worker, a migration, or anybody at a `psql` prompt. A policy binds all of them,
+and it took one column default and one `after_begin` listener.
+
+The listener is the whole application-side cost. `adapters/db/scoping` sets
+`app.current_user_id` with `SET LOCAL` as each transaction opens, from a
+context variable; migration 0032's policies compare `user_id` against it.
+Nothing else in `application/` mentions scoping, and `user_id` has a column
+default of `memos_current_user_id()` so no `INSERT` had to change either.
+
+**Unset is fail-closed in both directions.** With no user in context the GUC is
+empty, the function returns NULL, and `user_id = NULL` is NULL — a `SELECT`
+matches nothing and an `INSERT` fails the NOT NULL. A connection that never says
+who it is gets an empty system rather than everybody's.
+
+### The thing that nearly made it theatre
+
+**The application connected as a superuser.** Row-level security is skipped
+entirely for superusers and for any role holding BYPASSRLS, and `FORCE ROW LEVEL
+SECURITY` does not change that. `docker-compose` creates `memos` as a superuser,
+`.env` pointed `MEMOS_DATABASE_URL` at it, and the first version of this
+milestone had fourteen policies enabled, listed in `pg_policies`, enforcing
+nothing. Everything looked right from the outside.
+
+So migration 0032 creates **`memos_app`**: `NOSUPERUSER`, `NOBYPASSRLS`, and the
+role the application, the CLI and the worker all connect as. Alembic keeps using
+the owner through `MEMOS_DATABASE_ADMIN_URL`, because DDL needs privileges the
+application must not have and because 0032's backfill has to see rows the
+policies it is creating would hide.
+
+`tests/integration/test_user_scoping.py` asserts `rolsuper is False` for exactly
+this reason. Without that line the other tests would pass on a superuser
+connection by not having any policies applied to them.
+
+**`memos_app` owns the tables, and `FORCE` is what makes that safe.** `replay`
+is an application command that does DDL — it drops inbound foreign keys, builds
+a corpus in a shadow schema and swaps the tables in — so it needs ownership.
+An owner is normally exempt from its own policies; `FORCE ROW LEVEL SECURITY`
+removes that exemption, so `memos_app` owns these tables and is still filtered
+by them.
+
+What that concedes, stated plainly: **a process holding the application's
+credentials could `ALTER TABLE ... NO FORCE ROW LEVEL SECURITY` and turn its own
+scoping off.** The boundary this milestone defends is *forgotten application
+code*, not *deliberate action by something already holding the connection
+string* — which could in any case `SET app.current_user_id` to any value it
+liked.
+
+### The graph
+
+Neo4j Community Edition has **no row-level security and no second database**, so
+isolation there is a property every query carries rather than something the
+server enforces. Every node is merged with `user_id` in its identity, every edge
+sets it, and every read filters on it.
+
+**What that does not protect:**
+
+- **It is application-enforced, not database-enforced.** A Cypher query written
+  tomorrow that forgets the filter will silently read across accounts, and
+  nothing will fail. This is exactly the property Postgres gives for free and
+  Neo4j cannot, and it is the reason the Postgres side is worth the effort
+  rather than both being done the same way.
+- **Anyone who can reach Bolt reads everything.** `cypher-shell` and the browser
+  at :7474 have no notion of `app.current_user_id`.
+- **The scoping is only as good as the projection.** The graph is rebuilt from
+  Postgres, so a node whose `user_id` is wrong stays wrong until the next
+  rebuild.
+- **`user_id` is stripped from projected properties on read**, so `graph verify`
+  compares like with like. That means a node's owner is not part of what
+  verification checks — a mis-owned node passes verification.
+
+The mitigation available today is that the graph is a projection: `memoryos
+graph rebuild` reconstructs it from correctly-scoped Postgres rows. The mitigation
+*not* available is a per-user database, which is an Enterprise feature.
+
+### Registration
+
+`POST /auth/register`, behind `MEMOS_ALLOW_REGISTRATION`, **off by default**.
+Creating an account creates its default sources — `chat` and `uploads` — so a
+new user sees an empty, working system rather than an empty, broken one.
+
+Registration answers **404 when disabled**, not 403: a 403 confirms the endpoint
+exists and is merely closed, and a deployment with registration off should look
+like one that never had it. It shares the login rate limiter, because it is the
+other way to spend argon2 time at an attacker's chosen rate.
+
+### The worker is per account
+
+`jobs` is scoped like everything else, so a worker sees only the queue of
+whoever it runs as. With more than one account you run more than one worker:
+
+```bash
+memoryos --user a@example.com worker &
+memoryos --user b@example.com worker &
+```
+
+The alternative — one worker claiming across users — needs the claim to escape
+the policy, and the only ways to do that are a `SECURITY DEFINER` function or a
+BYPASSRLS role. Both put a hole in the thing this milestone just built to save
+starting a second process.
+
+Every other CLI command is scoped too. With one account it is inferred; with
+more than one, `--user EMAIL` is required and the error lists them.
+
+### What is not scoped, and why
+
+| Table | Why |
+|---|---|
+| `users`, `sessions` | Identity. A login reads a user row *before* it knows which user it is, so identity cannot be scoped by identity. |
+| `raw_artifacts` | Content-addressed. A hash is a hash; two users who store the same bytes store them once. |
+| `embedding_cache`, `context_cache` | Keyed by content hash for the same reason. |
+| `events` | The M6 ingress log, which predates accounts and is not read per user. |
+
+`TRUNCATE` is the one operation policies do not filter — it is table-level, not
+row-level — so a scoped rebuild deletes rather than truncates. There is a test
+for that.
+
 ## Clients
 
 M6.2 gets real events from where the work happens and puts the context back

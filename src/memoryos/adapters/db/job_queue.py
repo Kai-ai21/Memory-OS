@@ -40,7 +40,13 @@ from memoryos.domain.jobs import Job, JobSpec, JobStatus, JobType
 # predicate here targets that index specifically, so a primary-key collision
 # still raises instead of being silently swallowed as a duplicate.
 _DEDUPE_INDEX_WHERE = text("dedupe_key IS NOT NULL AND status IN ('pending', 'running')")
-_DEDUPE_INDEX_ELEMENTS = ["job_type", "dedupe_key"]
+# **`user_id` leads, because M11.1 rebuilt the index that way.** A partial
+# unique cannot be named as a constraint, so `ON CONFLICT` has to restate the
+# index's columns — and a restatement that has drifted from the index does not
+# fail a type check or a review, it fails at runtime with "no unique or
+# exclusion constraint matching the ON CONFLICT specification" the first time
+# something enqueues.
+_DEDUPE_INDEX_ELEMENTS = ["user_id", "job_type", "dedupe_key"]
 
 _JOB_COLUMNS = models.Job.__table__.c
 
@@ -264,7 +270,6 @@ class PostgresJobQueue(JobQueue):
 
         stmt = (
             update(models.Job)
-            .where(models.Job.id.in_(expired.scalar_subquery()))
             .values(
                 status=case(
                     (exhausted, JobStatus.FAILED.value), else_=JobStatus.PENDING.value
@@ -279,7 +284,22 @@ class PostgresJobQueue(JobQueue):
         )
 
         async with self._sessions.begin() as session:
-            result = cast("CursorResult[Any]", await session.execute(stmt))
+            # **Two statements rather than a scalar subquery, and M11.1 is why.**
+            # `UPDATE ... WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED LIMIT n)`
+            # stopped respecting `n` once `jobs` gained a row-level policy: the
+            # policy is applied as an extra qualifier, the planner is free to
+            # pull the subquery up, and the LIMIT lands somewhere that is no
+            # longer a cap on the rows the UPDATE touches. Reading the ids first
+            # makes the cap a fact about a Python list instead of a hope about a
+            # plan, and costs one extra round trip on a path that runs once a
+            # minute.
+            ids = (await session.execute(expired)).scalars().all()
+            if not ids:
+                return 0
+            result = cast(
+                "CursorResult[Any]",
+                await session.execute(stmt.where(models.Job.id.in_(ids))),
+            )
             return result.rowcount
 
     async def _fenced_update(self, job_id: UUID, worker_id: str, **values: Any) -> bool:

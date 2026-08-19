@@ -33,8 +33,11 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memoryos.adapters.db import models
+from memoryos.application.attachments import UPLOAD_SOURCE_NAME
+from memoryos.application.chat import CHAT_SOURCE_NAME
 from memoryos.application.ports import PasswordHasher
 from memoryos.domain.ids import new_id
+from memoryos.domain.values import SourceKind
 
 # Long enough that a login is a rare event on a machine somebody uses daily, and
 # short enough that a laptop lost and never noticed stops working.
@@ -55,14 +58,21 @@ class WeakPassword(ValueError):
     """The password is shorter than `MIN_PASSWORD_LENGTH`."""
 
 
-class UserAlreadyExists(RuntimeError):
-    """A second account was requested. This system holds one."""
+class EmailAlreadyRegistered(RuntimeError):
+    """That address already has an account.
+
+    **M11.1 replaced `UserAlreadyExists` with this**, and the change is the
+    milestone in one class. M11.0 refused a *second account of any kind*,
+    because nothing was scoped and a second account would have read the first
+    one's corpus. Every row now has an owner and a policy that enforces it, so
+    more than one account is safe — and the only thing left to refuse is two
+    accounts claiming the same address.
+    """
 
     def __init__(self, email: str) -> None:
         super().__init__(
-            f"An account already exists for {email}. Memory OS is single-user by "
-            f"design; use `memoryos auth reset-password --email {email}` to change "
-            "its password."
+            f"An account already exists for {email}. Use "
+            f"`memoryos auth reset-password --email {email}` to change its password."
         )
         self.email = email
 
@@ -119,13 +129,18 @@ class CreateUser:
                 f"that one is {len(password)}."
             )
 
-        existing = (await self._session.execute(select(models.User))).scalars().first()
+        address = normalise_email(email)
+        existing = (
+            await self._session.execute(
+                select(models.User).where(models.User.email == address)
+            )
+        ).scalar_one_or_none()
         if existing is not None:
-            raise UserAlreadyExists(existing.email)
+            raise EmailAlreadyRegistered(existing.email)
 
         user = models.User(
             id=new_id(),
-            email=normalise_email(email),
+            email=address,
             password_hash=self._hasher.hash(password),
         )
         self._session.add(user)
@@ -292,3 +307,37 @@ async def revoke_session(session: AsyncSession, token: str) -> bool:
         .returning(models.UserSession.id)
     )
     return result.first() is not None
+
+
+async def create_default_sources(session: AsyncSession, user_id: UUID) -> None:
+    """Give a new account the sources it needs to be usable.
+
+    **A new user sees an empty system, not somebody else's**, and "empty" here
+    has to mean *usable and empty* rather than *broken*. Two singletons: `chat`,
+    which every message you type is filed under, and `uploads`, which every
+    attachment is. Both are created lazily elsewhere with `ON CONFLICT DO
+    NOTHING` and would appear on first use anyway — doing it here means a new
+    account's `sources` page is correct before it is touched rather than after.
+
+    Written inside `scoped_to(user_id)` by the caller, so the row lands with the
+    right owner through the same column default every other insert uses. The
+    explicit `user_id` here is belt and braces: this is the one insert in the
+    codebase that runs while creating the user it belongs to, and being wrong
+    about it is a row nobody can see.
+    """
+    defaults = (
+        (SourceKind.CHAT, CHAT_SOURCE_NAME),
+        (SourceKind.UPLOAD, UPLOAD_SOURCE_NAME),
+    )
+    for kind, name in defaults:
+        session.add(
+            models.Source(
+                id=new_id(),
+                user_id=user_id,
+                kind=kind.value,
+                name=name,
+                config={},
+                cursor={},
+            )
+        )
+    await session.flush()

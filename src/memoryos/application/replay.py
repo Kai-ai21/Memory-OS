@@ -117,6 +117,30 @@ SOURCE_OF_TRUTH_TABLES: frozenset[str] = frozenset(
 # truncation and writes them back afterwards. Classified user-authored because
 # that is what it is; protected by a snapshot because a classification cannot
 # outvote a foreign key.
+# The tables M11.1 gave a `user_id` and a row-level policy. Named here rather
+# than only in migration 0032 because the shadow workspace has to re-apply the
+# policies after a swap-in, and a second hand-kept copy of this list is a list
+# that goes stale the first time somebody adds a table.
+SCOPED_TABLES: frozenset[str] = frozenset(
+    {
+        "sources",
+        "memories",
+        "memory_chunks",
+        "ingestion_events",
+        "entities",
+        "entity_mentions",
+        "entity_relationships",
+        "decisions",
+        "query_judgements",
+        "chat_sessions",
+        "chat_messages",
+        "jobs",
+        "patterns",
+        "user_model_facets",
+    }
+)
+
+
 USER_AUTHORED_TABLES: frozenset[str] = frozenset(
     {
         # M11.0's two, and the least arguable entries in this set. Nothing in

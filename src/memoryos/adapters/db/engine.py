@@ -8,6 +8,12 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+# Imported for its side effect: the module registers the `after_begin` listener
+# that sets `app.current_user_id` on every transaction. Imported here because
+# every session in this application is built from this module, so there is no
+# way to obtain one without having loaded the thing that scopes it.
+from memoryos.adapters.db import scoping as _scoping  # noqa: F401
+
 
 @dataclass(slots=True)
 class Database:

@@ -25,7 +25,7 @@ _settings = get_settings()
 def run_migrations_offline() -> None:
     """Emit SQL to stdout instead of running it against a database."""
     context.configure(
-        url=_settings.database_url,
+        url=_settings.database_admin_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -54,7 +54,10 @@ async def run_async_migrations() -> None:
     # `set_main_option`, which would run it through ConfigParser interpolation
     # and choke on a '%' in a password.
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = _settings.database_url
+    # **The owner, not the application role.** DDL needs privileges the app
+    # must not have, and 0032's backfill has to see rows that the policies it
+    # is creating would hide from `memos_app`.
+    configuration["sqlalchemy.url"] = _settings.database_admin_url
 
     connectable = async_engine_from_config(
         configuration,

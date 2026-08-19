@@ -35,6 +35,7 @@ from memoryos.adapters.db import models
 from memoryos.adapters.db.engine import Database
 from memoryos.adapters.db.job_queue import enqueue_in
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
+from memoryos.adapters.db.scoping import scoped_to
 from memoryos.adapters.extraction.llm import ExtractionStats
 from memoryos.adapters.graph.schema import SCHEMA_VERSION
 from memoryos.adapters.llm.errors import MissingApiKey, ModelNotAvailable
@@ -77,10 +78,11 @@ from memoryos.application.agent.verify import VerificationResult
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
 from memoryos.application.auth import (
     MIN_PASSWORD_LENGTH,
+    EmailAlreadyRegistered,
     NoSuchUser,
     ResetPassword,
-    UserAlreadyExists,
     WeakPassword,
+    create_default_sources,
 )
 from memoryos.application.auth import CreateUser as AuthCreateUser
 from memoryos.application.backfill import (
@@ -186,6 +188,20 @@ from memoryos.logging import configure_logging
 async def run_worker(
     settings: Settings, *, lease_seconds: float, drain: bool, only: str | None
 ) -> None:
+    """Drain the queue for one account.
+
+    **One worker, one account, and that is a real constraint rather than a
+    simplification.** `jobs` is scoped like everything else, so a worker sees
+    only the queue of whoever it is running as — which is what stops a handler
+    from reading one user's memory while writing another's. With more than one
+    account you run more than one worker: `memoryos --user a@… worker` beside
+    `memoryos --user b@… worker`.
+
+    The alternative — one worker claiming across users — needs the claim to
+    escape the policy, and the only ways to do that are a `SECURITY DEFINER`
+    function or a BYPASSRLS role. Both put a hole in the thing this milestone
+    just built, to save starting a second process.
+    """
     container = Container.build(settings)
     try:
         worker = Worker(
@@ -5811,6 +5827,13 @@ async def run_decisions_reject(settings: Settings, *, suggestion_id: str) -> int
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="memoryos", description="Memory Intelligence OS")
+    # M11.1. Global rather than per-command: every command touches scoped data.
+    parser.add_argument(
+        "--user",
+        metavar="EMAIL",
+        help="which account to act as; only needed when there is more than one",
+    )
+
     commands = parser.add_subparsers(dest="command", required=True)
 
     # M11.0. Both subcommands prompt; neither takes a password as an argument,
@@ -7100,14 +7123,26 @@ async def run_auth_create_user(settings: Settings, *, email: str) -> int:
                 user = await AuthCreateUser(session, container.password_hasher)(
                     email, password
                 )
-            except UserAlreadyExists as exc:
+            except EmailAlreadyRegistered as exc:
                 print(str(exc))
                 return 1
             except WeakPassword as exc:
                 print(str(exc))
                 return 1
-            print(f"created {user.email}")
-            return 0
+            created_id, created_email = user.id, user.email
+
+        # **A second transaction, and it has to be.** The GUC that row-level
+        # security reads is set with `SET LOCAL` when a transaction opens, so
+        # entering `scoped_to` inside one that is already running changes the
+        # context variable and nothing about the database session. The sources
+        # belong to the account just created, so they are written by a
+        # transaction that began while that account was the current one.
+        with scoped_to(created_id):
+            async with container.database.session_factory.begin() as session:
+                await create_default_sources(session, created_id)
+
+        print(f"created {created_email}")
+        return 0
     finally:
         await container.dispose()
 
@@ -7139,10 +7174,74 @@ async def run_auth_reset_password(settings: Settings, *, email: str) -> int:
         await container.dispose()
 
 
+def resolve_cli_user(settings: Settings, email: str | None) -> UUID | None:
+    """Which account this invocation runs as.
+
+    **The CLI has no session, so it has to be told — or work it out.** With one
+    account there is nothing to choose and asking would be ceremony; with two,
+    guessing is how somebody ingests their corpus into the wrong one. So: named
+    address wins, a single account is assumed, and more than one account with no
+    `--user` is an error that lists them.
+
+    `None` is returned only for `auth create-user` on an empty database, where
+    there is legitimately nobody to be yet.
+    """
+    async def _resolve() -> UUID | None:
+        database = Database.from_url(settings.database_url)
+        try:
+            async with database.session_factory() as session:
+                if email:
+                    found = (
+                        await session.execute(
+                            select(models.User).where(
+                                models.User.email == email.strip().lower()
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if found is None:
+                        raise SystemExit(f"No account for {email}.")
+                    return found.id
+                users = (await session.execute(select(models.User))).scalars().all()
+                if not users:
+                    return None
+                if len(users) > 1:
+                    listed = ", ".join(sorted(user.email for user in users))
+                    raise SystemExit(
+                        "This database holds more than one account, so every "
+                        "command has to say which one it is for. Pass "
+                        f"`--user EMAIL`. Accounts: {listed}."
+                    )
+                return users[0].id
+        finally:
+            await database.dispose()
+
+    return asyncio.run(_resolve())
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = get_settings()
     configure_logging(settings)
+
+    # **Everything below runs inside this.** Every scoped table is behind a
+    # row-level policy reading `app.current_user_id`, which is set from this
+    # context variable on each transaction — so a CLI invocation that did not
+    # set it would see an empty corpus and be unable to write to it. Wrapping
+    # `_dispatch` rather than each command means a command added later is
+    # scoped without anybody remembering to.
+    # `auth` is exempt, and it has to be: `create-user` runs when there may be
+    # no account at all, and both subcommands name the account they act on with
+    # `--email`. Requiring them to also choose an existing one to *be* would
+    # make creating the second account impossible.
+    if args.command == "auth":
+        return _dispatch(args, settings)
+
+    user_id = resolve_cli_user(settings, getattr(args, "user", None))
+    with scoped_to(user_id):
+        return _dispatch(args, settings)
+
+
+def _dispatch(args: argparse.Namespace, settings: Settings) -> int:
 
     if args.command == "auth":
         if args.auth_command == "create-user":

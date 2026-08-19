@@ -4460,6 +4460,24 @@
         "title": "ReflectionOut",
         "type": "object"
       },
+      "RegisterIn": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "RegisterIn",
+        "type": "object"
+      },
       "ReindexAccepted": {
         "properties": {
           "jobs": {
@@ -6812,6 +6830,48 @@
           }
         },
         "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "description": "Create an account, if this deployment allows it.\n\n**404 rather than 403 when registration is off.** A 403 confirms the\nendpoint exists and is merely closed, which tells somebody probing exactly\nwhat to come back for; a deployment with registration disabled should look\nlike a deployment that never had it.\n\nRate limited on the same counter as login. Registration is the other way to\nspend argon2 time at an attacker's chosen rate, and leaving it uncounted\nwould put the hole back next to the door that was just closed.\n\n**Creating the account creates its sources**, inside `scoped_to` so the rows\nland owned by the user being created rather than by whoever is asking. A new\naccount sees an empty system, not somebody else's.",
+        "operationId": "register_auth_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
         "tags": [
           "auth"
         ]

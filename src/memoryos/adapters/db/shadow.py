@@ -80,8 +80,10 @@ from memoryos.adapters.db.models import Base
 from memoryos.application.ports import ShadowWorkspace
 from memoryos.application.replay import (
     CACHE_TABLE,
+    SCOPED_TABLES,
     SHADOW_TABLES,
     SOURCE_OF_TRUTH_TABLES,
+    USER_AUTHORED_TABLES,
 )
 
 logger = structlog.get_logger(__name__)
@@ -199,6 +201,35 @@ class PostgresShadowSchema(ShadowWorkspace):
                 await connection.execute(
                     text(f'ALTER TABLE {SHADOW_SCHEMA}."{name}" SET SCHEMA {LIVE_SCHEMA}')
                 )
+            # **M11.1: the policies do not travel with the table.** `SET SCHEMA`
+            # moves a table built in the shadow schema, and that table was never
+            # given row-level security — so a swap-in would replace fourteen
+            # protected tables with fourteen unprotected ones, and every user
+            # would silently be able to read every other user's rebuilt corpus.
+            # Nothing would error; the isolation would just be gone.
+            for name in SHADOW_TABLES:
+                if name not in SCOPED_TABLES:
+                    continue
+                await connection.execute(
+                    text(f'ALTER TABLE {LIVE_SCHEMA}."{name}" ENABLE ROW LEVEL SECURITY')
+                )
+                await connection.execute(
+                    text(f'ALTER TABLE {LIVE_SCHEMA}."{name}" FORCE ROW LEVEL SECURITY')
+                )
+                await connection.execute(
+                    text(
+                        f'CREATE POLICY {name}_user_isolation ON {LIVE_SCHEMA}."{name}" '
+                        "USING (user_id = memos_current_user_id()) "
+                        "WITH CHECK (user_id = memos_current_user_id())"
+                    )
+                )
+                await connection.execute(
+                    text(
+                        f'ALTER TABLE {LIVE_SCHEMA}."{name}" '
+                        "ALTER COLUMN user_id SET DEFAULT memos_current_user_id()"
+                    )
+                )
+
             for _table, constraint in inbound:
                 await connection.execute(AddConstraint(constraint))
             await connection.execute(DropSchema(SHADOW_SCHEMA, if_exists=True))
@@ -299,6 +330,14 @@ def _shadow_metadata() -> MetaData:
             return LIVE_SCHEMA
         if target in SOURCE_OF_TRUTH_TABLES:
             return LIVE_SCHEMA
+        # M11.1. `user_id REFERENCES users` now appears on every derived table,
+        # and `users` is user-authored: a replay never rebuilds it, so the
+        # foreign key resolves to the live schema for exactly the same reason a
+        # source-of-truth table does. Checked as a set rather than by naming
+        # `users` here, because the next user-authored table something derived
+        # references should not have to rediscover this.
+        if target in USER_AUTHORED_TABLES:
+            return LIVE_SCHEMA
         raise UnclassifiedTable(
             f"{table.name} references {target}, which is in neither the derived "
             f"nor the source-of-truth set; classify it in application/replay.py"
@@ -309,6 +348,20 @@ def _shadow_metadata() -> MetaData:
     # not instructions: `_create_tables` only issues DDL for tables in the shadow
     # schema, so nothing here can create or alter a live table.
     for name in SOURCE_OF_TRUTH_TABLES:
+        Base.metadata.tables[name].to_metadata(shadow, schema=LIVE_SCHEMA)
+
+    # M11.1: `users` for the same reason, one set along. Every shadowed table
+    # carries `user_id REFERENCES users`, so the definition has to be present
+    # under `public` or the copy has nothing to resolve against — and the copy
+    # is a definition rather than an instruction, exactly as above. Only the
+    # tables something derived actually references are pulled in, which today
+    # is `users` and not `sessions`.
+    referenced_user_authored = {
+        constraint.referred_table.name
+        for name in SHADOW_TABLES
+        for constraint in Base.metadata.tables[name].foreign_key_constraints
+    } & USER_AUTHORED_TABLES
+    for name in sorted(referenced_user_authored):
         Base.metadata.tables[name].to_metadata(shadow, schema=LIVE_SCHEMA)
 
     for name in SHADOW_TABLES:

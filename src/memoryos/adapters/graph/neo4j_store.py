@@ -35,6 +35,7 @@ import structlog
 from neo4j import AsyncDriver, AsyncGraphDatabase
 from neo4j.graph import Node, Path, Relationship
 
+from memoryos.adapters.db.scoping import CURRENT_USER_ID
 from memoryos.adapters.graph.schema import (
     VERSION_LABEL,
     apply_schema,
@@ -91,6 +92,23 @@ class UnknownGraphLabel(RuntimeError):
     something wrote to Neo4j that was not supposed to, and a traversal quietly
     dropping it would hide exactly the thing worth knowing.
     """
+
+
+def _scope() -> str:
+    """The current user, as Neo4j will store it, or a value that matches nothing.
+
+    **Neo4j Community Edition has no row-level security and no second
+    database**, so isolation here is a property every query has to carry rather
+    than something the server enforces. This is the value it carries.
+
+    Unset resolves to a sentinel rather than to NULL or to an empty string,
+    which matters: `MATCH (n {user_id: null})` in Cypher does not mean "no rows",
+    it means the property is unconstrained. A sentinel that no account can ever
+    have is what makes an unscoped connection see nothing instead of everything
+    — the same fail-closed shape as the Postgres side, reached differently.
+    """
+    user_id = CURRENT_USER_ID.get()
+    return str(user_id) if user_id is not None else "no-such-user"
 
 
 class Neo4jGraphStore:
@@ -179,7 +197,7 @@ class Neo4jGraphStore:
         """Project a memory into the graph. Identity only; content stays in Postgres."""
         await self.ensure_schema()
         await self._driver.execute_query(
-            "MERGE (m:Memory {memory_id: $memory_id}) "
+            "MERGE (m:Memory {memory_id: $memory_id, user_id: $user_id}) "
             "SET m.external_key = $external_key, m.kind = $kind, "
             "    m.occurred_at = $occurred_at",
             {
@@ -187,6 +205,7 @@ class Neo4jGraphStore:
                 # so that a person reading the browser at :7474 sees the same id
                 # they would see in Postgres.
                 "memory_id": str(node.memory_id),
+                "user_id": _scope(),
                 "external_key": node.external_key,
                 "kind": node.kind.value,
                 "occurred_at": node.occurred_at,
@@ -197,11 +216,12 @@ class Neo4jGraphStore:
     async def upsert_entity(self, node: EntityNode) -> None:
         await self.ensure_schema()
         await self._driver.execute_query(
-            "MERGE (e:Entity {entity_id: $entity_id}) "
+            "MERGE (e:Entity {entity_id: $entity_id, user_id: $user_id}) "
             "SET e.name = $name, e.canonical_name = $canonical_name, "
             "    e.type = $type, e.confidence = $confidence",
             {
                 "entity_id": str(node.entity_id),
+                "user_id": _scope(),
                 "name": node.name,
                 "canonical_name": node.canonical_name,
                 "type": node.type,
@@ -213,10 +233,11 @@ class Neo4jGraphStore:
     async def upsert_source(self, node: SourceNode) -> None:
         await self.ensure_schema()
         await self._driver.execute_query(
-            "MERGE (s:Source {source_id: $source_id}) "
+            "MERGE (s:Source {source_id: $source_id, user_id: $user_id}) "
             "SET s.name = $name, s.kind = $kind",
             {
                 "source_id": str(node.source_id),
+                "user_id": _scope(),
                 "name": node.name,
                 "kind": node.kind,
             },
@@ -240,6 +261,7 @@ class Neo4jGraphStore:
         await self._driver.execute_query(
             self._link_statement(edge),
             {
+                "user_id": _scope(),
                 "start_key": edge.start.key,
                 "end_key": edge.end.key,
                 "properties": dict(edge.properties),
@@ -284,13 +306,17 @@ class Neo4jGraphStore:
             if names
             else ""
         )
+        # `user_id` is part of both endpoint identities, which is what makes a
+        # cross-user edge unrepresentable rather than merely unwritten: `MERGE`
+        # on an identity that includes the owner cannot attach to somebody
+        # else's node, it creates this user's own.
         return (
             f"MERGE (a:{start_label} "
-            f"{{{identity_property(edge.start.label)}: $start_key}}) "
+            f"{{{identity_property(edge.start.label)}: $start_key, user_id: $user_id}}) "
             f"MERGE (b:{end_label} "
-            f"{{{identity_property(edge.end.label)}: $end_key}}) "
+            f"{{{identity_property(edge.end.label)}: $end_key, user_id: $user_id}}) "
             f"MERGE (a)-[r:{_checked_edge(edge.type)}{identity}]->(b) "
-            f"SET r += $properties"
+            f"SET r += $properties, r.user_id = $user_id"
         )
 
     async def clear(self) -> None:
@@ -309,7 +335,8 @@ class Neo4jGraphStore:
         """
         await self.ensure_schema()
         await self._driver.execute_query(
-            f"MATCH (n) WHERE NOT n:{VERSION_LABEL} DETACH DELETE n",
+            f"MATCH (n) WHERE NOT n:{VERSION_LABEL} AND n.user_id = $user_id DETACH DELETE n",
+            {"user_id": _scope()},
             database_=self._database,
         )
         logger.info("graph.cleared", uri=self._uri)
@@ -338,11 +365,11 @@ class Neo4jGraphStore:
             # which the server deprecates without a variable scope clause — a
             # clause that does not exist before 5.23. `FOREACH` has been the
             # spelling for a delete over a collected list throughout.
-            f"MATCH (n:{checked}) WHERE n.{key} IN $ids "
+            f"MATCH (n:{checked}) WHERE n.{key} IN $ids AND n.user_id = $user_id "
             f"WITH collect(n) AS found, count(n) AS removed "
             f"FOREACH (node IN found | DETACH DELETE node) "
             f"RETURN removed",
-            {"ids": [str(value) for value in ids]},
+            {"ids": [str(value) for value in ids], "user_id": _scope()},
             database_=self._database,
         )
         removed = int(result.records[0]["removed"]) if result.records else 0
@@ -364,11 +391,13 @@ class Neo4jGraphStore:
         await self.ensure_schema()
         result = await self._driver.execute_query(
             "MATCH (m:Memory)-[:MENTIONS]->(e:Entity) "
-            "WHERE m.memory_id IN $memories OR e.entity_id IN $entities "
+            "WHERE m.user_id = $user_id "
+            "AND (m.memory_id IN $memories OR e.entity_id IN $entities) "
             "RETURN DISTINCT m.memory_id AS memory_id, e.entity_id AS entity_id",
             {
                 "memories": [str(value) for value in memory_ids],
                 "entities": [str(value) for value in entity_ids],
+                "user_id": _scope(),
             },
             database_=self._database,
         )
@@ -380,7 +409,8 @@ class Neo4jGraphStore:
     async def all_nodes(self) -> list[GraphNode]:
         await self.ensure_schema()
         result = await self._driver.execute_query(
-            f"MATCH (n) WHERE NOT n:{VERSION_LABEL} RETURN n",
+            f"MATCH (n) WHERE NOT n:{VERSION_LABEL} AND n.user_id = $user_id RETURN n",
+            {"user_id": _scope()},
             database_=self._database,
         )
         return [_node_of(record["n"]) for record in result.records]
@@ -390,7 +420,9 @@ class Neo4jGraphStore:
         result = await self._driver.execute_query(
             f"MATCH (a)-[r]->(b) "
             f"WHERE NOT a:{VERSION_LABEL} AND NOT b:{VERSION_LABEL} "
+            f"AND a.user_id = $user_id AND b.user_id = $user_id "
             f"RETURN a, r, b",
+            {"user_id": _scope()},
             database_=self._database,
         )
         return [
@@ -419,10 +451,10 @@ class Neo4jGraphStore:
             # formatted, because Cypher does not accept a parameter inside
             # `[*1..n]` — the planner needs the bound at plan time. It is an int
             # checked against `MAX_DEPTH` by `_checked_depth` immediately above.
-            "MATCH path = (start:Entity {entity_id: $entity_id})"
+            "MATCH path = (start:Entity {entity_id: $entity_id, user_id: $user_id})"
             f"-[*1..{bounded}]-(other) "
             "RETURN path ORDER BY length(path) LIMIT $limit",
-            {"entity_id": str(entity_id), "limit": limit},
+            {"entity_id": str(entity_id), "limit": limit, "user_id": _scope()},
             database_=self._database,
         )
         return [_path_of(record["path"]) for record in result.records]
@@ -460,7 +492,7 @@ class Neo4jGraphStore:
         # breadth-first walk, which happily revisits its start.
         direct = await self._driver.execute_query(
             "MATCH (m:Memory)-[mention:MENTIONS]->(seed:Entity) "
-            "WHERE seed.entity_id IN $seeds "
+            "WHERE m.user_id = $user_id AND seed.entity_id IN $seeds "
             "RETURN m.memory_id AS memory_id, "
             "       mention.chunk_ordinal AS chunk_ordinal, "
             "       seed.entity_id AS entity_id, "
@@ -473,6 +505,7 @@ class Neo4jGraphStore:
             "LIMIT $limit",
             {
                 "seeds": [str(value) for value in seed_entity_ids],
+                "user_id": _scope(),
                 "limit": limit,
             },
             database_=self._database,
@@ -486,7 +519,7 @@ class Neo4jGraphStore:
             # `MENTIONS|RELATES_TO` rather than an unrestricted walk: `FROM_SOURCE`
             # would make every memory of one source two hops from every other,
             # which is a connection nobody wrote down.
-            "MATCH path = (seed:Entity)"
+            "MATCH path = (seed:Entity {user_id: $user_id})"
             f"-[:MENTIONS|RELATES_TO*1..{bounded}]-(target:Entity) "
             "WHERE seed.entity_id IN $seeds "
             # The seed itself is handled by the query above, where it can be
@@ -501,6 +534,7 @@ class Neo4jGraphStore:
             "  AND all(node IN nodes(path) WHERE "
             "        node.entity_id IS NULL OR NOT node.entity_id IN $exclude) "
             "MATCH (m:Memory)-[mention:MENTIONS]->(target) "
+            "WHERE m.user_id = $user_id "
             "RETURN m.memory_id AS memory_id, "
             "       mention.chunk_ordinal AS chunk_ordinal, "
             "       target.entity_id AS entity_id, "
@@ -513,6 +547,7 @@ class Neo4jGraphStore:
             "LIMIT $limit",
             {
                 "seeds": [str(value) for value in seed_entity_ids],
+                "user_id": _scope(),
                 "exclude": [str(value) for value in exclude_entity_ids],
                 "limit": limit,
             },
@@ -544,9 +579,10 @@ class Neo4jGraphStore:
         """
         await self.verify()
         result = await self._driver.execute_query(
-            f"MATCH (n) WHERE NOT n:{VERSION_LABEL} "
+            f"MATCH (n) WHERE NOT n:{VERSION_LABEL} AND n.user_id = $user_id "
             "UNWIND labels(n) AS label "
             "RETURN label, count(*) AS count ORDER BY label",
+            {"user_id": _scope()},
             database_=self._database,
         )
         return {record["label"]: int(record["count"]) for record in result.records}
@@ -707,8 +743,15 @@ def _properties_of(node: Mapping[str, Any]) -> dict[str, Any]:
     above this module has to know a `neo4j.time.DateTime` from a `datetime` —
     the alternative being that it finds out when one fails to compare against
     the other.
+
+    **`user_id` is dropped on the way out.** M11.1 puts it on every node so that
+    isolation is a property of the data rather than of the queries, but it is
+    scoping metadata and not part of the projection: `graph verify` hashes these
+    properties against what Postgres says the graph should contain, and Postgres
+    describes a memory without saying twice who it belongs to. Leaving it in
+    would make every node diverge from its own source of truth.
     """
-    return {key: _native(value) for key, value in node.items()}
+    return {key: _native(value) for key, value in node.items() if key != "user_id"}
 
 
 def _native(value: Any) -> Any:
