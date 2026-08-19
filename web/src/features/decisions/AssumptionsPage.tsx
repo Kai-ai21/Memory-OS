@@ -52,7 +52,7 @@ export function AssumptionsPage() {
         assumptions
       </SectionHeading>
 
-      <div className="meta flex flex-wrap items-baseline gap-4 text-faint">
+      <div className="meta flex flex-wrap items-baseline gap-4 text-ink-3">
         <span className="text-affirm">{count(data.held)} held</span>
         <span className="text-deny">{count(data.failed)} failed</span>
         <span className="text-accent">{count(data.partially)} partially</span>
@@ -91,10 +91,10 @@ export function AssumptionsPage() {
           not yet evaluated
         </SectionHeading>
         {unevaluated.length === 0 ? (
-          <p className="meta text-faint">Everything has been looked at.</p>
+          <p className="meta text-ink-3">Everything has been looked at.</p>
         ) : (
           <>
-            <p className="meta max-w-prose leading-relaxed text-muted">
+            <p className="meta max-w-prose leading-relaxed text-ink-2">
               Left unevaluated on purpose rather than guessed at. &quot;Nothing has gone
               wrong&quot; is usually evidence that a belief was never exercised, which is a
               different fact from it having held.
@@ -115,7 +115,7 @@ function GroupRow({ group }: { group: AssumptionGroup }) {
   return (
     <li className="border-l-2 border-rule pl-3">
       <div className="flex flex-wrap items-baseline gap-3">
-        <span className="meta-label text-muted">
+        <span className="meta-label text-ink-2">
           {group.members} members · {group.evaluated} evaluated
         </span>
         <Tag>{group.strategy}</Tag>
@@ -151,7 +151,7 @@ function UnevaluatedRow({ row }: { row: AssumptionDetail }) {
       >
         {row.decision_question.slice(0, 40)}
       </Link>
-      <span className="meta w-10 shrink-0 text-right text-faint">
+      <span className="meta w-10 shrink-0 text-right text-ink-3">
         {row.confidence === null ? "—" : row.confidence.toFixed(2)}
       </span>
     </li>

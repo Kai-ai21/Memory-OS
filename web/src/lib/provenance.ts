@@ -61,7 +61,7 @@ export function marker(provenance: string | null | undefined): string {
 
 /** The class that mutes a date the corpus is not sure about. */
 export function dateClass(provenance: string | null | undefined): string {
-  return confidence(provenance) === "stated" ? "text-ink" : "text-muted";
+  return confidence(provenance) === "stated" ? "text-ink" : "text-ink-2";
 }
 
 /** A sentence for the `title` attribute, so the mark is self-explaining. */

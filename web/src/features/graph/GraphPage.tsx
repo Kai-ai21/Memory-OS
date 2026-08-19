@@ -87,7 +87,7 @@ export function GraphPage() {
           </section>
 
           {nodes.length > 0 ? (
-            <section className="glass p-6">
+            <section className="panel p-6">
               <EntityGraph nodes={nodes} edges={edges} />
             </section>
           ) : (
@@ -111,10 +111,10 @@ function Figure({
   empty?: boolean;
 }) {
   return (
-    <div className="glass flex flex-col gap-1 p-4">
+    <div className="panel flex flex-col gap-1 p-4">
       <span className="meta-label">{label}</span>
-      <span className={`figure-value ${empty ? "text-magenta" : "text-cyan"}`}>{value}</span>
-      <span className="meta text-faint">{note}</span>
+      <span className={`figure-value ${empty ? "text-warn" : "text-ink"}`}>{value}</span>
+      <span className="meta text-ink-3">{note}</span>
     </div>
   );
 }
@@ -136,18 +136,18 @@ function GraphEmpty({
 }) {
   return (
     <section
-      className="glass flex flex-col gap-6 border-dashed p-8"
+      className="panel flex flex-col gap-6 border-dashed p-8"
       data-testid="graph-empty"
     >
       <div className="flex flex-col gap-2">
-        <p className="meta-label text-magenta">No graph to draw</p>
+        <p className="meta-label text-warn">No graph to draw</p>
         <h2 className="display text-2xl">Two things are missing, and they are separate.</h2>
       </div>
 
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-1">
           <p className="meta-label-on">the api exposes no entity route</p>
-          <p className="prose-content max-w-prose text-muted">
+          <p className="prose-content max-w-prose text-ink-2">
             The entity layer is in Postgres and projected into Neo4j, and search already
             reads it — when the graph is what put a result in front of you, the
             explanation panel names the route it took. But no HTTP route returns an
@@ -160,7 +160,7 @@ function GraphEmpty({
 
         <div className="flex flex-col gap-1">
           <p className="meta-label-on">and there are no relationships yet</p>
-          <p className="prose-content max-w-prose text-muted">
+          <p className="prose-content max-w-prose text-ink-2">
             {entities === null ? (
               "The corpus figures are not loaded."
             ) : (
@@ -170,7 +170,7 @@ function GraphEmpty({
                   {count(entities)} {entities === 1 ? "entity" : "entities"}
                 </span>{" "}
                 and{" "}
-                <span className="text-magenta">
+                <span className="text-warn">
                   {count(relationships ?? 0)}{" "}
                   {relationships === 1 ? "relationship" : "relationships"}
                 </span>
@@ -184,10 +184,10 @@ function GraphEmpty({
         </div>
       </div>
 
-      <p className="meta text-faint">
+      <p className="meta text-ink-3">
         <code className="kbd">memoryos entities</code> lists what extraction found, with
         the duplicate groups still to resolve.{" "}
-        <Link className="text-cyan underline" to="/corpus">
+        <Link className="text-accent underline" to="/corpus">
           Corpus
         </Link>{" "}
         counts what it has covered.

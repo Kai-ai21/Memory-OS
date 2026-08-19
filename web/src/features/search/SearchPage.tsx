@@ -160,7 +160,7 @@ export function SearchPage() {
             search
           </button>
         </div>
-        <span className="meta text-faint">
+        <span className="meta text-ink-3">
           <span className="kbd">/</span> focuses · <span className="kbd">↓</span> walks the
           results
         </span>
@@ -171,7 +171,7 @@ export function SearchPage() {
       {/* Timing, in small mono. Present always so it is noticed when it moves —
           the point of showing it is to see when something gets slow. */}
       {results.data ? (
-        <div className="meta flex flex-wrap items-baseline justify-end gap-x-4 border-b border-rule pb-3 text-faint">
+        <div className="meta flex flex-wrap items-baseline justify-end gap-x-4 border-b border-rule pb-3 text-ink-3">
           <span data-testid="timing">
             embed {results.data.timing.embed_ms}ms · search {results.data.timing.search_ms}ms ·
             total {results.data.timing.total_ms}ms
@@ -181,7 +181,7 @@ export function SearchPage() {
             {count(results.data.hits.reduce((sum, hit) => sum + hit.matched_chunks.length, 0))}{" "}
             chunks matched
           </span>
-          {state.exact ? <span className="text-cyan">exact scan</span> : null}
+          {state.exact ? <span className="text-accent">exact scan</span> : null}
         </div>
       ) : null}
 
@@ -206,7 +206,7 @@ export function SearchPage() {
           search, so wording matters more than keywords.
         </Empty>
       ) : (
-        <div ref={list} onKeyDown={onArrow} className="flex flex-col gap-4">
+        <div ref={list} onKeyDown={onArrow} className="flex flex-col">
           {results.data?.hits.map((hit, index) => (
             <ResultRow
               key={hit.memory_id}
@@ -283,7 +283,7 @@ function MissingCapture({
             }
           }}
         >
-          <label className="meta-label text-muted" htmlFor="missing-key">
+          <label className="meta-label text-ink-2" htmlFor="missing-key">
             should have ranked
           </label>
           <input
@@ -308,7 +308,7 @@ function MissingCapture({
           ) : null}
         </form>
       )}
-      <p className="meta mt-2 text-faint">
+      <p className="meta mt-2 text-ink-3">
         k is {state.k}
         {state.k === DEFAULT_K ? " (default)" : ""} — a result below it is not missing, only
         unranked.

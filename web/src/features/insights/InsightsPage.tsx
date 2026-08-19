@@ -100,10 +100,10 @@ export function InsightsPage() {
           </Empty>
         ) : null}
         {(patterns.data ?? []).map((pattern) => (
-          <div key={pattern.id} className="glass flex flex-col gap-2 p-5">
+          <div key={pattern.id} className="panel flex flex-col gap-2 p-5">
             <div className="flex items-baseline gap-3">
               <span className="meta-label-on">{pattern.kind}</span>
-              <span className="meta text-faint">
+              <span className="meta text-ink-3">
                 {count(pattern.supporting.length)} supporting ·{" "}
                 {count(pattern.contradicting.length)} against
               </span>
@@ -121,22 +121,22 @@ export function InsightsPage() {
               Reflections require patterns above the confidence threshold, and there are no
               patterns at all yet — so nothing has been a candidate.
             </p>
-            <p className="mt-2 text-faint">
+            <p className="mt-2 text-ink-3">
               This section reports the count and stops. A reflection is a claim about your
               judgement, and a tool that volunteers those is one you stop trusting; they
               are read by going to look, from{" "}
-              <Link className="text-cyan underline" to="/decisions/patterns">
+              <Link className="text-accent underline" to="/decisions/patterns">
                 patterns
               </Link>
               .
             </p>
           </Empty>
         ) : reflections.data ? (
-          <p className="meta text-muted" data-testid="reflection-count">
+          <p className="meta text-ink-2" data-testid="reflection-count">
             {count(reflections.data.length)}{" "}
             {reflections.data.length === 1 ? "reflection has" : "reflections have"} cleared
             the confidence threshold. They are not shown here — see{" "}
-            <Link className="text-cyan underline" to="/decisions/patterns">
+            <Link className="text-accent underline" to="/decisions/patterns">
               patterns
             </Link>
             .
@@ -187,7 +187,7 @@ function Section({
     <section className="flex flex-col gap-4">
       <div className="flex items-baseline justify-between border-b border-rule pb-2">
         <h2 className="meta-label-on">{label}</h2>
-        {right ? <span className="meta text-faint">{right}</span> : null}
+        {right ? <span className="meta text-ink-3">{right}</span> : null}
       </div>
       {children}
     </section>
@@ -204,9 +204,9 @@ function Section({
  */
 function Empty({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="glass flex flex-col gap-3 p-6" data-testid="empty">
+    <div className="panel flex flex-col gap-3 p-6" data-testid="empty">
       <h3 className="display text-2xl">{title}</h3>
-      <div className="prose-content max-w-prose text-muted">{children}</div>
+      <div className="prose-content max-w-prose text-ink-2">{children}</div>
     </div>
   );
 }
@@ -215,7 +215,10 @@ function Action({ to, children }: { to: string; children: React.ReactNode }) {
   return (
     <Link
       to={to}
-      className="meta-label-on mt-4 inline-flex items-center gap-2 hover:underline"
+      /* A link, so it takes the accent — rule 1 working in the direction that
+         gives rather than withholds. This is the one thing on the panel you can
+         actually do, and it should be the one blue thing on it. */
+      className="meta-label mt-4 inline-flex items-center gap-2 font-bold text-accent hover:underline"
     >
       {children} <span aria-hidden>→</span>
     </Link>
@@ -262,19 +265,22 @@ function Dimension({
             insufficient evidence
           </span>
         ) : (
-          <span className="meta shrink-0 text-cyan">
+          /* The one populated row, in accent — the brief asks for it and it
+             survives rule 1 because a derived dimension is the only row here
+             you can open. */
+          <span className="meta shrink-0 font-medium text-accent" data-testid="derived">
             {count(facets)} {facets === 1 ? "facet" : "facets"}
           </span>
         )}
       </div>
       {empty ? (
-        <p className="meta max-w-prose text-faint" data-testid="gap">
+        <p className="meta max-w-prose text-ink-3" data-testid="gap">
           {gap}
           {bestSupport > 0 ? (
             <>
               {" "}
               The closest candidate reached{" "}
-              <span className="text-muted">
+              <span className="text-ink-2">
                 {bestSupport} distinct observation{bestSupport === 1 ? "" : "s"}
               </span>
               .

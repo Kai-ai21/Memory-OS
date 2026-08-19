@@ -7,8 +7,10 @@ command gets written in it; the commands here do not need one.
 import argparse
 import asyncio
 import contextlib
+import getpass
 import json
 import math
+import re
 import signal
 import sys
 import textwrap
@@ -73,6 +75,14 @@ from memoryos.application.agent.evaluate import Report, TrajectoryScore
 from memoryos.application.agent.planner import Trajectory
 from memoryos.application.agent.verify import VerificationResult
 from memoryos.application.answer_eval import evaluate_answers, load_refusal_queries
+from memoryos.application.auth import (
+    MIN_PASSWORD_LENGTH,
+    NoSuchUser,
+    ResetPassword,
+    UserAlreadyExists,
+    WeakPassword,
+)
+from memoryos.application.auth import CreateUser as AuthCreateUser
 from memoryos.application.backfill import (
     enqueue_embedding,
     find_extraction_targets,
@@ -5803,6 +5813,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="memoryos", description="Memory Intelligence OS")
     commands = parser.add_subparsers(dest="command", required=True)
 
+    # M11.0. Both subcommands prompt; neither takes a password as an argument,
+    # which is why there is no `--password` here to omit.
+    auth_parser = commands.add_parser("auth", help="the single account")
+    auth_commands = auth_parser.add_subparsers(dest="auth_command", required=True)
+    auth_create = auth_commands.add_parser(
+        "create-user", help="create the account (prompts for a password)"
+    )
+    auth_create.add_argument("--email", required=True)
+    auth_reset = auth_commands.add_parser(
+        "reset-password", help="change the password and revoke every session"
+    )
+    auth_reset.add_argument("--email", required=True)
+
     worker = commands.add_parser("worker", help="drain the job queue")
     worker.add_argument(
         "--lease-seconds",
@@ -7019,10 +7042,112 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+
+# --------------------------------------------------------------------------
+# M11.0 — the account
+# --------------------------------------------------------------------------
+
+# Deliberately loose. This is a sanity check against a typo, not an RFC 5322
+# parser: the address is a login identifier on a single-user system, nothing is
+# ever posted to it, and a strict validator's only observable behaviour would be
+# rejecting somebody's real and unusual address.
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _prompt_password(*, confirm_prompt: str = "Repeat password: ") -> str | None:
+    """Ask twice, hidden, and refuse to take it any other way.
+
+    **There is no `--password` flag anywhere and there will not be one.** A
+    password passed as an argument is written to shell history and is visible in
+    `ps` to every other user on the machine for as long as the process runs.
+    `getpass` reads from the terminal with echo off and never touches argv.
+
+    Asking twice is not ceremony either: the input is invisible, so a typo is
+    undetectable, and the failure it prevents is an account whose password
+    nobody knows — which on a single-user system with no email reset is a
+    reinstall.
+    """
+    first = getpass.getpass("Password: ")
+    if len(first) < MIN_PASSWORD_LENGTH:
+        print(
+            f"Password must be at least {MIN_PASSWORD_LENGTH} characters; "
+            f"that one is {len(first)}."
+        )
+        return None
+    if first != getpass.getpass(confirm_prompt):
+        # `!=` on a password the same person typed twice, and it is not a timing
+        # concern: both values came from this terminal a second apart, there is
+        # no attacker on the other end of the comparison, and the answer is
+        # already known to whoever typed them.
+        print("Passwords do not match.")
+        return None
+    return first
+
+
+async def run_auth_create_user(settings: Settings, *, email: str) -> int:
+    if not _EMAIL.match(email.strip()):
+        print(f"{email!r} does not look like an email address.")
+        return 1
+
+    password = _prompt_password()
+    if password is None:
+        return 1
+
+    container = Container.build(settings)
+    try:
+        async with container.database.session_factory.begin() as session:
+            try:
+                user = await AuthCreateUser(session, container.password_hasher)(
+                    email, password
+                )
+            except UserAlreadyExists as exc:
+                print(str(exc))
+                return 1
+            except WeakPassword as exc:
+                print(str(exc))
+                return 1
+            print(f"created {user.email}")
+            return 0
+    finally:
+        await container.dispose()
+
+
+async def run_auth_reset_password(settings: Settings, *, email: str) -> int:
+    password = _prompt_password(confirm_prompt="Repeat new password: ")
+    if password is None:
+        return 1
+
+    container = Container.build(settings)
+    try:
+        async with container.database.session_factory.begin() as session:
+            try:
+                user = await ResetPassword(session, container.password_hasher)(
+                    email, password
+                )
+            except NoSuchUser as exc:
+                print(str(exc))
+                return 1
+            except WeakPassword as exc:
+                print(str(exc))
+                return 1
+            # Said out loud, because it is the surprising half: a reset that
+            # left existing sessions alive would not have changed anything for
+            # whoever is already signed in, which is usually the reason for it.
+            print(f"password changed for {user.email}; all sessions revoked")
+            return 0
+    finally:
+        await container.dispose()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = get_settings()
     configure_logging(settings)
+
+    if args.command == "auth":
+        if args.auth_command == "create-user":
+            return asyncio.run(run_auth_create_user(settings, email=args.email))
+        return asyncio.run(run_auth_reset_password(settings, email=args.email))
 
     if args.command == "worker":
         asyncio.run(

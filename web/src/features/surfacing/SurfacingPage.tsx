@@ -63,7 +63,7 @@ export function SurfacingPage() {
         right={
           <button
             type="button"
-            className={includeRefused ? "text-accent underline" : "text-muted hover:text-ink"}
+            className={includeRefused ? "text-accent underline" : "text-ink-2 hover:text-ink"}
             onClick={() => setIncludeRefused((current) => !current)}
           >
             show refusals
@@ -76,7 +76,7 @@ export function SurfacingPage() {
       {rate.isError ? <Failure error={rate.error} /> : null}
 
       {surfaced.length === 0 ? null : (
-        <p className={`meta max-w-prose leading-relaxed ${noisy ? "text-deny" : "text-muted"}`}>
+        <p className={`meta max-w-prose leading-relaxed ${noisy ? "text-deny" : "text-ink-2"}`}>
           <span className="text-ink">
             {dismissed.length} of {surfaced.length} surfaced
           </span>{" "}
@@ -109,7 +109,7 @@ export function SurfacingPage() {
         </ul>
       )}
 
-      <p className="meta max-w-prose leading-relaxed text-faint">
+      <p className="meta max-w-prose leading-relaxed text-ink-3">
         The threshold is per focus and adapts: a focus whose context is dismissed raises its
         own bar, one whose context is useful lowers it slowly. Per focus rather than global,
         so one noisy file cannot silence the rest.{" "}
@@ -131,11 +131,11 @@ function DecisionRow({
   // A refusal is rendered quieter than a surfacing but is not hidden. The
   // distinction a reader needs is "did this interrupt me", and the type size
   // carries it without the row having to say so.
-  const tone = row.surfaced ? "text-ink" : "text-muted";
+  const tone = row.surfaced ? "text-ink" : "text-ink-2";
 
   return (
     <li className="border-b border-rule/60 py-2.5">
-      <div className="meta flex flex-wrap items-baseline gap-3 text-faint">
+      <div className="meta flex flex-wrap items-baseline gap-3 text-ink-3">
         <Tag>{row.surfaced ? "surfaced" : "quiet"}</Tag>
         <span className={tone}>{row.focus}</span>
         {row.trigger_kind ? <span>{row.trigger_kind}</span> : null}
@@ -147,7 +147,7 @@ function DecisionRow({
       <p className={`prose-content mt-0.5 max-w-prose text-sm ${tone}`}>
         {row.top_title ?? "nothing to show"}
         {row.item_count > 1 ? (
-          <span className="meta text-faint"> and {row.item_count - 1} more</span>
+          <span className="meta text-ink-3"> and {row.item_count - 1} more</span>
         ) : null}
       </p>
 
@@ -155,9 +155,9 @@ function DecisionRow({
           routes agreed on something you do not already have open" is the only
           thing on screen that lets a reader judge the interruption rather than
           take it, which is the same argument the panel's route tags make. */}
-      <p className="meta mt-0.5 text-faint">
+      <p className="meta mt-0.5 text-ink-3">
         {row.reason}: {row.explanation}.{" "}
-        <span className="text-muted">
+        <span className="text-ink-2">
           scored {row.score.toFixed(4)} against {row.threshold.toFixed(4)}
         </span>
       </p>

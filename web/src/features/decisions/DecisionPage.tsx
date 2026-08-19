@@ -45,7 +45,7 @@ export function DecisionPage() {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <Link className="meta text-muted hover:text-ink" to="/decisions">
+        <Link className="meta text-ink-2 hover:text-ink" to="/decisions">
           ← decisions
         </Link>
         <h1 className="prose-content mt-2 text-lg text-ink">{row.question}</h1>
@@ -58,7 +58,7 @@ export function DecisionPage() {
         </Meta>
         <Meta label="confidence">
           {row.confidence === null ? (
-            <span className="text-faint">not recorded</span>
+            <span className="text-ink-3">not recorded</span>
           ) : (
             /* Labelled "at the time" wherever it appears. The number's whole
                value is that it predates the outcome, and nothing in this app
@@ -72,12 +72,12 @@ export function DecisionPage() {
         <SectionHeading>chosen</SectionHeading>
         <p className="prose-content text-sm text-ink">{chosen?.description ?? row.chosen}</p>
         {row.reasoning ? (
-          <p className="prose-content max-w-prose text-sm leading-relaxed text-muted">
+          <p className="prose-content max-w-prose text-sm leading-relaxed text-ink-2">
             {row.reasoning}
           </p>
         ) : null}
         {row.expected_outcome ? (
-          <p className="meta max-w-prose text-faint">
+          <p className="meta max-w-prose text-ink-3">
             <span className="meta-label mr-2">expected</span>
             {row.expected_outcome}
           </p>
@@ -96,12 +96,12 @@ export function DecisionPage() {
               <li key={option.id} className="border-l-2 border-rule pl-3">
                 <p className="prose-content text-sm text-ink">{option.description}</p>
                 {option.rejected_because ? (
-                  <p className="meta mt-0.5 max-w-prose leading-relaxed text-muted">
+                  <p className="meta mt-0.5 max-w-prose leading-relaxed text-ink-2">
                     <span className="meta-label mr-2 text-deny">rejected</span>
                     {option.rejected_because}
                   </p>
                 ) : (
-                  <p className="meta mt-0.5 text-faint">no reason recorded</p>
+                  <p className="meta mt-0.5 text-ink-3">no reason recorded</p>
                 )}
               </li>
             ))}
@@ -132,7 +132,7 @@ export function DecisionPage() {
           outcomes — what happened
         </SectionHeading>
         {row.outcomes.length === 0 ? (
-          <p className="meta max-w-prose leading-relaxed text-faint">
+          <p className="meta max-w-prose leading-relaxed text-ink-3">
             Nothing recorded. That is not the same as <code className="kbd">too_early</code>,
             which is a verdict somebody reached by looking — this is a decision nobody has
             looked at. Record one with{" "}
@@ -154,7 +154,7 @@ export function DecisionPage() {
       <section className="flex flex-col gap-2">
         <SectionHeading right={`${row.evidence.length}`}>evidence</SectionHeading>
         {row.evidence.length === 0 ? (
-          <p className="meta text-faint">
+          <p className="meta text-ink-3">
             Nothing linked. The decision stands on its own — evidence is a pointer into the
             corpus, not a precondition.
           </p>
@@ -187,7 +187,7 @@ const ASSUMPTION_TONE: Record<string, string> = {
 
 function AssumptionRow({ assumption }: { assumption: DecisionAssumption }) {
   const verdict = assumption.held ?? "unevaluated";
-  const tone = ASSUMPTION_TONE[verdict] ?? "text-faint";
+  const tone = ASSUMPTION_TONE[verdict] ?? "text-ink-3";
   return (
     <li className="border-b border-rule/60 pb-1">
       <div className="flex items-baseline gap-3">
@@ -195,14 +195,14 @@ function AssumptionRow({ assumption }: { assumption: DecisionAssumption }) {
         <span className="prose-content flex-1 text-sm text-ink">
           {assumption.statement}
         </span>
-        <span className="meta shrink-0 text-faint" title="confidence at the time">
+        <span className="meta shrink-0 text-ink-3" title="confidence at the time">
           {assumption.confidence === null ? "—" : assumption.confidence.toFixed(2)}
         </span>
       </div>
       {assumption.note ? (
         // The evaluator's reasoning, kept apart from the statement they were
         // judging. An assumption is never rewritten to match what happened.
-        <p className="meta ml-[6.75rem] mt-0.5 max-w-prose leading-relaxed text-muted">
+        <p className="meta ml-[6.75rem] mt-0.5 max-w-prose leading-relaxed text-ink-2">
           {assumption.note}
         </p>
       ) : null}
@@ -218,7 +218,7 @@ const VERDICT_TONE: Record<string, string> = {
   // Neutral on purpose. `too_early` is not a lukewarm result, it is the absence
   // of one, and giving it a verdict colour would make a corpus of unresolved
   // decisions read as a corpus of middling ones.
-  too_early: "text-faint",
+  too_early: "text-ink-3",
 };
 
 function OutcomeRow({ outcome }: { outcome: Outcome }) {
@@ -226,7 +226,7 @@ function OutcomeRow({ outcome }: { outcome: Outcome }) {
   return (
     <li className="border-l-2 border-rule pl-3">
       <div className="flex flex-wrap items-baseline gap-3">
-        <span className={`meta-label ${VERDICT_TONE[outcome.verdict] ?? "text-muted"}`}>
+        <span className={`meta-label ${VERDICT_TONE[outcome.verdict] ?? "text-ink-2"}`}>
           {outcome.verdict}
         </span>
         {/* Shown on every outcome, not only inferred ones. A reader scanning a
@@ -235,7 +235,7 @@ function OutcomeRow({ outcome }: { outcome: Outcome }) {
             rendering them identically asserts they are not. */}
         <span
           className={`meta border px-1 ${
-            inferred ? "border-rule text-faint" : "border-edge text-accent"
+            inferred ? "border-rule text-ink-3" : "border-edge text-accent"
           }`}
           title={
             inferred
@@ -247,7 +247,7 @@ function OutcomeRow({ outcome }: { outcome: Outcome }) {
         </span>
         <DateStamp value={outcome.observed_at} provenance={outcome.observed_at_source} />
         {outcome.confidence !== null ? (
-          <span className="meta text-faint">{outcome.confidence.toFixed(2)}</span>
+          <span className="meta text-ink-3">{outcome.confidence.toFixed(2)}</span>
         ) : null}
       </div>
       <p className="prose-content mt-0.5 max-w-prose text-sm text-ink">
@@ -275,7 +275,7 @@ function EvidenceRow({ item }: { item: DecisionEvidence }) {
     <li className="flex items-baseline gap-3">
       {/* `informed` and `records` are kept apart on screen because they are
           different claims: one existed before the decision, one after it. */}
-      <span className="meta-label w-24 shrink-0 text-muted">{item.relation}</span>
+      <span className="meta-label w-24 shrink-0 text-ink-2">{item.relation}</span>
       <Link className="meta flex-1 text-accent underline" to={`/memory/${item.memory_id}`}>
         {item.source_name}:{where}
       </Link>

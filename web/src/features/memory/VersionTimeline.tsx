@@ -46,7 +46,7 @@ export function VersionTimeline({ versions }: { versions: MemoryVersion[] }) {
     <div className="flex flex-col gap-2" data-testid="version-timeline">
       {/* The rail. One row per version so lines never overlap — an item with
           forty versions is a scroll, not a pile. */}
-      <div className="flex flex-col gap-1 border border-rule bg-raised px-3 py-2">
+      <div className="flex flex-col gap-1 border border-rule bg-surface px-3 py-2">
         {ordered.map((version) => {
           const occurred = at(version.occurred_at);
           const ingested = at(version.ingested_at);
@@ -54,7 +54,7 @@ export function VersionTimeline({ versions }: { versions: MemoryVersion[] }) {
           const width = Math.abs(ingested - occurred);
           return (
             <div key={version.id} className="flex items-center gap-2">
-              <span className="meta w-8 shrink-0 text-faint">v{version.version}</span>
+              <span className="meta w-8 shrink-0 text-ink-3">v{version.version}</span>
               <div className="relative h-4 flex-1" data-testid="version-rail">
                 {/* The lag, as a length. */}
                 <span
@@ -63,7 +63,7 @@ export function VersionTimeline({ versions }: { versions: MemoryVersion[] }) {
                   aria-hidden="true"
                 />
                 <span
-                  className="absolute top-1 -ml-1 h-2 w-2 rounded-full border border-edge bg-void"
+                  className="absolute top-1 -ml-1 h-2 w-2 rounded-full border border-edge bg-ground"
                   style={{ left: `${occurred}%` }}
                   title={`occurred ${version.occurred_at ?? "unknown"} (${version.occurred_at_source})`}
                   data-testid="occurred-tick"
@@ -83,9 +83,9 @@ export function VersionTimeline({ versions }: { versions: MemoryVersion[] }) {
         })}
       </div>
 
-      <div className="meta flex flex-wrap items-baseline gap-x-4 text-faint">
+      <div className="meta flex flex-wrap items-baseline gap-x-4 text-ink-3">
         <span className="inline-flex items-baseline gap-1">
-          <span className="inline-block h-2 w-2 rounded-full border border-edge bg-void" />
+          <span className="inline-block h-2 w-2 rounded-full border border-edge bg-ground" />
           occurred
         </span>
         <span className="inline-flex items-baseline gap-1">
@@ -109,13 +109,13 @@ export function VersionTimeline({ versions }: { versions: MemoryVersion[] }) {
                 provenance={version.occurred_at_source}
               />
             </span>
-            <span className="meta w-44 shrink-0 text-faint">
+            <span className="meta w-44 shrink-0 text-ink-3">
               ingested <DateStamp value={version.ingested_at} provenance="declared" />
             </span>
-            <span className="meta text-faint" title={version.content_hash}>
+            <span className="meta text-ink-3" title={version.content_hash}>
               {shortHash(version.content_hash, 8)}
             </span>
-            <span className="meta text-muted">{changed(version, ordered)}</span>
+            <span className="meta text-ink-2">{changed(version, ordered)}</span>
             {version.is_current ? <span className="meta text-accent">current</span> : null}
             {version.deleted_at ? <span className="meta text-deny">tombstoned</span> : null}
           </li>

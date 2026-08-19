@@ -47,7 +47,7 @@ export function JudgementsPage() {
         </Empty>
       ) : (
         <>
-          <div className="meta flex gap-4 text-faint">
+          <div className="meta flex gap-4 text-ink-3">
             <span className="text-affirm">{count(totals.relevant)} relevant</span>
             <span className="text-deny">{count(totals.not_relevant)} not relevant</span>
             <span className="text-accent">{count(totals.missing)} missing</span>
@@ -74,7 +74,7 @@ export function JudgementsPage() {
                   <td className="meta py-1.5 pr-4 text-affirm">{row.relevant}</td>
                   <td className="meta py-1.5 pr-4 text-deny">{row.not_relevant}</td>
                   <td className="meta py-1.5 pr-4 text-accent">{row.missing}</td>
-                  <td className="meta py-1.5 pr-4 text-faint">
+                  <td className="meta py-1.5 pr-4 text-ink-3">
                     {timestamp(row.last_judged_at)}
                   </td>
                   <td className="py-1.5">
@@ -90,7 +90,7 @@ export function JudgementsPage() {
             </tbody>
           </table>
 
-          <p className="meta text-faint">
+          <p className="meta text-ink-3">
             Export with <code className="kbd">memoryos export-golden-set</code>, or fetch{" "}
             <code className="kbd">/judgements/export</code>. Ids are re-resolved from{" "}
             <code className="kbd">(source, external_key)</code> as it exports, so a set taken

@@ -61,7 +61,7 @@ export function MemoryActions({ message }: { message: ChatMessage }) {
       <div className="flex items-baseline gap-3">
         <button
           type="button"
-          className="meta text-faint underline decoration-dotted underline-offset-2 hover:text-accent"
+          className="meta text-ink-3 underline decoration-dotted underline-offset-2 hover:text-accent"
           aria-expanded={open}
           onClick={() => {
             setOpen((was) => !was);
@@ -74,14 +74,14 @@ export function MemoryActions({ message }: { message: ChatMessage }) {
           <>
             <button
               type="button"
-              className="meta text-muted hover:text-accent"
+              className="meta text-ink-2 hover:text-accent"
               onClick={() => setMode(mode === "correct" ? "none" : "correct")}
             >
               correct
             </button>
             <button
               type="button"
-              className="meta text-muted hover:text-accent"
+              className="meta text-ink-2 hover:text-accent"
               onClick={() => setMode(mode === "tag" ? "none" : "tag")}
             >
               tag
@@ -89,7 +89,7 @@ export function MemoryActions({ message }: { message: ChatMessage }) {
             <RemoveFromView memoryId={memoryId} onDone={done} />
             {/* Set apart, and the separator is doing work: this is the only
                 irreversible control in the product. */}
-            <span className="meta text-faint">·</span>
+            <span className="meta text-ink-3">·</span>
             <button
               type="button"
               className="meta text-deny underline decoration-dotted underline-offset-2 hover:text-deny"
@@ -172,11 +172,11 @@ function CorrectForm({
       </label>
       <textarea
         id={`correct-${message.id}`}
-        className="min-h-20 w-full resize-y border border-rule bg-void p-2 text-ink"
+        className="min-h-20 w-full resize-y border border-rule bg-ground p-2 text-ink"
         value={text}
         onChange={(event) => setText(event.target.value)}
       />
-      <p className="meta text-faint">
+      <p className="meta text-ink-3">
         The original stays in this conversation, marked superseded. Both remain
         readable — what you thought before you corrected it is part of the record.
       </p>
@@ -188,7 +188,7 @@ function CorrectForm({
         >
           {correct.isPending ? "correcting…" : "save the correction"}
         </button>
-        <button type="button" className="meta text-faint" onClick={onCancel}>
+        <button type="button" className="meta text-ink-3" onClick={onCancel}>
           cancel
         </button>
       </div>
@@ -258,24 +258,24 @@ function TagForm({
       </label>
       <input
         id={`tag-${memoryId}`}
-        className="w-full border border-rule bg-void p-2 font-mono text-sm text-ink"
+        className="w-full border border-rule bg-ground p-2 font-mono text-sm text-ink"
         placeholder="#project #idea"
         value={text}
         onChange={(event) => setText(event.target.value)}
       />
-      <p className="meta text-faint">
+      <p className="meta text-ink-3">
         A tag becomes a concept in the same vocabulary the corpus already uses, so
         it connects to everything that mentions it rather than sitting in a list of
         its own.
       </p>
       {existing.data && existing.data.length > 0 ? (
         <div className="flex flex-wrap items-baseline gap-2">
-          <span className="meta text-faint">in use:</span>
+          <span className="meta text-ink-3">in use:</span>
           {existing.data.slice(0, 12).map((entry) => (
             <button
               key={entry.tag}
               type="button"
-              className="meta font-mono text-muted hover:text-accent"
+              className="meta font-mono text-ink-2 hover:text-accent"
               onClick={() =>
                 setText((was) => (was ? `${was} ${entry.tag}` : entry.tag))
               }
@@ -289,7 +289,7 @@ function TagForm({
         <button type="submit" className="meta text-accent hover:underline">
           {tag.isPending ? "tagging…" : "apply"}
         </button>
-        <button type="button" className="meta text-faint" onClick={onCancel}>
+        <button type="button" className="meta text-ink-3" onClick={onCancel}>
           cancel
         </button>
       </div>
@@ -323,7 +323,7 @@ function RemoveFromView({
   return (
     <button
       type="button"
-      className="meta text-muted hover:text-accent"
+      className="meta text-ink-2 hover:text-accent"
       onClick={() => remove.mutate()}
       disabled={remove.isPending}
     >
@@ -370,7 +370,7 @@ export function DeleteDialog({
 
   return (
     <div
-      className="flex flex-col gap-3 border-l-2 border-deny bg-void p-3"
+      className="flex flex-col gap-3 border-l-2 border-deny bg-ground p-3"
       role="alertdialog"
       aria-label="Delete this memory permanently"
     >
@@ -380,12 +380,12 @@ export function DeleteDialog({
       </p>
 
       {scope.isPending ? (
-        <p className="meta text-faint">counting what this would remove…</p>
+        <p className="meta text-ink-3">counting what this would remove…</p>
       ) : null}
       {scope.data ? <ScopeList scope={scope.data} /> : null}
       {scope.data ? (
         // The honest sentence, from the API. Not a paraphrase written here.
-        <p className="meta max-w-prose text-muted" data-testid="log-note">
+        <p className="meta max-w-prose text-ink-2" data-testid="log-note">
           {scope.data.log_note}
         </p>
       ) : null}
@@ -395,7 +395,7 @@ export function DeleteDialog({
       </label>
       <input
         id={`confirm-${memoryId}`}
-        className="w-40 border border-deny bg-void p-2 font-mono text-sm text-ink"
+        className="w-40 border border-deny bg-ground p-2 font-mono text-sm text-ink"
         value={typed}
         onChange={(event) => setTyped(event.target.value)}
         autoComplete="off"
@@ -403,13 +403,13 @@ export function DeleteDialog({
       <div className="flex items-baseline gap-3">
         <button
           type="button"
-          className="meta text-deny hover:underline disabled:text-faint disabled:no-underline"
+          className="meta text-deny hover:underline disabled:text-ink-3 disabled:no-underline"
           disabled={typed.trim().toLowerCase() !== "delete" || purge.isPending}
           onClick={() => purge.mutate()}
         >
           {purge.isPending ? "deleting…" : "delete permanently"}
         </button>
-        <button type="button" className="meta text-faint" onClick={onCancel}>
+        <button type="button" className="meta text-ink-3" onClick={onCancel}>
           cancel
         </button>
       </div>

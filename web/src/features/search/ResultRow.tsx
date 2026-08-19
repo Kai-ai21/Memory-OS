@@ -84,13 +84,16 @@ export function ResultRow({
   };
 
   return (
-    /* A glass panel per result rather than a ruled row. The ruled sheet was
-       right when a result was a passage in one document; under Luminous each
-       result is a discrete object floating over the lit void, and the reference
-       draws it as one. The expanded state takes a cyan edge instead of a fill,
-       so emphasis costs nothing in contrast against the text inside. */
+    /* A hairline-separated row rather than a boxed card. Ten bordered white
+       boxes on a near-white ground is ten rectangles competing for the same
+       edge, and the ranking — which is what the page is for — stops being
+       scannable. One rule between rows says "next result" with a tenth of the
+       ink. The expanded state takes an ink inset bar, not the accent: an
+       opened row is a position, not an action. */
     <article
-      className={`glass p-5 ${expanded !== null ? "glass-on" : ""}`}
+      className={`border-b border-rule py-5 last:border-b-0 ${
+        expanded !== null ? "-mx-4 border-l-2 border-l-ink bg-surface px-4" : ""
+      }`}
       data-testid="result"
     >
       {/* Wraps, and the path is the thing that must survive it.
@@ -102,12 +105,13 @@ export function ResultRow({
       <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         {/* Rank and score in a fixed-width gutter, so scores form a column that
             can be compared down the page rather than a ragged edge. */}
-        <span className="meta w-6 shrink-0 text-right text-faint">{rank}</span>
-        {/* The reference sets the score in cyan at the head of the row: it is
-            what the eye scans down, and a column of cyan numbers is findable in
-            a way a column of white ones is not. */}
+        <span className="meta w-6 shrink-0 text-right text-ink-3">{rank}</span>
+        {/* The score in ink at the head of the row, bold and a size up. On dark
+            this was cyan, because a column of white numbers on a void is not
+            findable; on light, weight does that job and the accent stays with
+            the link beside it. */}
         <span
-          className="w-16 shrink-0 font-mono text-base font-medium text-cyan"
+          className="w-16 shrink-0 font-mono text-base font-semibold text-ink"
           data-testid="score"
         >
           {fmtScore(hit.score)}
@@ -118,7 +122,7 @@ export function ResultRow({
           // controls are reachable by tab, but the arrows move between results
           // rather than between every focusable thing inside one.
           data-result-link
-          className="min-w-48 flex-1 basis-48 truncate font-mono text-sm text-cyan underline decoration-rule-strong decoration-1 underline-offset-2 hover:decoration-edge"
+          className="min-w-48 flex-1 basis-48 truncate font-mono text-sm text-accent underline decoration-rule-strong decoration-1 underline-offset-2 hover:decoration-edge"
           title={hit.external_key}
         >
           {hit.external_key}
@@ -134,7 +138,7 @@ export function ResultRow({
         />
       </header>
 
-      {hit.title ? <p className="meta mt-1 lg:pl-25 text-muted">{hit.title}</p> : null}
+      {hit.title ? <p className="meta mt-1 lg:pl-25 text-ink-2">{hit.title}</p> : null}
 
       <div className="mt-2 space-y-2 lg:pl-25">
         {visibleChunks.map((chunk) => (
@@ -170,7 +174,7 @@ export function ResultRow({
         {hidden > 0 ? (
           <button
             type="button"
-            className="meta text-magenta hover:underline"
+            className="meta text-accent hover:underline"
             onClick={() => setShowAllChunks(true)}
           >
             + {hidden} more matched {hidden === 1 ? "chunk" : "chunks"} in this memory
@@ -228,14 +232,14 @@ function ChunkBlock({
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
         <button
           type="button"
-          className="meta text-accent hover:text-accent-bright"
+          className="meta text-accent hover:text-accent-strong"
           onClick={onToggle}
           aria-expanded={expanded}
         >
           {expanded ? "−" : "+"} #{chunk.ordinal}
         </button>
-        <span className="meta text-muted">{fmtScore(chunk.score)}</span>
-        <span className="meta text-faint">{range(chunk.char_start, chunk.char_end)}</span>
+        <span className="meta text-ink-2">{fmtScore(chunk.score)}</span>
+        <span className="meta text-ink-3">{range(chunk.char_start, chunk.char_end)}</span>
         {/* What M1.7 persisted the chunk metadata for: a citation that can name
             the function it came from rather than only the file. */}
         {definition ? (
@@ -272,17 +276,17 @@ function ChunkBlock({
 
       {expanded ? (
         <div className="mt-2 space-y-2 border-t border-dashed border-rule pt-2">
-          <p className="meta-label text-faint">context by ordinal</p>
+          <p className="meta-label text-ink-3">context by ordinal</p>
           {loadingNeighbours ? (
-            <p className="meta text-faint">loading…</p>
+            <p className="meta text-ink-3">loading…</p>
           ) : neighbours.length === 0 ? (
-            <p className="meta text-faint">no neighbouring chunks — this is the whole memory</p>
+            <p className="meta text-ink-3">no neighbouring chunks — this is the whole memory</p>
           ) : (
             neighbours
               .sort((a, b) => a.ordinal - b.ordinal)
               .map((other) => (
                 <div key={other.ordinal} className="opacity-70">
-                  <span className="meta text-faint">
+                  <span className="meta text-ink-3">
                     #{other.ordinal} · {other.token_count} tok
                   </span>
                   <div className={code ? "code-content mt-1" : "prose-content mt-1"}>

@@ -43,7 +43,7 @@ export function SessionRail({
     // overflows the rail and lands on top of the conversation beside it.
     <aside className="flex min-w-0 flex-col gap-2" aria-label="Conversations">
       <div className="flex items-baseline justify-between border-b border-rule-strong pb-1">
-        <h2 className="meta-label text-muted">conversations</h2>
+        <h2 className="meta-label text-ink-2">conversations</h2>
         <button type="button" className="btn" onClick={onNew}>
           new
         </button>
@@ -51,7 +51,7 @@ export function SessionRail({
 
       {sessions.isError ? <Failure error={sessions.error} /> : null}
       {sessions.data?.length === 0 ? (
-        <p className="meta text-faint">
+        <p className="meta text-ink-3">
           Nothing yet. A conversation starts on the first thing you type, and a new
           one starts by itself after thirty minutes of silence.
         </p>
@@ -70,7 +70,7 @@ export function SessionRail({
 
       <button
         type="button"
-        className="meta self-start text-faint hover:text-accent"
+        className="meta self-start text-ink-3 hover:text-accent"
         onClick={() => setShowArchived(!showArchived)}
       >
         {showArchived ? "hide archived" : "show archived"}
@@ -97,7 +97,7 @@ function Row({
   return (
     <li
       className={`flex min-w-0 items-baseline gap-2 border-b border-rule/60 py-1.5 ${
-        active ? "bg-sunken" : ""
+        active ? "bg-surface-tint" : ""
       }`}
       data-testid="session-row"
     >
@@ -108,15 +108,15 @@ function Row({
         onClick={() => onSelect(session.id)}
       >
         <span
-          className={`w-full truncate text-sm ${active ? "text-ink" : "text-muted"}`}
+          className={`w-full truncate text-sm ${active ? "text-ink" : "text-ink-2"}`}
           title={session.title ?? undefined}
         >
           {/* Null rather than "Conversation 4". A name that says nothing cannot be
               searched for, and the honest version of "we could not derive one" is
               saying so. */}
-          {session.title ?? <span className="text-faint italic">untitled</span>}
+          {session.title ?? <span className="text-ink-3 italic">untitled</span>}
         </span>
-        <span className="meta text-faint">
+        <span className="meta text-ink-3">
           {timestamp(session.last_activity)} · {count(session.message_count)}{" "}
           {session.message_count === 1 ? "message" : "messages"}
           {session.archived_at ? " · archived" : ""}
@@ -124,7 +124,7 @@ function Row({
       </button>
       <button
         type="button"
-        className="meta shrink-0 text-faint hover:text-accent"
+        className="meta shrink-0 text-ink-3 hover:text-accent"
         title={
           session.archived_at
             ? "Bring this conversation back into the list"

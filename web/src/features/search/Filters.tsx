@@ -39,7 +39,7 @@ export function Filters({ state, onChange }: Props) {
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-y border-rule py-2">
       <div className="flex items-center gap-1.5">
         <span className="meta-label">source</span>
-        {sources.isLoading ? <span className="meta text-faint">…</span> : null}
+        {sources.isLoading ? <span className="meta text-ink-3">…</span> : null}
         {sources.isError ? <span className="meta text-deny">unavailable</span> : null}
         {(sources.data ?? []).map((source) => (
           <button
@@ -53,7 +53,7 @@ export function Filters({ state, onChange }: Props) {
             title={`${count(source.memories)} memories, ${count(source.chunks)} chunks`}
           >
             {source.name}
-            <span className="ml-1 text-faint">{count(source.memories)}</span>
+            <span className="ml-1 text-ink-3">{count(source.memories)}</span>
           </button>
         ))}
         {state.sources.length > 0 ? (

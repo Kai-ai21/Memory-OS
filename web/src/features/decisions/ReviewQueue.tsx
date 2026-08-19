@@ -71,7 +71,7 @@ export function ReviewQueue() {
     <div className="flex flex-col gap-4">
       <SectionHeading right={`${rows.length} ${status}`}>review queue</SectionHeading>
 
-      <div className="meta flex items-baseline gap-4 text-faint">
+      <div className="meta flex items-baseline gap-4 text-ink-3">
         <span className="flex gap-2">
           {(["pending", "accepted", "rejected"] as const).map((value) => (
             <button
@@ -79,7 +79,7 @@ export function ReviewQueue() {
               type="button"
               onClick={() => setStatus(value)}
               className={
-                value === status ? "text-accent underline" : "text-muted hover:text-ink"
+                value === status ? "text-accent underline" : "text-ink-2 hover:text-ink"
               }
             >
               {value}
@@ -163,9 +163,9 @@ function SuggestionRow({
 
   return (
     <li className="border-b border-rule-strong pb-5">
-      <div className="meta mb-2 flex flex-wrap items-baseline gap-3 text-faint">
+      <div className="meta mb-2 flex flex-wrap items-baseline gap-3 text-ink-3">
         <Tag>{row.status}</Tag>
-        <span className="text-muted">
+        <span className="text-ink-2">
           {row.source_name}:{where}
         </span>
         <span>{row.model_id}</span>
@@ -176,21 +176,21 @@ function SuggestionRow({
           appears without the passage at any width. */}
       <div className="grid gap-4 md:grid-cols-2">
         <div className="flex flex-col gap-2">
-          <p className="meta-label text-muted">draft</p>
+          <p className="meta-label text-ink-2">draft</p>
           <p className="prose-content text-sm text-ink">{draft.question}</p>
           <p className="prose-content text-sm text-accent">→ {draft.chosen}</p>
           {(draft.options ?? []).map((option, index) => (
             <div key={index} className="border-l-2 border-rule pl-3">
               <p className="prose-content text-sm text-ink">{option.description}</p>
               {option.rejected_because ? (
-                <p className="meta text-muted">rejected: {option.rejected_because}</p>
+                <p className="meta text-ink-2">rejected: {option.rejected_because}</p>
               ) : null}
             </div>
           ))}
           {draft.reasoning ? (
-            <p className="meta max-w-prose leading-relaxed text-muted">{draft.reasoning}</p>
+            <p className="meta max-w-prose leading-relaxed text-ink-2">{draft.reasoning}</p>
           ) : null}
-          <p className="meta text-faint">
+          <p className="meta text-ink-3">
             {/* Said explicitly rather than left as blank fields. These are the
                 three the prompt is told to leave empty, and an interface that
                 rendered nothing would look like a rendering bug. */}
@@ -201,8 +201,8 @@ function SuggestionRow({
         </div>
 
         <div className="flex flex-col gap-2">
-          <p className="meta-label text-muted">the passage it came from</p>
-          <blockquote className="prose-content max-h-64 overflow-y-auto border-l-2 border-edge bg-raised p-3 text-sm leading-relaxed text-muted">
+          <p className="meta-label text-ink-2">the passage it came from</p>
+          <blockquote className="prose-content max-h-64 overflow-y-auto border-l-2 border-edge bg-surface p-3 text-sm leading-relaxed text-ink-2">
             {row.source_text}
           </blockquote>
         </div>
@@ -238,7 +238,7 @@ function SuggestionRow({
           >
             reject
           </button>
-          <span className="meta self-center text-faint">
+          <span className="meta self-center text-ink-3">
             Accepting writes a decision with this passage as `records` evidence. Confidence
             and assumptions stay empty until you add them.
           </span>

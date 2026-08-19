@@ -119,6 +119,15 @@ SOURCE_OF_TRUTH_TABLES: frozenset[str] = frozenset(
 # outvote a foreign key.
 USER_AUTHORED_TABLES: frozenset[str] = frozenset(
     {
+        # M11.0's two, and the least arguable entries in this set. Nothing in
+        # the ingestion log produces an account or a login — no amount of
+        # replaying documents mints a password hash — so a replay that truncated
+        # these would lock the operator out of their own system and leave no way
+        # back in except the CLI. Neither table has a foreign key into anything
+        # derived, so unlike the evidence tables they need no snapshot: `users`
+        # reaches nothing, and `sessions` reaches only `users`.
+        "users",
+        "sessions",
         "query_judgements",
         "decisions",
         "decision_options",

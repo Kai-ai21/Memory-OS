@@ -15,7 +15,7 @@
  * disagree is a route the palette cannot find. The old path redirects.
  */
 
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 
 import { Shell } from "./app/Shell";
 import { AgentPage } from "./features/agent/AgentPage";
@@ -39,11 +39,33 @@ import { SearchPage } from "./features/search/SearchPage";
 import { SourcesPage } from "./features/sources/SourcesPage";
 import { SurfacingPage } from "./features/surfacing/SurfacingPage";
 import { TimelinePage } from "./features/timeline/TimelinePage";
+import { WelcomePage } from "./features/landing/WelcomePage";
 
+/**
+ * **M9.4 split the table in two: what is inside the shell, and what is not.**
+ *
+ * `Shell` used to wrap `<Routes>`, which made "every route has a sidebar" a
+ * structural fact rather than a decision. The landing page is the first screen
+ * that must not have one — it is the front door, and a front door with the
+ * building's corridors already drawn down one side is not a front door.
+ *
+ * Done as a pathless layout route rather than by wrapping fourteen elements in
+ * `<Shell>` individually, and rather than by nesting a second `<Routes>` under
+ * a splat: a layout route keeps every path below written exactly as it was, so
+ * this milestone changes where the shell is applied and not a single route.
+ *
+ * There are no guards here and there is nothing to guard. `/welcome` is a page
+ * you can navigate to; it does not gate `/`, because there is no user system
+ * for it to gate on.
+ */
 export function App() {
   return (
-    <Shell>
-      <Routes>
+    <Routes>
+      {/* Outside the shell, deliberately. No sidebar, no command palette, no
+          keyboard model — none of which mean anything before you are in. */}
+      <Route path="/welcome" element={<WelcomePage />} />
+
+      <Route element={<ShellLayout />}>
         <Route path="/" element={<ChatPage />} />
         {/* Where the overview lived until M10.0. */}
         <Route path="/overview" element={<OverviewPage />} />
@@ -82,7 +104,16 @@ export function App() {
         <Route path="/corpus" element={<CorpusPage />} />
 
         <Route path="*" element={<NotFound />} />
-      </Routes>
+      </Route>
+    </Routes>
+  );
+}
+
+/** The shell, as a layout. Every route below `/welcome` renders inside it. */
+function ShellLayout() {
+  return (
+    <Shell>
+      <Outlet />
     </Shell>
   );
 }

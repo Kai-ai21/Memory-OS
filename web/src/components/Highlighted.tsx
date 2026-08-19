@@ -81,7 +81,7 @@ export function Highlighted({
 
   return (
     <div className={className} data-testid="chunk-text">
-      {trimmed ? <span className="text-faint">… </span> : null}
+      {trimmed ? <span className="text-ink-3">… </span> : null}
       {segments.map((part, index) =>
         part.marked ? (
           <mark key={index} className="mark" data-testid="mark">
@@ -90,7 +90,7 @@ export function Highlighted({
         ) : (
           // The borrowed lead-in, de-emphasised: present for orientation, and
           // visibly not the thing that matched.
-          <span key={index} className="text-faint" data-testid="lead-in">
+          <span key={index} className="text-ink-3" data-testid="lead-in">
             {part.text}
           </span>
         ),

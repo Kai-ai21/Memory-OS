@@ -1,0 +1,224 @@
+/**
+ * The four things about the landing page that looking at it will not tell you.
+ *
+ * Three of them are the defects the reference implementation shipped with, in
+ * the form they would come back: a canvas that ignores the accessibility
+ * setting it exists to respect, a frame loop that outlives the page that
+ * started it, and a shell that follows a route it has no business on. The
+ * fourth is the only control on the screen that does anything.
+ *
+ * **No real frame loop runs here.** `requestAnimationFrame` is replaced with a
+ * recording stub. The cancellation test in particular has to be asserted on
+ * the call rather than on a timer, because a leaked loop's whole symptom is
+ * that nothing observable happens — it just keeps costing.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+
+import { App } from "../../App";
+import { WelcomePage } from "./WelcomePage";
+import { SHELL_ROUTES, renderWithProviders, stubFetch } from "../../test/harness";
+
+/** Which media queries answer true. jsdom ships no `matchMedia` at all. */
+function stubMedia(truthy: string[] = []) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches: truthy.some((needle) => query.includes(needle)),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
+}
+
+/**
+ * A 2D context that records nothing and draws nothing.
+ *
+ * jsdom's `getContext` returns null without the `canvas` package, and the
+ * component correctly bails out on a null context — which would make the
+ * cancellation test pass because no loop was ever started.
+ *
+ * Wide enough to satisfy the application background as well as this page: the
+ * `Open MEMO` test navigates into the shell, which mounts `BackgroundLayer`,
+ * which builds a gradient sprite on the way up.
+ */
+function stubCanvas() {
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    setTransform: vi.fn(),
+    fillRect: vi.fn(),
+    clearRect: vi.fn(),
+    beginPath: vi.fn(),
+    arc: vi.fn(),
+    fill: vi.fn(),
+    drawImage: vi.fn(),
+    createRadialGradient: vi.fn(() => ({ addColorStop: vi.fn() })),
+    globalAlpha: 1,
+    globalCompositeOperation: "source-over",
+    fillStyle: "",
+  } as unknown as CanvasRenderingContext2D);
+}
+
+/** A recording `requestAnimationFrame` that never actually runs a callback. */
+function stubFrames() {
+  const requested = vi.fn(() => 77);
+  const cancelled = vi.fn();
+  vi.stubGlobal("requestAnimationFrame", requested);
+  vi.stubGlobal("cancelAnimationFrame", cancelled);
+  return { requested, cancelled };
+}
+
+/** Everything any route reached from this page might ask for. */
+function stubEverything() {
+  return stubFetch([
+    ...SHELL_ROUTES,
+    { match: "/chat", body: [] },
+    { match: "/sources", body: [] },
+  ]);
+}
+
+beforeEach(() => stubCanvas());
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("the particle canvas", () => {
+  it("is not created at all under prefers-reduced-motion: reduce", () => {
+    // **Defect 4.** Not a paused canvas and not a slower one. Eight hundred
+    // drifting specks across a full viewport is a vestibular trigger, and this
+    // is the setting somebody turns on to be spared exactly this — so the
+    // correct amount is none, and the page still has to be a page without it.
+    stubMedia(["prefers-reduced-motion"]);
+    stubFrames();
+
+    renderWithProviders(<WelcomePage />, { route: "/welcome" });
+
+    expect(screen.queryByTestId("fluid-particles")).not.toBeInTheDocument();
+    // The content is the page. It does not depend on the effect existing.
+    expect(screen.getByRole("heading", { name: "MEMO" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /open memo/i })).toBeInTheDocument();
+  });
+
+  it("cancels its animation frame on unmount", () => {
+    // **Defect 2.** The reference's cleanup removed the resize listener and
+    // left the loop running — for the life of the tab, at sixty frames a
+    // second, drawing into a canvas detached from the document. Nothing about
+    // that is visible; it is purely a bill.
+    stubMedia();
+    const frames = stubFrames();
+
+    const view = renderWithProviders(<WelcomePage />, { route: "/welcome" });
+    expect(screen.getByTestId("fluid-particles")).toBeInTheDocument();
+    expect(frames.requested).toHaveBeenCalled();
+    expect(frames.cancelled).not.toHaveBeenCalled();
+
+    view.unmount();
+
+    expect(frames.cancelled).toHaveBeenCalledWith(77);
+  });
+});
+
+describe("the route", () => {
+  it("renders /welcome without the app shell", () => {
+    // The landing page is outside the shell, which is a routing fact rather
+    // than a styling one: `Shell` mounts the sidebar, the command palette and
+    // the global keyboard model, and none of the three mean anything on a
+    // front door. Asserted on the nav landmark, which is what the shell
+    // contributes and what nothing else on this page renders.
+    stubMedia();
+    stubFrames();
+    stubEverything();
+
+    renderWithProviders(<App />, { route: "/welcome" });
+
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "MEMO" })).toBeInTheDocument();
+  });
+
+  it("takes Open MEMO to the chat, and leaves the form inert", async () => {
+    // The one control on the page that does anything, and the reason the
+    // accent is spent on it rather than on the button above it.
+    stubMedia();
+    stubFrames();
+    stubEverything();
+
+    renderWithProviders(<App />, { route: "/welcome" });
+
+    await userEvent.click(screen.getByRole("link", { name: /open memo/i }));
+
+    expect(
+      await screen.findByRole("heading", { name: /say it here/i }),
+    ).toBeInTheDocument();
+    // And the shell is back, because that route is inside it.
+    await waitFor(() => expect(screen.getByRole("navigation")).toBeInTheDocument());
+  });
+});
+
+describe("signing in", () => {
+  /**
+   * **These replace M9.4's "every control is disabled" test, which M11.0
+   * deleted the behaviour of.** The form was a disabled `<fieldset>` while
+   * there was no user system to sign in to; there is one now, and a test still
+   * asserting the controls are inert would be pinning the scaffolding rather
+   * than the product.
+   */
+  it("renders an enabled form and no 'not active yet' notice", () => {
+    stubMedia();
+    stubFrames();
+
+    renderWithProviders(<WelcomePage />, { route: "/welcome" });
+
+    expect(screen.getByLabelText(/email/i)).toBeEnabled();
+    expect(screen.getByLabelText(/password/i)).toBeEnabled();
+    expect(screen.getByRole("button", { name: /continue/i })).toBeEnabled();
+    expect(screen.queryByText(/isn’t active yet/i)).not.toBeInTheDocument();
+  });
+
+  it("posts the credentials to /auth/login with the cookie enabled", async () => {
+    // `credentials: "include"` is the whole reason the session works across
+    // origins, and it is invisible on screen — so it is asserted here or
+    // nowhere.
+    stubMedia();
+    stubFrames();
+    const calls = stubFetch([
+      { match: "/auth/login", body: { id: "u", email: "a@b.c", created_at: "", last_login_at: null } },
+    ]);
+
+    renderWithProviders(<WelcomePage />, { route: "/welcome" });
+    await userEvent.type(screen.getByLabelText(/email/i), "a@b.c");
+    await userEvent.type(screen.getByLabelText(/password/i), "a long enough password");
+    await userEvent.click(screen.getByRole("button", { name: /continue/i }));
+
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/auth/login"))).toBe(true));
+    const login = calls.find((c) => c.url.includes("/auth/login"));
+    expect(login?.method).toBe("POST");
+    expect(login?.body).toEqual({ email: "a@b.c", password: "a long enough password" });
+  });
+
+  it("shows one message for a rejected sign-in", async () => {
+    // The server returns the same 401 for an unknown address and a wrong
+    // password; this asserts the UI does not invent a distinction the API went
+    // to some trouble not to make.
+    stubMedia();
+    stubFrames();
+    stubFetch([
+      { match: "/auth/login", body: { detail: "Incorrect email or password" }, status: 401 },
+    ]);
+
+    renderWithProviders(<WelcomePage />, { route: "/welcome" });
+    await userEvent.type(screen.getByLabelText(/email/i), "a@b.c");
+    await userEvent.type(screen.getByLabelText(/password/i), "wrong password here");
+    await userEvent.click(screen.getByRole("button", { name: /continue/i }));
+
+    const alert = await screen.findByTestId("signin-error");
+    expect(alert).toHaveTextContent("Incorrect email or password");
+    // And nothing was written down. The cookie is the session and it is
+    // HttpOnly; a client that cached anything here would be caching a
+    // credential it is not allowed to hold.
+    expect(window.localStorage.length).toBe(0);
+  });
+});

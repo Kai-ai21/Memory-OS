@@ -84,23 +84,23 @@ export function TimelinePage() {
           {dated.map((band) => (
             <span key={band.provenance} className="inline-flex items-baseline gap-1.5">
               <span
-                className={`meta ${confidence(band.provenance) === "stated" ? "text-ink" : "text-muted"}`}
+                className={`meta ${confidence(band.provenance) === "stated" ? "text-ink" : "text-ink-2"}`}
                 title={explain(band.provenance)}
               >
                 {band.provenance}
                 <span className="text-accent">{marker(band.provenance)}</span>
               </span>
-              <span className="meta text-faint">
+              <span className="meta text-ink-3">
                 {count(band.count)} ({total ? ((band.count / total) * 100).toFixed(1) : "0.0"}%)
               </span>
             </span>
           ))}
           {undated ? (
             <span className="inline-flex items-baseline gap-1.5">
-              <span className="meta text-faint" title={explain("unknown")}>
+              <span className="meta text-ink-3" title={explain("unknown")}>
                 undated<span className="text-accent">?</span>
               </span>
-              <span className={`meta ${undated.count ? "text-deny" : "text-faint"}`}>
+              <span className={`meta ${undated.count ? "text-deny" : "text-ink-3"}`}>
                 {count(undated.count)}
               </span>
             </span>
@@ -109,7 +109,7 @@ export function TimelinePage() {
         {dated.every((band) => confidence(band.provenance) !== "stated") && total > 0 ? (
           // The honest caption for this corpus, and it is not decoration: it
           // changes what every bar below means.
-          <p className="meta max-w-prose text-muted">
+          <p className="meta max-w-prose text-ink-2">
             Every date here is inferred rather than stated. Nothing in this corpus declared
             when it happened, so the chart below shows when files were last written to this
             disk — which is not the same as when the work happened.
@@ -159,7 +159,7 @@ export function TimelinePage() {
             value={minDays}
             onChange={(event) => setParam("min_days", event.target.value)}
           />
-          <span className="meta text-faint">days</span>
+          <span className="meta text-ink-3">days</span>
         </span>
 
         <span className="ml-auto inline-flex items-baseline gap-3">
@@ -170,7 +170,7 @@ export function TimelinePage() {
                 style={{ backgroundColor: kindColor(kind) }}
                 aria-hidden="true"
               />
-              <span className="meta text-faint">{kind}</span>
+              <span className="meta text-ink-3">{kind}</span>
             </span>
           ))}
         </span>
@@ -198,7 +198,7 @@ export function TimelinePage() {
             labelFor={(bucket) => bucketLabel(bucket, period)}
           />
         </div>
-        <p className="meta mt-1 text-faint">
+        <p className="meta mt-1 text-ink-3">
           <span className="hatch mr-1 inline-block h-2 w-4 align-middle opacity-45" /> a period
           with nothing in it. <span className="ml-2">Arrow keys walk the bars; enter opens one.</span>
         </p>
@@ -215,9 +215,9 @@ export function TimelinePage() {
              this answer is the whole of what the reader needs, because it is
              adjustable and sitting a few inches above — and the second sentence
              is the rule people get wrong: trailing silence is not a gap. */
-          <div className="glass flex flex-col gap-2 border-dashed p-5" data-testid="no-gaps">
-            <p className="meta-label text-magenta">No silence this long</p>
-            <p className="prose-content max-w-prose text-sm text-muted">
+          <div className="panel flex flex-col gap-2 border-dashed p-5" data-testid="no-gaps">
+            <p className="meta-label font-bold text-warn">No silence this long</p>
+            <p className="prose-content max-w-prose text-sm text-ink-2">
               Nothing in this corpus is quiet for {minDays} days or more. Lower the
               threshold above to see shorter silences
               {longestQuiet !== null && longestQuiet > 0 ? (
@@ -243,8 +243,8 @@ export function TimelinePage() {
               className="flex flex-wrap items-baseline gap-x-4 border-b border-rule/60 py-1.5"
             >
               <span className="meta w-16 text-ink">{gap.days.toFixed(1)}d</span>
-              <span className="meta text-faint">{gap.source_name}</span>
-              <span className="meta text-muted">
+              <span className="meta text-ink-3">{gap.source_name}</span>
+              <span className="meta text-ink-2">
                 <DateStamp
                   value={gap.start}
                   provenance={gap.before.occurred_at_source}
@@ -257,7 +257,7 @@ export function TimelinePage() {
                   utc
                 />
               </span>
-              <span className="meta flex-1 truncate text-faint">
+              <span className="meta flex-1 truncate text-ink-3">
                 after{" "}
                 <Link to={`/memory/${gap.before.id}`} className="text-accent underline">
                   {gap.before.external_key}
@@ -306,7 +306,7 @@ function ProvenanceChip({ provenance }: { provenance: string | null | undefined 
   const tier = confidence(provenance);
   return (
     <span
-      className={`chip shrink-0 uppercase ${tier === "stated" ? "chip-cyan" : ""}`}
+      className={`chip shrink-0 uppercase ${tier === "stated" ? "chip-accent" : ""}`}
       title={explain(provenance)}
       data-testid="provenance-chip"
       data-provenance={provenance ?? "unknown"}
@@ -356,12 +356,12 @@ function PeriodDetail({
       {detail.isLoading ? <Loading rows={3} /> : null}
       {detail.isError ? <Failure error={detail.error} /> : null}
       {detail.data && detail.data.total === 0 ? (
-        <p className="meta text-faint">
+        <p className="meta text-ink-3">
           Nothing occurred in this period. That is the gap, seen from inside it.
         </p>
       ) : null}
       {detail.data && detail.data.memories.length < detail.data.total ? (
-        <p className="meta text-muted">
+        <p className="meta text-ink-2">
           showing {detail.data.memories.length} of {count(detail.data.total)}
         </p>
       ) : null}
@@ -370,12 +370,12 @@ function PeriodDetail({
         {(detail.data?.memories ?? []).map((memory) => (
           <li
             key={memory.id}
-            className="glass-card flex flex-wrap items-center gap-x-4 gap-y-2 p-4"
+            className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-rule py-3 last:border-b-0"
           >
             <div className="flex min-w-0 flex-1 basis-64 flex-col gap-1">
               <Link
                 to={`/memory/${memory.id}`}
-                className="meta truncate text-cyan hover:underline"
+                className="meta truncate text-accent hover:underline"
               >
                 {memory.external_key}
               </Link>
@@ -386,7 +386,7 @@ function PeriodDetail({
             <Tag>{memory.kind}</Tag>
             {/* The reference's DECLARED / FILESYSTEM chip, and it is the real
                 `occurred_at_source` rather than a label. A stated date takes the
-                cyan chip; an inferred one stays neutral. That difference is the
+                accent chip; an inferred one stays neutral. That difference is the
                 whole reason M1.1 stored the column: an mtime is a fact about a
                 file on a disk, not about when the work happened, and two dates
                 rendered identically assert they are the same kind of claim. */}
@@ -398,7 +398,7 @@ function PeriodDetail({
                 utc
               />
             </span>
-            <span className="meta shrink-0 text-faint" title="when this system learned about it">
+            <span className="meta shrink-0 text-ink-3" title="when this system learned about it">
               ingested {memory.ingested_at ? isoDate(memory.ingested_at) : "—"}
             </span>
           </li>

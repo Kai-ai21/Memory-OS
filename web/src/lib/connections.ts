@@ -13,7 +13,7 @@
  * connected" from "this is not indexed yet".
  *
  * **`describeConnections` and `connectionParts` are one implementation.** The
- * Luminous reference sets the entity names in cyan inside the line, which needs
+ * Luminous reference sets the entity names in accent inside the line, which needs
  * the names as data rather than as a finished sentence — and the obvious way to
  * get them, formatting the line twice, is how the rendered line and the tested
  * line start disagreeing. So the parts are the source and the sentence is

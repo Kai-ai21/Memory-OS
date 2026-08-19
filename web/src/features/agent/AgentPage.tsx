@@ -46,17 +46,17 @@ export function AgentPage() {
           if (asked) ask.mutate(asked);
         }}
       >
-        <label className="meta-label text-muted" htmlFor="agent-question">
+        <label className="meta-label text-ink-2" htmlFor="agent-question">
           ask
         </label>
         <input
           id="agent-question"
-          className="flex-1 bg-transparent text-ink outline-none placeholder:text-faint"
+          className="flex-1 bg-transparent text-ink outline-none placeholder:text-ink-3"
           placeholder="what mistakes have I repeated"
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
         />
-        <button className="meta-label text-muted hover:text-ink" type="submit">
+        <button className="meta-label text-ink-2 hover:text-ink" type="submit">
           run
         </button>
       </form>
@@ -132,7 +132,7 @@ function Sentence({ claim }: { claim: AgentClaim }) {
     >
       {claim.text}
       {claim.support === "inferred" ? (
-        <span className="meta-label ml-1 text-muted">[inferred]</span>
+        <span className="meta-label ml-1 text-ink-2">[inferred]</span>
       ) : null}{" "}
     </span>
   );
@@ -143,7 +143,7 @@ function Refusal({ result }: { result: AgentAnswer }) {
   return (
     <div className="space-y-2 border-l-2 border-rule-strong pl-3">
       <p className="leading-relaxed text-ink">{result.answer}</p>
-      <p className="meta text-muted">
+      <p className="meta text-ink-2">
         An answer was drafted and withheld: {percent(checked.support_rate)} of its{" "}
         {checked.factual_claims} factual claims traced to anything retrieved. What
         was retrieved is below.
@@ -190,7 +190,7 @@ function Trajectory({ result }: { result: AgentAnswer }) {
     return (
       <div className="space-y-1">
         <SectionHeading>trajectory</SectionHeading>
-        <p className="meta text-muted">
+        <p className="meta text-ink-2">
           No tool was called. Nothing in the corpus backs this answer.
         </p>
       </div>
@@ -203,9 +203,9 @@ function Trajectory({ result }: { result: AgentAnswer }) {
         {acted.map((step, index) => (
           <li key={index} className="space-y-0.5">
             <div className="flex flex-wrap items-baseline gap-x-3">
-              <span className="meta-label text-muted">hop {index + 1}</span>
+              <span className="meta-label text-ink-2">hop {index + 1}</span>
               <span className="text-ink">{step.tool}</span>
-              <span className="meta text-faint">
+              <span className="meta text-ink-3">
                 {Object.entries(step.args)
                   .map(([name, value]) => `${name}=${JSON.stringify(value)}`)
                   .join(", ")}
@@ -215,7 +215,7 @@ function Trajectory({ result }: { result: AgentAnswer }) {
                   Worth seeing: two in a row is what stops the loop. */}
               {!step.novel ? <Tag>nothing new</Tag> : null}
             </div>
-            <p className="meta whitespace-pre-wrap text-muted">{step.result}</p>
+            <p className="meta whitespace-pre-wrap text-ink-2">{step.result}</p>
           </li>
         ))}
       </ol>
@@ -230,7 +230,7 @@ function Sources({ result }: { result: AgentAnswer }) {
       <SectionHeading right={`${result.citations.length}`}>sources</SectionHeading>
       <ul className="space-y-0.5">
         {result.citations.map((citation, index) => (
-          <li key={index} className="meta text-muted">
+          <li key={index} className="meta text-ink-2">
             {citation.source_name}::{citation.external_key}#{citation.chunk_ordinal} @
             {citation.char_start}-{citation.char_end} (v{citation.version})
           </li>

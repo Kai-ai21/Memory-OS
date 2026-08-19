@@ -49,6 +49,7 @@ from memoryos.config import Settings
 from memoryos.container import Container
 from memoryos.domain.events import Event, EventKind, RateLimit, UnknownEventKind, parse_kind
 from memoryos.domain.jobs import JobStatus, JobType, PermanentError, TransientError
+from tests.conftest import sign_in
 from tests.integration.conftest import Harness
 
 pytestmark = pytest.mark.integration
@@ -483,6 +484,9 @@ async def test_the_endpoint_answers_429_with_retry_after(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client,
     ):
+        # M11.0: every route but `/health/*` and `/auth/*` needs a session, and
+        # this test builds its own app rather than using the signed-in fixture.
+        await sign_in(app, client)
         body = {"kind": "manual", "source": "cli", "payload": {}}
         for _ in range(2):
             assert (await client.post("/events", json=body)).status_code == 202

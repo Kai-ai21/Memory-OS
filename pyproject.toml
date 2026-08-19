@@ -34,6 +34,12 @@ dependencies = [
   # pool around it.
   "httpx>=0.27",
   "python-multipart>=0.0.32",
+  # M11.0. Argon2id, via the reference binding. Not bcrypt — its 72-byte input
+  # truncation is a footgun nobody needs — and never a bare hash: SHA-family
+  # functions are designed to be fast, which is the one property a password
+  # hash must not have. `verify` is constant-time inside the library, which is
+  # why nothing in this codebase compares a hash with `==`.
+  "argon2-cffi>=23.1",
 ]
 
 [project.scripts]

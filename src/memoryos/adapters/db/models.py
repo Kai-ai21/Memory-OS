@@ -3273,3 +3273,99 @@ class ChatAttachment(Base):
         ),
         Index("ix_chat_attachments_message", "message_id", "ordinal"),
     )
+
+
+class User(Base):
+    """The account. There is exactly one.
+
+    **Single-user by design, and the constraint is enforced in the use case
+    rather than here.** A partial unique index on a constant would pin it in the
+    schema, and that was rejected: M11.1 scopes existing data to a user, and a
+    schema that forbids a second row would have to be migrated before the first
+    line of that work could be written. `CreateUser` refuses instead, naming the
+    account that already exists, which is the message somebody actually needs.
+
+    `password_hash` holds an Argon2id encoded hash — algorithm, parameters and
+    salt are all inside the string, which is what makes the parameters
+    upgradeable without a schema change. Nothing anywhere compares it with `==`;
+    see `PasswordHasher`.
+
+    `email` is stored lowercased and is the login identifier. Not a username as
+    well: two identifiers for one account is two things to get out of step, and
+    the second one buys nothing on a system with one account.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    # Written on every successful login. Null until the first one, which is the
+    # difference between "never used" and "not used lately".
+    last_login_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+
+    __table_args__ = (
+        CheckConstraint("length(btrim(email)) > 0", name="ck_users_email_non_empty"),
+        # Stored lowercased, so a login does not have to guess the casing that
+        # was typed on the day the account was made.
+        CheckConstraint("email = lower(email)", name="ck_users_email_lowercase"),
+        CheckConstraint(
+            "length(btrim(password_hash)) > 0", name="ck_users_password_hash_non_empty"
+        ),
+    )
+
+
+class UserSession(Base):
+    """One browser's session. Opaque token, stored only as a hash.
+
+    **The token itself is never written down.** What the cookie carries is 32
+    random bytes from `secrets.token_urlsafe`; what this table holds is the
+    SHA-256 of it. The difference is what happens when the database leaks: a
+    stored token is a live credential and a stored hash is not, and there is no
+    cost to the honest path because the server is handed the token on every
+    request and can hash it again.
+    
+    SHA-256 rather than Argon2 here, deliberately, and it is the one place in
+    this milestone where a fast hash is correct. A password is low-entropy and
+    guessable, so its hash must be slow; a 256-bit random token is not
+    guessable at all, and running Argon2 over it on every single request would
+    add tens of milliseconds to every page load to defend against nothing.
+    
+    **Revocation is a column, not a delete.** `revoked_at` keeps the row, which
+    is what lets `/auth/me` answer "that session was logged out" rather than
+    "that session never existed" — and what would let a future screen list the
+    sessions an account has had. Expiry and revocation are checked together in
+    one place, `active_session`, so no route can accidentally honour one and
+    ignore the other.
+    """
+
+    __tablename__ = "sessions"
+
+    id: Mapped[UUID] = mapped_column(_UUID, primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("users.id", name="fk_sessions_user_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+    # What the browser said it was. Recorded so a session list can be read by a
+    # person; never trusted for anything, because a client sets it.
+    user_agent: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            f"token_hash ~ '{HEX64_PATTERN}'", name="ck_sessions_token_hash_hex"
+        ),
+        CheckConstraint("expires_at > created_at", name="ck_sessions_expiry_after_creation"),
+        # The lookup every authenticated request makes is by hash; the index is
+        # the unique constraint above. This one is for reading a user's sessions.
+        Index("ix_sessions_user", "user_id", "created_at"),
+    )

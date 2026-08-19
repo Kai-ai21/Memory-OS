@@ -1,13 +1,15 @@
 /**
  * The persistent column: what this is, where you can go, and what it holds.
  *
- * A pane of glass at the edge of the screen, per the Luminous reference: the
- * wordmark in glowing mono caps, one primary action, six nav items with icons,
- * and settings and help pinned to the bottom rule. The active item takes a cyan
- * left rule, a faint fill and an inner glow — which is a different argument
- * from the ruled era's 2px bar. Against a dark void a hairline alone is not
- * findable in peripheral vision, and the fill is what lets you see where you
- * are without looking directly at the nav.
+ * A flat white column separated from the page by a single hairline. The
+ * wordmark, one primary action, six nav items with icons, and help pinned to
+ * the bottom rule.
+ *
+ * **The active item carries no accent.** On dark it was cyan with a fill and an
+ * inner glow, because against a void a hairline is not findable in peripheral
+ * vision. On light it is a 2px ink rule, a jump to semibold, and a tint — all
+ * of which are findable here, and none of which spend the interaction colour on
+ * saying where you already are. See rule 1 in `tokens.css`.
  *
  * **The corpus figures live down here rather than only on `/corpus`.** They are
  * the answer to "is this thing loaded and working", which is a question you ask
@@ -16,6 +18,7 @@
  * 282 memories means something different from three out of 30,000.
  */
 
+import { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
@@ -26,16 +29,11 @@ import { GROUPS, HOME, inGroup, type ViewRoute } from "./routes";
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   return (
-    /* Glass beside the content, near-opaque over it.
-       On desktop the sidebar sits *next to* the page and `--color-nav` — the
-       void at 40% — lets the shell's glow move behind the nav, which is what
-       makes it part of the same surface as everything else. As the mobile
-       drawer the same element sits *over* the article, and there translucency
-       stops being a layer and starts looking like a rendering fault: you read
-       the search results through the navigation. Measured at 375px before
-       fixing it. So below `md` it takes the void almost solid, and the glass
-       comes back at the breakpoint where the drawer becomes a column. */
-    <div className="flex h-full flex-col gap-6 overflow-y-auto bg-void/95 px-3 pt-6 pb-4 backdrop-blur-xl md:bg-nav">
+    /* Opaque white, both as a column and as the mobile drawer. Nothing here is
+       translucent any more, which removes the problem the dark theme had to
+       work around — a glassy drawer over the article let you read the search
+       results through the navigation. */
+    <div className="flex h-full flex-col gap-6 overflow-y-auto bg-surface px-3 pt-6 pb-4">
       <Wordmark onNavigate={onNavigate} />
       <NewConversation onNavigate={onNavigate} />
 
@@ -80,15 +78,17 @@ function Wordmark({ onNavigate }: { onNavigate?: () => void }) {
       to="/"
       onClick={onNavigate}
       className="flex flex-col gap-1 px-3"
-      aria-label="Memory OS, chat"
+      aria-label="MEMO, chat"
     >
-      {/* Mono rather than the display face, and glowing. The reference sets the
-          wordmark in the same face as the system labels, which is what makes it
-          read as a machine announcing itself rather than as a brand. */}
-      <span className="glow-cyan font-mono text-sm font-bold tracking-[0.18em] text-ink">
-        MEMORY OS
+      {/* The display face at 22px. MEMORY OS was eleven characters and filled
+          the column at 14px; MEMO is four, and at that size it read as a
+          truncation rather than a name. At this size it occupies roughly the
+          width the old wordmark did, which is what keeps the top block balanced
+          against the button under it. No glow — nothing on light glows. */}
+      <span className="display text-[1.375rem] font-bold tracking-[0.14em] text-ink">
+        MEMO
       </span>
-      <span className="meta-label">a corpus that remembers why</span>
+      <span className="meta-label">Everything you&rsquo;ve thought</span>
     </NavLink>
   );
 }
@@ -109,7 +109,11 @@ function NewConversation({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <button
       type="button"
-      className="btn-primary mx-3 flex items-center justify-center gap-2"
+      /* **The only glass in the application.** See `.glass-button` — it is also
+         the only element with a backdrop-filter and the only one with a box
+         shadow, and it only reads as glass because `BackgroundLayer` paints
+         something behind the page for it to frost. */
+      className="glass-button mx-3 flex items-center justify-center gap-2"
       onClick={() => {
         navigate("/");
         onNavigate?.();
@@ -137,10 +141,16 @@ function NewConversation({ onNavigate }: { onNavigate?: () => void }) {
  * somewhere, and the honest options were a page saying "there are no settings"
  * or a second link to a screen already two inches higher. Both are worse than
  * the gap.
+ *
+ * **M11.0 adds sign-out, and it goes here rather than in a settings row that
+ * still does not exist.** It is the second meta-control this application has
+ * and the first one that changes anything, so it sits above `help` — the more
+ * consequential of two pinned items should not be the lower one.
  */
 function Pinned({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <div className="flex flex-col gap-1">
+      <SignOut onNavigate={onNavigate} />
       <button
         type="button"
         className="nav-item w-full text-left"
@@ -158,6 +168,44 @@ function Pinned({ onNavigate }: { onNavigate?: () => void }) {
         <span className="kbd ml-auto normal-case">⌘K</span>
       </button>
     </div>
+  );
+}
+
+/**
+ * Sign out.
+ *
+ * The request is what matters and the navigation is the consolation prize: the
+ * cookie is `HttpOnly`, so this page cannot clear it and must ask the server
+ * to revoke the session. A failure still navigates — if the API is unreachable
+ * there is nothing to use anyway, and leaving somebody on a signed-in-looking
+ * screen after they asked to leave is the worse of the two lies.
+ *
+ * `window.location` rather than the router, deliberately: every cached query in
+ * this application is about a person who is no longer signed in, and a full
+ * load is the one thing guaranteed to drop all of it.
+ */
+function SignOut({ onNavigate }: { onNavigate?: () => void }) {
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <button
+      type="button"
+      className="nav-item w-full text-left"
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        onNavigate?.();
+        try {
+          await api.logout();
+        } catch {
+          // Deliberately swallowed; see the header.
+        }
+        window.location.assign("/welcome");
+      }}
+    >
+      <Icon name="close" size={18} />
+      <span>{busy ? "signing out…" : "sign out"}</span>
+    </button>
   );
 }
 
@@ -198,7 +246,7 @@ function CorpusFigures() {
     return <p className="meta text-deny">corpus unavailable</p>;
   }
   if (!stats.data) {
-    return <p className="meta text-faint">reading corpus…</p>;
+    return <p className="meta text-ink-3">reading corpus…</p>;
   }
 
   return (
@@ -214,7 +262,7 @@ function CorpusFigures() {
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
-      <dt className="meta text-faint">{label}</dt>
+      <dt className="meta text-ink-3">{label}</dt>
       <dd className="meta text-ink">{value}</dd>
     </div>
   );
@@ -260,7 +308,7 @@ function Health() {
       data-testid="health"
     >
       <span className={`inline-block size-1.5 shrink-0 rounded-full ${state.tone}`} aria-hidden />
-      <span className="meta text-muted">{state.label}</span>
+      <span className="meta text-ink-2">{state.label}</span>
     </div>
   );
 }

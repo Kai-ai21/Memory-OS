@@ -226,7 +226,7 @@ describe("provenance", () => {
     expect(stated).not.toHaveTextContent("~");
 
     // And the new chip states the same claim in a word, which is the reference's
-    // treatment: a stated date is chipped in cyan, an inferred one is not.
+    // treatment: a stated date is chipped in accent, an inferred one is not.
     expect(within(rows[0]).getByTestId("provenance-chip")).toHaveTextContent("filesystem");
     expect(within(rows[1]).getByTestId("provenance-chip")).toHaveTextContent("declared");
   });

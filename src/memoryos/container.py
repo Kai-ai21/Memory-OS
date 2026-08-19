@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import structlog
 
+from memoryos.adapters.auth.argon2_hasher import Argon2PasswordHasher
 from memoryos.adapters.blobs.filesystem import FilesystemBlobStore
 from memoryos.adapters.chunking.structural import StructuralChunker
 from memoryos.adapters.connectors.filesystem import FilesystemConnector
@@ -57,6 +58,7 @@ from memoryos.application.ports import (
     Chunker,
     Embedder,
     LanguageModel,
+    PasswordHasher,
     supports_tools,
 )
 from memoryos.application.relationships import ExtractRelationships
@@ -86,6 +88,10 @@ class Container:
     reranker: CrossEncoderReranker | None
     chunker: StructuralChunker
     graph: Neo4jGraphStore
+    # M11.0. Typed as the port rather than the adapter, so nothing downstream
+    # can reach past it into argon2 — which is the only thing that makes the
+    # port worth having.
+    password_hasher: PasswordHasher
 
     @classmethod
     def build(cls, settings: Settings) -> "Container":
@@ -131,6 +137,10 @@ class Container:
             graph=Neo4jGraphStore(
                 settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password
             ),
+            # Constructing this is arithmetic-free: argon2's cost is paid per
+            # hash, not per instance, so the CLI and the API both get one for
+            # nothing even when neither will use it.
+            password_hasher=Argon2PasswordHasher(),
         )
 
     def registry(self) -> HandlerRegistry:

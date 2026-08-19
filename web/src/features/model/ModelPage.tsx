@@ -47,7 +47,7 @@ export function ModelPage() {
         <SectionHeading right={`${derived} of ${data.assessments.length} dimensions`}>
           user model
         </SectionHeading>
-        <p className="meta text-muted">
+        <p className="meta text-ink-2">
           Every dimension is listed. One with nothing above the evidence bar says
           so and says why — a stated gap is information, an omitted section looks
           like an oversight.
@@ -67,8 +67,8 @@ export function ModelPage() {
           <SectionHeading right={`${data.dismissed.length}`}>dismissed</SectionHeading>
           {data.dismissed.map((facet) => (
             <div key={facet.id} className="space-y-0.5">
-              <p className="text-muted line-through">{facet.statement}</p>
-              <p className="meta text-faint">{facet.dismissed_reason}</p>
+              <p className="text-ink-2 line-through">{facet.statement}</p>
+              <p className="meta text-ink-3">{facet.dismissed_reason}</p>
             </div>
           ))}
         </div>
@@ -112,7 +112,7 @@ function Gap({ assessment }: { assessment: Assessment }) {
     <div className="space-y-1 border-l-2 border-rule pl-3">
       <p className="text-ink">{assessment.gap}</p>
       {assessment.best_support > 0 ? (
-        <p className="meta text-muted">
+        <p className="meta text-ink-2">
           The closest candidate reached {assessment.best_support} distinct
           observation{assessment.best_support === 1 ? "" : "s"}.
         </p>
@@ -143,7 +143,7 @@ function FacetRow({ facet }: { facet: Facet }) {
             claim, and a page that showed only the nine would present it as one. */}
         <Meta label="against">{facet.contradiction_count}</Meta>
         <button
-          className="meta-label text-muted hover:text-ink"
+          className="meta-label text-ink-2 hover:text-ink"
           onClick={async () =>
             setHistory(history ? null : await api.facetHistory(facet.id))
           }
@@ -152,7 +152,7 @@ function FacetRow({ facet }: { facet: Facet }) {
         </button>
       </div>
       {facet.evidence.length > 0 ? (
-        <p className="meta text-faint">
+        <p className="meta text-ink-3">
           {facet.evidence
             .map((item) => `${item.kind}:${item.ref_id.slice(0, 8)} (${item.relation})`)
             .join("  ")}
@@ -174,7 +174,7 @@ function History({ chain, current }: { chain: Facet[]; current: string }) {
   return (
     <ol className="space-y-1 border-l border-rule pl-3">
       {chain.map((version, index) => (
-        <li key={version.id} className="meta text-muted">
+        <li key={version.id} className="meta text-ink-2">
           <span className="meta-label mr-2">v{index + 1}</span>
           {version.statement}
           {version.id === current ? (
@@ -183,7 +183,7 @@ function History({ chain, current }: { chain: Facet[]; current: string }) {
         </li>
       ))}
       {chain.length === 1 ? (
-        <li className="meta text-faint">
+        <li className="meta text-ink-3">
           One version: this facet has never been revised.
         </li>
       ) : null}
