@@ -3965,6 +3965,123 @@ more than one, `--user EMAIL` is required and the error lists them.
 row-level — so a scoped rebuild deletes rather than truncates. There is a test
 for that.
 
+## Encryption at rest
+
+M11.2. Phase 1 promised two things it never delivered: that sensitive memories
+are encrypted, and that memories can be permanently deleted. The second is the
+hard one — an append-only log and permanent deletion are in direct conflict, and
+M1.1's resolution was crypto-shredding. This is it.
+
+### The shape
+
+Envelope encryption. Each memory gets a random 256-bit data key; content is
+encrypted with it; the key is encrypted under a master key from
+`MEMOS_MASTER_KEY` and stored in `memory_keys`. The master key is never written
+to the database.
+
+That indirection is the entire point. **Permanent deletion destroys one wrapped
+key — a few dozen bytes — and every copy of that memory's ciphertext becomes
+undecryptable at the same instant**: the row here, the row in last month's
+backup, the row on a replica nobody remembered. Deleting rows cannot do that,
+because you do not control the copies.
+
+AES-256-GCM. GCM authenticates as well as encrypts, so a ciphertext somebody has
+tampered with fails to decrypt rather than decrypting to something else. The
+memory id is bound in as associated data, so a ciphertext lifted from one row
+into another fails to authenticate instead of silently becoming that memory's
+content.
+
+### Lose the master key and everything is gone
+
+There is no escrow, no backdoor and no recovery path. **If `MEMOS_MASTER_KEY` is
+lost, every encrypted memory is unreadable forever.** That is not a limitation
+to be worked around later; a system that can recover your data without your key
+can be compelled to hand it over without your key.
+
+Nothing starts without it. `Container.build` calls `load_master_key`, which
+raises — because a process that came up with encryption quietly disabled would
+serve traffic and write plaintext into columns everything downstream believes
+are encrypted, and the damage would first be visible in a backup.
+
+### What is encrypted, and what is not
+
+Encrypted: `memories.content`, `memory_chunks.content`.
+
+**Not encrypted, and this list is the honest part:**
+
+| | Why | What it gives away |
+|---|---|---|
+| Embeddings | Encrypting them breaks vector search entirely | A 384-dimensional semantic fingerprint per chunk. Nearest-neighbour queries against a public model recover topic, tone and often paraphrase. |
+| `search_vector` (tsvector) | Keyword search needs it | **The stemmed vocabulary of every chunk, with positions.** Not sentences, not word order across chunks, but the word list. |
+| Entity names and relationships | The graph is the product | Who and what you think about, and how they connect. |
+| Titles, paths, `external_key` | Used for identity and dedupe | File names and folder structure are often the whole story. |
+| Hashes, sizes, timestamps | Identity, dedupe, ordering | When you worked, how much, on what cadence. |
+| **Blob contents** | Not implemented | The original bytes of every ingested file, in `var/blobs`. |
+
+**The last row is the largest gap and it is not a small one.** `raw_artifacts`
+blobs are plaintext on disk. Anyone with the filesystem has the corpus, and
+`memoryos replay` rebuilds content *from* those blobs — so a replay round-trips
+the whole corpus back through plaintext and re-keys it afterwards. Encryption at
+rest is therefore only as strong as the blob store until blobs are encrypted
+too.
+
+Put plainly: **somebody with database access and no master key cannot read your
+sentences, and can still learn what you think about, who with, when, and roughly
+in what terms.** Encrypting content is worth doing and it is not the same as
+being opaque.
+
+### The tsvector stopped being a generated column
+
+`memory_chunks.search_vector` was `GENERATED ALWAYS AS to_tsvector('english',
+content)`. Encrypting `content` encrypted the *index*: after the first
+`encrypt-existing` the vector held base64 lexemes and keyword search matched
+nothing at all, corpus-wide, without erroring. It would also have made this
+milestone's headline test pass for the wrong reason.
+
+It is now maintained by a `BEFORE INSERT OR UPDATE OF content` trigger that
+derives from plaintext and leaves ciphertext alone. A trigger rather than
+application code, because a generated column's real guarantee is that *nothing*
+can write `content` and leave the index stale — not a bulk `UPDATE`, not
+somebody at a `psql` prompt. An ORM event covers only writers that use the ORM,
+which is a weaker promise wearing the same clothes.
+
+### Commands
+
+```bash
+# One-way. Take a backup first; the command refuses without --confirm.
+memoryos encrypt-existing --confirm
+
+# Re-wrap every data key under a new master key. Content is untouched, so this
+# is seconds rather than hours — which is what makes rotation routine.
+MEMOS_NEW_MASTER_KEY=... memoryos keys rotate
+
+# Tombstone (reversible), or crypto-shred (not).
+memoryos delete-memory <id>
+memoryos delete-memory <id> --permanent
+```
+
+`encrypt-existing` is resumable, and the resumability is a property of the data
+rather than of a checkpoint: ciphertext is recognisable by its `enc:v1:` prefix,
+keys are created idempotently, and each memory moves in its own transaction. A
+crash halfway leaves a half-encrypted corpus that still reads correctly, because
+decryption passes plaintext through.
+
+`--permanent` destroys the key **before** purging the rows. If the purge fails
+halfway the key is already gone, so the worst outcome is unreadable rows rather
+than readable ones.
+
+### What survives a shred
+
+The log entry. `item_purged` records that bytes with this hash and this size
+were once observed at this key — which is what keeps the log append-only and
+honest — and the content, the chunks, the vectors, the mentions, the graph
+nodes, the transcript rows and the blob do not.
+
+One wrinkle worth knowing: `memory_keys.memory_id` cascades from `memories`, so
+a full purge removes the key row rather than leaving the `destroyed_at`
+tombstone behind. The tombstone survives when a key is shredded *without*
+purging; after a purge, the `item_purged` event is the record.
+
 ## Clients
 
 M6.2 gets real events from where the work happens and puts the context back

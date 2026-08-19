@@ -230,6 +230,19 @@ class PostgresShadowSchema(ShadowWorkspace):
                     )
                 )
 
+            # M11.2: the search-vector trigger does not travel either, for the
+            # same reason the policies do not — the shadow table was built from
+            # metadata, and a trigger is not metadata. A swap-in without this
+            # leaves `search_vector` frozen at whatever the rebuild wrote, so
+            # the next rechunk silently indexes text that is no longer there.
+            await connection.execute(
+                text(
+                    f'CREATE TRIGGER memory_chunks_search_vector '
+                    f'BEFORE INSERT OR UPDATE OF content ON {LIVE_SCHEMA}."memory_chunks" '
+                    "FOR EACH ROW EXECUTE FUNCTION memos_set_search_vector()"
+                )
+            )
+
             for _table, constraint in inbound:
                 await connection.execute(AddConstraint(constraint))
             await connection.execute(DropSchema(SHADOW_SCHEMA, if_exists=True))

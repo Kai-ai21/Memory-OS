@@ -10,6 +10,7 @@ import contextlib
 import getpass
 import json
 import math
+import os
 import re
 import signal
 import sys
@@ -100,7 +101,9 @@ from memoryos.application.chat import (
     NoSuchSession,
 )
 from memoryos.application.citations import ExplainedHit, explain_hits
+from memoryos.application.deletion import item_of_memory, purge_memory, tombstone
 from memoryos.application.doctor import GraphStatus, run_doctor
+from memoryos.application.encryption import KeyStore, encrypt_memory, rotate_master_key
 from memoryos.application.entity_stats import gather_entity_stats
 from memoryos.application.evaluate import (
     compare as compare_runs,
@@ -137,6 +140,7 @@ from memoryos.application.watcher import WatchTree
 from memoryos.application.worker import Worker, WorkerConfig
 from memoryos.config import Settings, get_settings
 from memoryos.container import Container, ToolsUnsupported
+from memoryos.crypto import MASTER_KEY_ENV, Cipher, MissingMasterKey, load_master_key
 from memoryos.domain import user_model as user_model_domain
 from memoryos.domain.backoff import wait_for
 from memoryos.domain.debounce import DEFAULT_WINDOW
@@ -5849,6 +5853,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     auth_reset.add_argument("--email", required=True)
 
+    encrypt_parser = commands.add_parser(
+        "encrypt-existing", help="encrypt every memory in place (one-way)"
+    )
+    encrypt_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="required: this cannot be undone, and you should back up first",
+    )
+
+    keys_parser = commands.add_parser("keys", help="the master key")
+    keys_commands = keys_parser.add_subparsers(dest="keys_command", required=True)
+    keys_commands.add_parser(
+        "rotate", help="re-wrap every data key under MEMOS_NEW_MASTER_KEY"
+    )
+
+    delete_memory = commands.add_parser(
+        "delete-memory", help="tombstone a memory, or destroy it outright"
+    )
+    delete_memory.add_argument("memory_id")
+    delete_memory.add_argument(
+        "--permanent",
+        action="store_true",
+        help="crypto-shred: destroy the data key, then purge the rows",
+    )
+
     worker = commands.add_parser("worker", help="drain the job queue")
     worker.add_argument(
         "--lease-seconds",
@@ -7218,6 +7247,157 @@ def resolve_cli_user(settings: Settings, email: str | None) -> UUID | None:
     return asyncio.run(_resolve())
 
 
+
+# --------------------------------------------------------------------------
+# M11.2 — encryption at rest
+# --------------------------------------------------------------------------
+
+
+async def run_encrypt_existing(settings: Settings, *, confirm: bool) -> int:
+    """Walk every memory, encrypt its content and its chunks, store the key.
+
+    **One-way, and the command says so before it does anything.** There is no
+    `decrypt-existing`: once the corpus is encrypted the only way back is the
+    master key, and if that is lost there is no way back at all. So the command
+    refuses without `--confirm` and tells you to take a backup first.
+
+    **Resumable, and the resumability is a property of the data.** Each memory
+    is its own transaction, ciphertext is recognisable by its prefix, and the
+    key is created idempotently — so a crash halfway leaves a half-encrypted
+    corpus that reads correctly and that a second run finishes.
+    """
+    if not confirm:
+        print(
+            "This encrypts every memory in place and cannot be undone.\n"
+            "\n"
+            "  * Take a database backup first.\n"
+            "  * Make sure MEMOS_MASTER_KEY is stored somewhere you will not\n"
+            "    lose it. There is no recovery path: without that key every\n"
+            "    encrypted memory is unreadable forever.\n"
+            "\n"
+            "Re-run with --confirm when both are true."
+        )
+        return 1
+
+    container = Container.build(settings)
+    try:
+        async with container.database.session_factory() as session:
+            ids = (
+                (await session.execute(select(models.Memory.id))).scalars().all()
+            )
+        done = skipped = 0
+        for memory_id in ids:
+            # Its own transaction, so a crash costs one memory rather than the
+            # whole run — and so a long corpus does not hold one open for hours.
+            async with container.database.session_factory.begin() as session:
+                if await encrypt_memory(session, container.cipher, memory_id):
+                    done += 1
+                else:
+                    skipped += 1
+            if (done + skipped) % 100 == 0:
+                print(f"  {done + skipped}/{len(ids)}…")
+        print(f"encrypted {done}, already done {skipped}, of {len(ids)} memories")
+        return 0
+    finally:
+        await container.dispose()
+
+
+async def run_keys_rotate(settings: Settings, *, new_key: str | None) -> int:
+    """Re-wrap every data key under a new master key.
+
+    The new key is read from `MEMOS_NEW_MASTER_KEY` rather than taken as an
+    argument, for the reason no password is ever an argument here: it would land
+    in shell history and in `ps`.
+
+    Content is not re-encrypted — that is the point of wrapping keys rather than
+    encrypting with the master key directly. Rotation is seconds, so it can be
+    routine.
+    """
+    material = new_key or os.environ.get("MEMOS_NEW_MASTER_KEY", "")
+    if not material.strip():
+        print(
+            "Set MEMOS_NEW_MASTER_KEY to the key to rotate *to*, then re-run.\n"
+            'Generate one with:\n\n  python -c "import os,base64; '
+            'print(base64.b64encode(os.urandom(32)).decode())"'
+        )
+        return 1
+
+    try:
+        new_cipher = Cipher(master_key=load_master_key(environ={MASTER_KEY_ENV: material}))
+    except MissingMasterKey as exc:
+        print(f"MEMOS_NEW_MASTER_KEY is unusable: {exc}")
+        return 1
+
+    container = Container.build(settings)
+    try:
+        async with container.database.session_factory.begin() as session:
+            rewrapped, skipped = await rotate_master_key(
+                session, container.cipher, new_cipher
+            )
+        print(
+            f"re-wrapped {rewrapped} key(s); skipped {skipped} destroyed by a "
+            "permanent deletion"
+        )
+        print(
+            "\nSet MEMOS_MASTER_KEY to the new key now. The old one no longer "
+            "opens anything, and nothing will start until they agree."
+        )
+        return 0
+    finally:
+        await container.dispose()
+
+
+async def run_delete_memory(settings: Settings, *, memory_id: str, permanent: bool) -> int:
+    """Delete a memory, optionally destroying its key so it cannot come back.
+
+    Without `--permanent` this is M10.4's tombstone: reversible, and the content
+    stays. With it, the data key is destroyed first and then the rows are
+    purged — in that order deliberately. If the purge fails halfway the key is
+    already gone, so the worst outcome is unreadable rows rather than readable
+    ones.
+    """
+    try:
+        target = UUID(memory_id)
+    except ValueError:
+        print(f"{memory_id!r} is not a UUID.")
+        return 1
+
+    container = Container.build(settings)
+    try:
+        async with container.database.session_factory() as session:
+            if await item_of_memory(session, target) is None:
+                print(f"No memory {target}.")
+                return 1
+
+        if not permanent:
+            await tombstone(container.database.session_factory, target)
+            print(f"tombstoned {target}; use --permanent to destroy it")
+            return 0
+
+        # **The key first, then the rows.** If the purge fails halfway the key
+        # is already gone, so the worst outcome is unreadable rows rather than
+        # readable ones. The other order has a window where the content is
+        # still openable and the caller has been told it is not.
+        async with container.database.session_factory.begin() as session:
+            shredded = await KeyStore(session, container.cipher).destroy(target)
+
+        outcome = await purge_memory(
+            container.database.session_factory, container.blobs, target
+        )
+        print(
+            f"purged {target}: key {'destroyed' if shredded else 'absent'}; "
+            f"{outcome}"
+        )
+        print(
+            "The log entry survives and records that bytes with this hash were "
+            "once seen at this key. The content does not — not in this database, "
+            "and not in any backup of it."
+        )
+        return 0
+    finally:
+        await container.dispose()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = get_settings()
@@ -7242,6 +7422,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _dispatch(args: argparse.Namespace, settings: Settings) -> int:
+    if args.command == "encrypt-existing":
+        return asyncio.run(run_encrypt_existing(settings, confirm=args.confirm))
+
+    if args.command == "keys":
+        return asyncio.run(run_keys_rotate(settings, new_key=None))
+
+    if args.command == "delete-memory":
+        return asyncio.run(
+            run_delete_memory(settings, memory_id=args.memory_id, permanent=args.permanent)
+        )
 
     if args.command == "auth":
         if args.auth_command == "create-user":
