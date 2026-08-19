@@ -40,6 +40,10 @@ dependencies = [
   # hash must not have. `verify` is constant-time inside the library, which is
   # why nothing in this codebase compares a hash with `==`.
   "argon2-cffi>=23.1",
+  # M11.2. AES-256-GCM, and it was already here transitively via `argon2-cffi`;
+  # named explicitly because a transitive dependency is one somebody is free to
+  # drop, and the encryption at rest would go with it.
+  "cryptography>=44.0",
 ]
 
 [project.scripts]

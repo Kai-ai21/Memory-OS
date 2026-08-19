@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from memoryos.adapters.embedding.sentence_transformers import (
@@ -83,6 +83,18 @@ class Settings(BaseSettings):
     # account. Off by default, and the accounts that do exist are made with
     # `memoryos auth create-user` from a shell.
     allow_registration: bool = False
+
+    # M11.2. The master key that unwraps every per-memory data key.
+    #
+    # `SecretStr` so it cannot be printed by accident: settings objects end up
+    # in log lines, in tracebacks and in `repr()` output, and a master key that
+    # leaks into a log file is a master key that is no longer a secret.
+    #
+    # Empty by default and never usable empty — `Container.build` calls
+    # `load_master_key`, which raises. Read through Settings rather than
+    # straight from `os.environ` so that `.env` works like every other setting
+    # here; the environment still wins, because pydantic-settings prefers it.
+    master_key: SecretStr = SecretStr("")
     # Where the test suite writes. Its own database rather than its own
     # isolation strategy: the integration tests truncate every table, which is
     # the only strategy that survives code under test committing, and pointing

@@ -1,3 +1,4 @@
+import base64
 import os
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -40,6 +41,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # the app factory, Alembic's env.py — lands on `memos_test` without being told
 # separately. `setdefault`, so an explicit environment still wins.
 os.environ.setdefault("MEMOS_ENVIRONMENT", "test")
+
+# M11.2: nothing that builds a `Container` starts without this, which is the
+# point of it. A fixed value rather than a random one per run, so a test that
+# writes ciphertext and a test that reads it back agree — and so a failure is
+# reproducible rather than depending on which key the run happened to invent.
+# It is not a secret: it opens a database that is truncated between tests.
+os.environ.setdefault(
+    "MEMOS_MASTER_KEY", base64.b64encode(b"memoryos-test-master-key-32bytes").decode()
+)
+
 get_settings.cache_clear()
 
 

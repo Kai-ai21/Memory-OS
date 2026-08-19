@@ -68,6 +68,7 @@ from memoryos.application.search import FusionWeights, SearchMemories
 from memoryos.application.surfacing import build_handler as build_surfacing_handler
 from memoryos.application.sync import SyncSource
 from memoryos.config import Settings
+from memoryos.crypto import Cipher, load_master_key
 from memoryos.domain.events import Event
 
 logger = structlog.get_logger(__name__)
@@ -92,6 +93,11 @@ class Container:
     # can reach past it into argon2 — which is the only thing that makes the
     # port worth having.
     password_hasher: PasswordHasher
+    # M11.2. Present or the container does not build: `load_master_key` raises,
+    # and it is called from `build`. Starting with encryption silently disabled
+    # would mean writing plaintext into columns everything downstream believes
+    # are encrypted, and finding out from a backup.
+    cipher: Cipher
 
     @classmethod
     def build(cls, settings: Settings) -> "Container":
@@ -141,6 +147,7 @@ class Container:
             # hash, not per instance, so the CLI and the API both get one for
             # nothing even when neither will use it.
             password_hasher=Argon2PasswordHasher(),
+            cipher=Cipher(master_key=load_master_key(settings=settings)),
         )
 
     def registry(self) -> HandlerRegistry:

@@ -19,13 +19,13 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
-    Computed,
     DateTime,
     Float,
     ForeignKey,
     Identity,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     Text,
     UniqueConstraint,
@@ -402,9 +402,16 @@ class MemoryChunk(Base):
     # matches against it with `@@` and ranks with `ts_rank_cd`, and nothing loads
     # it into a mapped instance. A generated column cannot be written either, so
     # the pipeline neither knows nor needs to know it exists.
-    search_vector: Mapped[str | None] = mapped_column(
-        TSVECTOR, Computed("to_tsvector('english', content)", persisted=True)
-    )
+    # **No longer generated, as of M11.2.** It was `GENERATED ALWAYS AS
+    # to_tsvector('english', content)`, and encrypting `content` therefore
+    # encrypted the index: every lexeme became base64 and keyword search
+    # silently stopped matching anything. It is written by the pipeline now,
+    # from the plaintext, immediately before that plaintext is encrypted.
+    #
+    # The disclosure that comes with that is in the README: a tsvector is the
+    # stemmed vocabulary of a chunk, it is not encrypted, and somebody with
+    # database access can read it.
+    search_vector: Mapped[str | None] = mapped_column(TSVECTOR)
 
     __table_args__ = (
         UniqueConstraint("memory_id", "ordinal", name="uq_memory_chunks_memory_ordinal"),
@@ -919,6 +926,7 @@ Index(
 # "The twenty most-mentioned entities", and every later traversal that starts
 # from an entity and asks where it was seen.
 Index("ix_entity_mentions_entity", EntityMention.user_id, EntityMention.entity_id)
+
 
 # Resolution's read pattern in M3.2: find the candidates a name might collapse
 # into. Also what makes the duplicate measurement cheap.
@@ -3533,4 +3541,55 @@ class UserSession(Base):
         # The lookup every authenticated request makes is by hash; the index is
         # the unique constraint above. This one is for reading a user's sessions.
         Index("ix_sessions_user", "user_id", "created_at"),
+    )
+
+
+class MemoryKey(Base):
+    """One wrapped data key per memory. The thing a permanent deletion destroys.
+
+    **This table is the deletion guarantee.** Content is encrypted with a random
+    per-memory data key; that key is stored here, encrypted under the master key
+    from the environment. Destroying the row — or blanking `wrapped_key` and
+    stamping `destroyed_at`, which is what a shred does — makes every copy of
+    that memory's ciphertext undecryptable at once: the row in the database, the
+    row in last month's backup, the row on a replica nobody remembered. Deleting
+    rows cannot do that, because you do not control the copies.
+
+    `destroyed_at` rather than a delete, and the tombstone is the point: it is
+    the difference between "this memory was shredded" and "this memory never
+    existed", and the first is what an audit needs to be able to say. The row
+    survives with no key in it.
+
+    **Not scoped by M11.1's policies.** Its parent is, and it reaches nothing
+    else; a `user_id` here would be a second copy of a fact `memories` already
+    holds, free to disagree with it.
+    """
+
+    __tablename__ = "memory_keys"
+
+    memory_id: Mapped[UUID] = mapped_column(
+        _UUID,
+        ForeignKey("memories.id", name="fk_memory_keys_memory_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    # Null once destroyed. The nonce is the first twelve bytes; the rest is the
+    # AES-GCM ciphertext and its tag.
+    wrapped_key: Mapped[bytes | None] = mapped_column(LargeBinary)
+    algorithm: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=func.now()
+    )
+    destroyed_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ)
+
+    __table_args__ = (
+        # A key is either present or destroyed, never both and never neither.
+        # Without this, a bug that blanked the key without stamping the time
+        # would look exactly like a row that was never written.
+        CheckConstraint(
+            "(wrapped_key IS NULL) = (destroyed_at IS NOT NULL)",
+            name="ck_memory_keys_destroyed_has_no_key",
+        ),
+        CheckConstraint(
+            "length(btrim(algorithm)) > 0", name="ck_memory_keys_algorithm_non_empty"
+        ),
     )

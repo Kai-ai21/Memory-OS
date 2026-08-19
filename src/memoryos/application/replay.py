@@ -432,6 +432,25 @@ DERIVED_TABLES: tuple[str, ...] = (
     # `(canonical_name, type)`. Written down rather than done quietly: it is a
     # schema change, and this corpus has seven version pairs.
     "change_summaries",
+    # M11.2. **Before `memories`, and the order is load-bearing**: this list is
+    # also the drop order for a shadow swap, children first, and `memory_keys`
+    # holds a foreign key into `memories`. Listed after it, the swap fails on a
+    # dependent object — which is how this was found.
+    #
+    # Derived is the uncomfortable classification and it is the honest one. A
+    # data key is random, so nothing in the log reproduces *that* key. But a
+    # replay rebuilds content from blobs, which are plaintext, so what comes out
+    # the other side needs new keys rather than the old ones — the old keys open
+    # ciphertext that no longer exists. Discarding them is correct.
+    #
+    # **The cost is stated rather than hidden**: a replay round-trips the corpus
+    # through plaintext, so encryption at rest is only as strong as the blob
+    # store until blobs are encrypted too. M11.2 does not encrypt them. See the
+    # README.
+    #
+    # A purge is unaffected: it destroys the key *and* appends `item_purged`,
+    # and replay skips a purged key entirely rather than rebuilding it.
+    "memory_keys",
     "memory_chunks",
     "memories",
     "embedding_cache",
