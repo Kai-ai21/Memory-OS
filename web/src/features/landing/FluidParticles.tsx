@@ -28,11 +28,10 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import { makeMask, readShelters } from "../../lib/mask";
+import { BrushLayer } from "../../components/BrushLayer";
+import { makeMask, readShelters, type Mask } from "../../lib/mask";
 import { noise3 } from "../../lib/noise";
-import { buildSprite } from "../../lib/particles";
 import { readGround, readInk } from "../../lib/tokens";
-import { CursorLayer } from "../../lib/trail";
 import { cn } from "../../lib/utils";
 
 export interface FluidParticlesProps {
@@ -51,45 +50,34 @@ export interface FluidParticlesProps {
 }
 
 /**
- * Peak opacity of one ambient particle. **0.22, from 0.06.**
+ * Peak opacity of one ambient particle. **0.35, from 0.22.**
  *
- * Nearly four times what M9.4 shipped, and it is affordable here for a reason
- * that does not hold inside the application: this page is a wordmark, a card
- * and a link on an otherwise empty screen, and everything that has to be read
- * sits inside a shelter the field is not drawn over at all. The particles are
- * the page.
- *
- * It is not affordable *everywhere* on the page, and the clear alpha below is
- * what makes that statement true rather than hopeful.
+ * Nearly six times what M9.4 shipped. It is affordable here for a reason that
+ * does not hold inside the application: this page is a wordmark, a card and a
+ * link on an otherwise empty screen, and everything that has to be read sits
+ * inside a shelter the field is not drawn over at all. The particles are the
+ * page.
  */
-const PEAK_OPACITY = 0.22;
+const PEAK_OPACITY = 0.35;
 
 /**
  * How much page colour is laid over the previous frame each 60fps frame.
- * **0.18, down from M9.4's 0.30. The brief suggested 0.04; that does not work.**
+ * **0.03, as specified.**
  *
- * This is the knob for trail *length*, inverted: lower is longer. It is also
- * the only thing stopping the buffer silting up, because a pixel's composited
- * darkness settles at roughly the ink arriving per frame over this number — and
- * M9.5 nearly quadrupled the ink arriving, from a peak of 0.06 to 0.22. Lowering
- * the clear at the same time compounds both.
+ * This is the knob for trail length, inverted: lower is longer. It is also the
+ * only thing removing ink, so a pixel's composited darkness settles at roughly
+ * the ink arriving per frame divided by this number — at 0.35 over 0.03 that
+ * ratio is eleven, which means every pixel a particle crosses saturates to
+ * solid ink and stays there for the two or three seconds it takes 0.97^n to
+ * reach zero.
  *
- * Measured on a 1440x900 viewport, letting each value run long enough to settle:
- *
- * | clear | mean luminance | share of viewport below 230 |
- * |-------|----------------|-----------------------------|
- * | 0.04  |      230.3     |            13.7%            |
- * | 0.18  |      244.9     |             2.7%            |
- * | 0.30  |      246.3     |             1.9%            |
- *
- * Ground is 248. At 0.04 the page is not a flow field, it is a grey fog with a
- * flow field somewhere inside it — an eighth of the screen darkened and still
- * drifting downward. 0.18 is where the filaments are long and clearly
- * directional, which is what "legible as moving structure rather than scattered
- * dots" was asking for, and where the numbers stop moving between six seconds
- * and eighteen.
+ * **That is the intended effect here, not a bug, and it is why the shelter had
+ * to widen to 340px in the same change.** Outside the shelter the page is meant
+ * to be dark drifting structure rather than grey fog; inside it there is no ink
+ * at all. What the number costs is measured in the milestone report — the
+ * unmasked area is very dark, and that is what was asked for.
  */
-const TRAIL_ALPHA = 0.18;
+const TRAIL_ALPHA = 0.03;
 
 /** Drift speed, in CSS pixels per millisecond — about 110px a second. */
 const SPEED = 0.11;
@@ -119,32 +107,29 @@ const MAX_STEP = 64;
 /**
  * How far outside the centred content the field climbs back to full strength.
  *
- * 280px, per the brief, and the reason it can be this wide is that there is
- * nothing else on this page to protect: the wordmark, the card and the link all
- * live in one box, so one shelter covers everything that has to be read and the
- * entire remaining screen is free to be dramatic.
+ * 340px, and it is wide because the field behind it got much heavier: at a
+ * clear alpha of 0.03 the unmasked page saturates, so the distance from the
+ * last legible pixel of type to the first fully dark one has to be enough that
+ * the ramp between them is not itself a distraction. There is nothing else on
+ * this page to protect — the wordmark, the card and the link are one box — so
+ * one shelter covers everything and the rest of the screen is free.
  */
-const SHELTER_FEATHER = 280;
+const SHELTER_FEATHER = 340;
 
 /** How often the shelter is re-measured, in frames. Four times a second. */
 const REMEASURE_EVERY = 15;
 
 /**
- * The drift gets a shelter too, but a much tighter one than the trail's.
+ * The drift and the stroke now share one shelter, at full width.
  *
- * **Measured, after trying both extremes.** With no shelter at all the field
- * reads beautifully and the small type does not survive it: a filament crossing
- * the "sign-in isn't active yet" line takes it to 1.37:1, which is not "harder
- * to read", it is gone. With the trail's full 280px feather the field is damped
- * across the entire viewport — the content box is 440px wide, so 280 on each
- * side is a thousand pixels of a 1440px screen — and a change that asked for a
- * stronger effect produces a weaker one than it replaced.
- *
- * 45% of the trail's feather is the setting where both hold: about 125px, which
- * clears the type and leaves roughly half the screen at full strength. The
- * drift needs less room than the trail because it is less than half as dark.
+ * M9.5 gave the drift 45% of the stroke's feather, because at 0.22 it needed
+ * less room and a full-width shelter emptied the page. M9.6 asks for
+ * "particles and stroke fade to zero within 340px", which settles it — and at
+ * 0.35 with a 0.03 clear the drift needs every pixel of that anyway. A filament
+ * at these values crossing a line of 11px type does not make it harder to read,
+ * it removes it.
  */
-const AMBIENT_SHELTER_SCALE = 0.45;
+const AMBIENT_SHELTER_SCALE = 1;
 
 interface Particle {
   x: number;
@@ -183,7 +168,7 @@ export function FluidParticles({
   children,
   particleCount = 1200,
   noiseIntensity = 0.003,
-  particleSize = { min: 1, max: 3.5 },
+  particleSize = { min: 2, max: 5 },
   className,
 }: FluidParticlesProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -204,13 +189,6 @@ export function FluidParticles({
 
     const ink = readInk();
     const ground = readGround();
-    const sprite = buildSprite();
-    // The same trail as the application background, riding this page's field
-    // rather than the app's — a fading particle should dissolve into the
-    // weather it is actually in.
-    const cursor = new CursorLayer((x, y, t) =>
-      noise3(x * noiseIntensity, y * noiseIntensity, t * FIELD_DRIFT) * Math.PI * 4,
-    );
     let width = 0;
     let height = 0;
     let particles: Particle[] = [];
@@ -277,8 +255,8 @@ export function FluidParticles({
     let frameId: number | null = null;
     let previous = 0;
     let sinceMeasure = REMEASURE_EVERY;
-    /** Two shelters from one set of rectangles: see `AMBIENT_SHELTER_SCALE`. */
-    let driftMask: (x: number, y: number) => number = () => 1;
+    /** See `AMBIENT_SHELTER_SCALE`. The stroke keeps its own, in `BrushLayer`. */
+    let driftMask: Mask = () => 1;
 
     function frame(now: number) {
       const dt = previous === 0 ? 1000 / 60 : Math.min(now - previous, MAX_STEP);
@@ -290,7 +268,6 @@ export function FluidParticles({
       if (sinceMeasure >= REMEASURE_EVERY) {
         sinceMeasure = 0;
         const shelters = readShelters(SHELTER_FEATHER);
-        cursor.setMask(makeMask(shelters));
         driftMask = makeMask(
           shelters.map((shelter) => ({
             ...shelter,
@@ -350,39 +327,15 @@ export function FluidParticles({
         }
       }
 
-      // The trail, over the drift. Drawn after so a fresh stroke sits on top of
-      // the weather rather than being averaged into it.
-      if (sprite) {
-        cursor.step(dt, now);
-        cursor.draw(context!, sprite);
-      }
-
       frameId = requestAnimationFrame(frame);
-    }
-
-    function onMove(event: MouseEvent) {
-      cursor.push(event.clientX, event.clientY, performance.now());
-    }
-
-    /** Leaving the window breaks the trail: the pointer's next appearance is
-     *  somewhere unrelated, and a segment drawn between the two would lay a
-     *  stroke across a screen it never crossed. */
-    function onLeave() {
-      cursor.breakTrail();
     }
 
     resize();
     window.addEventListener("resize", resize);
-    window.addEventListener("mousemove", onMove, { passive: true });
-    document.addEventListener("mouseleave", onLeave);
-    window.addEventListener("blur", onLeave);
     frameId = requestAnimationFrame(frame);
 
     return () => {
       window.removeEventListener("resize", resize);
-      window.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseleave", onLeave);
-      window.removeEventListener("blur", onLeave);
       // **Defect 2.** The reference returns a cleanup that removes the resize
       // listener and nothing else, so the loop it started keeps running for the
       // life of the tab — through every navigation away from this page, at
@@ -409,6 +362,9 @@ export function FluidParticles({
           aria-hidden
           className="pointer-events-none absolute inset-0"
         />
+      )}
+      {reducedMotion ? null : (
+        <BrushLayer feather={SHELTER_FEATHER} className="absolute" />
       )}
       <div className="relative z-10 flex h-full w-full items-center justify-center">
         {children}

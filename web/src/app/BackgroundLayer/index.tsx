@@ -20,20 +20,20 @@
  * riding a Perlin flow field, peak 0.08 each, with no idea the cursor exists.
  * It is running before you touch the mouse and it does not stop.
  *
- * `cursor.ts` is the gesture — emitted one per eight pixels of pointer travel,
- * peak 0.35, born with a fraction of the pointer's own velocity so a flick
- * throws a longer tail than a crawl, and handed over to the same flow field as
- * it fades so the trail dissolves into the weather instead of switching off.
+ * `components/BrushLayer` is the gesture, and as of M9.6 it is not particles
+ * at all. Emitting discs and hoping they merge was an approximation of a
+ * stroke, and the approximation was what you saw; it keeps the last 1.5s of
+ * cursor positions and strokes one tapered, blurred path through them.
  *
- * `ParticleCanvas.tsx` owns the loop and the thing that makes a trail a trail:
- * the buffer is faded rather than cleared, so a particle overlaps its own
- * recent past and a row of dots becomes a smear. Read the header there before
- * changing the clear — it is done by erasing alpha rather than by painting the
- * page colour over the top, and the reason is the wash directly underneath it.
+ * `ParticleCanvas.tsx` owns the drift's loop and the thing that makes drift
+ * read as weather: the buffer is faded rather than cleared, so a speck overlaps
+ * its own recent past. Read the header there before changing the clear — it is
+ * done by erasing alpha rather than by painting the page colour over the top,
+ * and the reason is the wash directly underneath it.
  *
- * **The cursor layer is four times darker than anything M9.3 shipped in step
- * 1a, and that was a decision rather than a drift.** It costs contrast; what it
- * costs, on which text role, is measured in `particles.test.tsx`.
+ * **The stroke is dark enough to be unreadable-over, and that is handled by
+ * position rather than by opacity.** The reading column declares itself a
+ * shelter and the stroke is multiplied by zero inside it — see `lib/mask`.
  *
  * **Three gates, and only one of them is a preference.** Reduced motion and a
  * touch-primary pointer both mean the canvas is never created — see
@@ -50,7 +50,8 @@
 
 import { useEffect, useState } from "react";
 
-import { ParticleCanvas } from "./ParticleCanvas";
+import { BrushLayer } from "../../components/BrushLayer";
+import { APP_SHELTER_FEATHER, ParticleCanvas } from "./ParticleCanvas";
 import { ParticleToggle } from "./ParticleToggle";
 import { particlesPermitted, readPreference, writePreference } from "./preference";
 
@@ -103,6 +104,13 @@ export function BackgroundLayer() {
           clips its own overflow, and a full-viewport canvas inside a clipped
           box is a canvas with its edges cut off. */}
       {on ? <ParticleCanvas /> : null}
+
+      {/* The cursor mark, on its own canvas above the drift and still below
+          every piece of content. Separate because the two composite in
+          opposite ways — the drift accumulates onto a faded buffer, the stroke
+          is cleared and redrawn from a path every frame — and because the blur
+          belongs to the stroke alone. */}
+      {on ? <BrushLayer feather={APP_SHELTER_FEATHER} className="-z-10" /> : null}
 
       {permitted ? (
         <ParticleToggle

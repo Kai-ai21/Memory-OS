@@ -38,11 +38,8 @@
 
 import { useEffect, useRef } from "react";
 
-import { makeMask, readShelters } from "../../lib/mask";
-import { CursorLayer } from "../../lib/trail";
 import { AmbientLayer } from "./ambient";
 import { buildSprite } from "./field";
-import { flowAngle } from "./noise";
 
 /**
  * How much of the buffer is erased per 60fps frame. **Settled at 0.14.**
@@ -69,24 +66,21 @@ const CLEAR_ALPHA = 0.14;
 const MAX_STEP = 64;
 
 /**
- * How far outside the reading column the trail climbs back to full strength.
+ * How far outside the reading column the brush stroke climbs back to full
+ * strength, in CSS pixels.
  *
- * **The trail is at 0.55 ink as of M9.5 and that is not survivable over text.**
- * The answer is not a lower number — that would make the margins as timid as
- * the column and lose the whole change — it is that the column is off limits.
- * `Shell` marks its content wrapper as a shelter; inside it the trail is
- * multiplied by zero, and it reaches full strength 160px outside, which on any
- * layout this application uses lands in the gutter or behind the sidebar.
+ * Owned here rather than in `BrushLayer` because it is a fact about *this*
+ * layout: the app's margins are narrow, and a feather as wide as the landing
+ * page's would mean the stroke never reaches full strength anywhere on a
+ * laptop — the same failure as turning it down. `Shell` marks its content
+ * wrapper as a shelter; inside it the stroke is multiplied by zero, and it is
+ * back to full 160px out, which lands in the gutter or behind the sidebar.
  *
- * 160 rather than the landing page's 280 because the app's margins are
- * narrower: a wider feather here would mean the trail never actually reaches
- * full strength anywhere on a laptop screen, which is the same failure as
- * turning it down.
+ * The ambient drift is deliberately *not* masked in the application. It runs at
+ * 0.08 — an eighth of the stroke — and sheltering it as well would leave a
+ * visible rectangular hole in the wash across the middle of every screen.
  */
-const SHELTER_FEATHER = 160;
-
-/** How often the shelter is re-measured, in frames. Four times a second. */
-const REMEASURE_EVERY = 15;
+export const APP_SHELTER_FEATHER = 160;
 
 export function ParticleCanvas() {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -99,9 +93,6 @@ export function ParticleCanvas() {
     if (!context || !sprite) return;
 
     const ambient = new AmbientLayer();
-    // The app's own flow field, so a fading trail dissolves into the same
-    // weather the ambient layer is riding rather than into a different one.
-    const cursor = new CursorLayer(flowAngle);
     let frameId: number | null = null;
     let lastFrameAt = 0;
     let width = 0;
@@ -130,22 +121,10 @@ export function ParticleCanvas() {
       ambient.resize(width, height);
     }
 
-    let sinceMeasure = REMEASURE_EVERY;
-
     function frame(now: number) {
       frameId = null;
       const dt = Math.min(now - lastFrameAt, MAX_STEP);
       lastFrameAt = now;
-
-      // Re-read the shelter from the DOM rather than being told about it. The
-      // composer is sticky, routes change the column, windows resize — none of
-      // which need to know this exists. Two `getBoundingClientRect` calls four
-      // times a second does not appear in a frame profile.
-      sinceMeasure += 1;
-      if (sinceMeasure >= REMEASURE_EVERY) {
-        sinceMeasure = 0;
-        cursor.setMask(makeMask(readShelters(SHELTER_FEATHER)));
-      }
 
       // Fade the previous frame. `destination-out` scales the alpha already in
       // the buffer; the colour of the fill is irrelevant, only its alpha counts.
@@ -156,9 +135,7 @@ export function ParticleCanvas() {
       context!.globalCompositeOperation = "source-over";
 
       ambient.step(dt, now);
-      cursor.step(dt, now);
       ambient.draw(context!, sprite!);
-      cursor.draw(context!, sprite!);
 
       frameId = requestAnimationFrame(frame);
     }
@@ -177,21 +154,6 @@ export function ParticleCanvas() {
       frameId = null;
     }
 
-    function onMove(event: MouseEvent) {
-      cursor.push(event.clientX, event.clientY, performance.now());
-    }
-
-    /**
-     * Leaving the window breaks the trail rather than stopping anything.
-     *
-     * The pointer's next appearance is somewhere unrelated, and a segment drawn
-     * between where it left and where it came back would lay a stroke straight
-     * across a screen it never crossed.
-     */
-    function onLeave() {
-      cursor.breakTrail();
-    }
-
     function onVisibility() {
       if (document.hidden) {
         stop();
@@ -199,7 +161,6 @@ export function ParticleCanvas() {
         // of pixels it cannot show is the memory half of the same waste.
         context!.setTransform(1, 0, 0, 1, 0, 0);
         context!.clearRect(0, 0, canvas!.width, canvas!.height);
-        cursor.breakTrail();
         resize();
       } else {
         start();
@@ -209,16 +170,10 @@ export function ParticleCanvas() {
     resize();
     start();
     window.addEventListener("resize", resize);
-    window.addEventListener("mousemove", onMove, { passive: true });
-    document.addEventListener("mouseleave", onLeave);
-    window.addEventListener("blur", onLeave);
     document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
       window.removeEventListener("resize", resize);
-      window.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseleave", onLeave);
-      window.removeEventListener("blur", onLeave);
       document.removeEventListener("visibilitychange", onVisibility);
       stop();
     };

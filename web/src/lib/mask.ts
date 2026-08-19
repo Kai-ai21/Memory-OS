@@ -20,6 +20,9 @@
  * finds the discontinuity in the derivative even though the value is continuous.
  */
 
+/** How much ink is permitted at a point, in `0..1`. */
+export type Mask = (x: number, y: number) => number;
+
 export interface Shelter {
   left: number;
   top: number;
@@ -42,7 +45,7 @@ function smoothstep(t: number): number {
  * called once per particle per frame — a couple of thousand times a frame — and
  * the shape of the hot loop is worth being deliberate about.
  */
-export function makeMask(shelters: readonly Shelter[]): (x: number, y: number) => number {
+export function makeMask(shelters: readonly Shelter[]): Mask {
   if (shelters.length === 0) return () => 1;
 
   return (x, y) => {

@@ -22,14 +22,8 @@ import { fireEvent, render, screen } from "@testing-library/react";
 
 import { BackgroundLayer } from ".";
 import { AMBIENT_ALPHA_MAX, AMBIENT_COUNT, AmbientLayer } from "./ambient";
+import { HEAD_ALPHA as STROKE_ALPHA } from "../../lib/brush";
 import { makeMask } from "../../lib/mask";
-import {
-  CursorLayer,
-  EMIT_DISTANCE,
-  MAX_PARTICLES,
-  PEAK_ALPHA as CURSOR_ALPHA_MAX,
-} from "../../lib/trail";
-import { flowAngle } from "./noise";
 import { INK_FALLBACK } from "./field";
 import { noise3 } from "../../lib/noise";
 
@@ -164,86 +158,10 @@ describe("reduced motion", () => {
 
 /* --- The two layers, separately -------------------------------------------- */
 
-describe("the cursor layer", () => {
-  it("never holds more than MAX_PARTICLES, however hard it is driven", () => {
-    // The cap is the only thing standing between this and an unbounded array
-    // that grows for as long as the tab is open. At one particle per eight
-    // pixels, an energetic cursor reaches the cap in under two seconds.
-    const layer = new CursorLayer(flowAngle, () => 0.5);
-
-    for (let i = 0; i < 2000; i += 1) {
-      layer.push(i * 10, 0, i * 8);
-      expect(layer.particles.length).toBeLessThanOrEqual(MAX_PARTICLES);
-    }
-    expect(layer.particles.length).toBe(MAX_PARTICLES);
-
-    for (let i = 0; i < 500; i += 1) {
-      layer.emit(i, i);
-      expect(layer.particles.length).toBeLessThanOrEqual(MAX_PARTICLES);
-    }
-  });
-
-  it("emits on distance travelled rather than per frame", () => {
-    // A still cursor must cost nothing. Two events at the same point is not
-    // movement, whatever the frame rate is.
-    const layer = new CursorLayer(flowAngle, () => 0.5);
-
-    layer.push(10, 10, 0);
-    layer.push(10, 10, 16);
-    expect(layer.particles).toHaveLength(0);
-
-    // 200px of travel, at one per EMIT_DISTANCE.
-    layer.push(210, 10, 32);
-    expect(layer.particles).toHaveLength(200 / EMIT_DISTANCE);
-  });
-
-  it("throws a longer tail for a fast sweep than for a slow one", () => {
-    // The property that makes this read as a gesture rather than as a stamp.
-    // Both sweeps cover the same 300px and therefore emit the same number of
-    // particles in the same places; the only difference is the momentum each
-    // one is born with, so any difference downstream is the inheritance
-    // working. Without it a flick and a crawl look identical.
-    //
-    // 300px rather than something longer because a single segment above 400px
-    // is treated as a teleport and emits nothing — which is the right rule for
-    // a tab switch and a trap for a test written as one giant jump.
-    function sweep(durationMs: number) {
-      const layer = new CursorLayer(flowAngle, () => 0.5);
-      layer.push(0, 0, 0);
-      layer.push(300, 0, durationMs);
-      const last = layer.particles[layer.particles.length - 1];
-      const bornAt = last.x;
-      for (let i = 0; i < 25; i += 1) layer.step(16, i * 16);
-      return last.x - bornAt;
-    }
-
-    const fast = sweep(50); // 6 px/ms
-    const slow = sweep(1500); // 0.2 px/ms
-
-    expect(fast).toBeGreaterThan(200);
-    expect(slow).toBeLessThan(30);
-    expect(fast).toBeGreaterThan(slow * 5);
-  });
-
-  it("hands a fading particle over to the flow field", () => {
-    // The trail has to dissolve into the ambient drift rather than switch off,
-    // which means an old particle must still be moving after its inherited
-    // momentum is gone. A particle emitted with no cursor velocity at all has
-    // nothing to move it *except* the field.
-    const layer = new CursorLayer(flowAngle, () => 0.5);
-    layer.emit(400, 300);
-    const particle = layer.particles[0];
-    const from = { x: particle.x, y: particle.y };
-
-    // A hundred frames rather than fifty: the handover weight is the square of
-    // the fraction of life elapsed, and M9.5 lengthened the life from ~1.2s to
-    // ~1.8s. Same property, later in wall-clock time — which is the point of
-    // the longer fade, so the test moved with it rather than the code.
-    for (let i = 0; i < 100; i += 1) layer.step(16, i * 16);
-
-    expect(Math.hypot(particle.x - from.x, particle.y - from.y)).toBeGreaterThan(1);
-  });
-});
+/* The cursor layer's tests went with the cursor layer. M9.6 replaced the
+   emitter with a stroke, which is `lib/brush` and is tested beside it in
+   `components/BrushLayer.test.tsx`. What stays here is the drift, the loop it
+   runs in, and what the two of them cost the text. */
 
 describe("the ambient layer", () => {
   it("is a fixed pool: exactly AMBIENT_COUNT, and it never grows", () => {
@@ -464,22 +382,22 @@ describe("what a particle costs the text under it", () => {
     expect(ratio("ink", AMBIENT_ALPHA_MAX)).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("records that the cursor layer alone would not, and why that is survivable", () => {
-    // **M9.5 took the trail past the point where opacity alone is safe.** At
-    // 0.55 a single trail particle behind body text measures 4.28:1, just under
-    // AA — `ink` crosses at α 0.536. Every lighter role went under long before.
+  it("records that the stroke alone would not, and why that is survivable", () => {
+    // **The cursor mark is far past the point where opacity alone is safe.** At
+    // its 0.85 head it is not "harder to read through", it is opaque; `ink`
+    // crosses AA against darkened paper at α 0.536 and every lighter role went
+    // under long before that.
     //
-    // What replaced the opacity ceiling as the protection is positional: the
-    // reading column is a shelter and the trail is multiplied by zero inside
-    // it. That is asserted below rather than here, because it is the thing that
-    // is actually true — "the trail is never dark over text" is now a fact
-    // about *where* it is drawn, not about how dark it is.
-    expect(CURSOR_ALPHA_MAX).toBe(0.55);
-    expect(ratio("ink", CURSOR_ALPHA_MAX)).toBeLessThan(4.5);
-    expect(ratio("ink", CURSOR_ALPHA_MAX)).toBeGreaterThan(4);
+    // What replaces the opacity ceiling is positional: the reading column is a
+    // shelter and the stroke is multiplied by zero inside it. That is asserted
+    // below rather than here, because it is the thing that is actually true —
+    // "the mark is never dark over text" is a fact about *where* it is drawn,
+    // not about how dark it is.
+    expect(STROKE_ALPHA).toBe(0.85);
+    expect(ratio("ink", STROKE_ALPHA)).toBeLessThan(4.5);
   });
 
-  it("draws no trail ink at all inside a shelter", () => {
+  it("draws no stroke ink at all inside a shelter", () => {
     // The replacement gate, and the reason 0.55 can ship. A reading column is
     // a shelter; inside one the multiplier is exactly zero, at the centre and
     // hard against every edge, so no peak opacity anywhere above can put ink
@@ -519,15 +437,15 @@ describe("what a particle costs the text under it", () => {
   });
 
   it("records what each layer's ceiling costs the two lightest roles", () => {
-    // Not a pass/fail on the design. The ambient ceiling is 0.08 and the cursor
-    // ceiling is 0.35, both by instruction, and both are above the point at
-    // which micro-labels and links stop clearing AA against darkened paper.
+    // Not a pass/fail on the design. The ambient ceiling is 0.08 and the
+    // stroke's head is 0.85, both by instruction, and both are above the point
+    // at which micro-labels and links stop clearing AA against darkened paper.
     // Recorded so the cost stays a known quantity rather than a surprise.
     expect(AMBIENT_ALPHA_MAX).toBe(0.08);
-    expect(CURSOR_ALPHA_MAX).toBe(0.55);
+    expect(STROKE_ALPHA).toBe(0.85);
 
     expect(ratio("ink-3", AMBIENT_ALPHA_MAX)).toBeLessThan(4.5);
     expect(ratio("accent", AMBIENT_ALPHA_MAX)).toBeLessThan(4.5);
-    expect(ratio("ink-2", CURSOR_ALPHA_MAX)).toBeLessThan(4.5);
+    expect(ratio("ink-2", STROKE_ALPHA)).toBeLessThan(4.5);
   });
 });
