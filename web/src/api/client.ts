@@ -43,11 +43,35 @@ export class NetworkError extends Error {
 
 type Json = Record<string, unknown>;
 
+/**
+ * Where an unauthenticated caller is sent, and the one place that decides it.
+ *
+ * A hard assignment rather than a router navigation, because this runs inside
+ * the fetch layer where there is no router — and because a 401 means the
+ * application's cached state is about somebody who is no longer signed in. A
+ * full load throws all of it away, which is what you want.
+ *
+ * Guarded on the current path so that a 401 *from the sign-in page itself*
+ * does not reload it in a loop.
+ */
+function toSignIn(): void {
+  if (typeof window === "undefined") return;
+  if (window.location.pathname === "/welcome") return;
+  window.location.assign("/welcome");
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
       ...init,
+      // **The session is an `HttpOnly` cookie, so this is what sends it.**
+      // The UI and the API are different origins, so the browser omits cookies
+      // unless asked — without this every authenticated call is a 401 that
+      // looks like a backend bug. Nothing here reads the cookie or could: that
+      // is the whole point of `HttpOnly`, and it is why no token is stored in
+      // `localStorage` anywhere in this client.
+      credentials: "include",
       headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
     });
   } catch (cause) {
@@ -57,6 +81,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
+    // A 401 from anywhere means the session is gone — expired, revoked, or
+    // never there. Handled once, here, rather than by every caller: an
+    // error-handling path that has to be remembered per query is one that will
+    // be missing from whichever page is added next.
+    if (response.status === 401) toSignIn();
     throw new ApiError(response.status, await readDetail(response), path);
   }
   // 204 has no body, and `response.json()` on an empty one throws a SyntaxError
@@ -104,7 +133,7 @@ async function readDetail(response: Response): Promise<string> {
 async function readiness(): Promise<Readiness> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}/health/ready`);
+    response = await fetch(`${API_BASE}/health/ready`, { credentials: "include" });
   } catch (cause) {
     throw new NetworkError("/health/ready", cause);
   }
@@ -235,7 +264,46 @@ export interface SearchArgs {
   tags?: string[];
 }
 
+/** The signed-in account, as `/auth/me` reports it. */
+export interface Account {
+  id: string;
+  email: string;
+  created_at: string;
+  last_login_at: string | null;
+}
+
 export const api = {
+  /**
+   * Sign in.
+   *
+   * Deliberately *not* routed through `request`, for one reason: a 401 here is
+   * the expected answer to a wrong password, and `request` turns any 401 into a
+   * redirect to the sign-in page. On the sign-in page that would be a reload
+   * instead of an error message.
+   */
+  login: async (email: string, password: string): Promise<Account> => {
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+    } catch (cause) {
+      throw new NetworkError("/auth/login", cause);
+    }
+    if (!response.ok) {
+      throw new ApiError(response.status, await readDetail(response), "/auth/login");
+    }
+    return (await response.json()) as Account;
+  },
+
+  logout: () => request<null>("/auth/logout", { method: "POST" }),
+
+  /** Who is signed in, or an `ApiError` with status 401. */
+  me: () => request<Account>("/auth/me"),
+
   search: ({ q, k, sources, kind, exact, tags }: SearchArgs) => {
     const params = new URLSearchParams({ q, k: String(k ?? 10) });
     // Repeated rather than comma-joined: FastAPI reads a list parameter that
@@ -538,7 +606,11 @@ export const api = {
 
     let response: Response;
     try {
-      response = await fetch(`${API_BASE}/chat/attach`, { method: "POST", body });
+      response = await fetch(`${API_BASE}/chat/attach`, {
+        method: "POST",
+        body,
+        credentials: "include",
+      });
     } catch (cause) {
       throw new NetworkError("/chat/attach", cause);
     }

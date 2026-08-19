@@ -278,6 +278,20 @@ class Settings(BaseSettings):
     # `create_app` refuses a wildcard outright rather than trusting this comment.
     cors_origins: list[str] = []
 
+    # M11.0. Whether the session cookie carries `Secure`.
+    #
+    # Derived from `environment` rather than configured separately, because the
+    # two cannot disagree usefully: browsers silently drop `Secure` cookies sent
+    # over plain HTTP, so hardcoding it would make a local deployment unable to
+    # log in at all, and hardcoding it off would send a session token in clear
+    # over any real network. Anything that is not `local` gets it.
+    #
+    # A property rather than a field: it is not something to set, it is
+    # something that follows, and a settable one is a way to be wrong.
+    @property
+    def session_cookie_secure(self) -> bool:
+        return self.environment not in ("local", "test")
+
     @model_validator(mode="after")
     def _anchor_relative_paths(self) -> "Settings":
         """Resolve `blob_root` and `hf_home` against the tree, not the shell.

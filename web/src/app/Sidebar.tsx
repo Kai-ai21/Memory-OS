@@ -18,6 +18,7 @@
  * 282 memories means something different from three out of 30,000.
  */
 
+import { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
@@ -140,10 +141,16 @@ function NewConversation({ onNavigate }: { onNavigate?: () => void }) {
  * somewhere, and the honest options were a page saying "there are no settings"
  * or a second link to a screen already two inches higher. Both are worse than
  * the gap.
+ *
+ * **M11.0 adds sign-out, and it goes here rather than in a settings row that
+ * still does not exist.** It is the second meta-control this application has
+ * and the first one that changes anything, so it sits above `help` — the more
+ * consequential of two pinned items should not be the lower one.
  */
 function Pinned({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <div className="flex flex-col gap-1">
+      <SignOut onNavigate={onNavigate} />
       <button
         type="button"
         className="nav-item w-full text-left"
@@ -161,6 +168,44 @@ function Pinned({ onNavigate }: { onNavigate?: () => void }) {
         <span className="kbd ml-auto normal-case">⌘K</span>
       </button>
     </div>
+  );
+}
+
+/**
+ * Sign out.
+ *
+ * The request is what matters and the navigation is the consolation prize: the
+ * cookie is `HttpOnly`, so this page cannot clear it and must ask the server
+ * to revoke the session. A failure still navigates — if the API is unreachable
+ * there is nothing to use anyway, and leaving somebody on a signed-in-looking
+ * screen after they asked to leave is the worse of the two lies.
+ *
+ * `window.location` rather than the router, deliberately: every cached query in
+ * this application is about a person who is no longer signed in, and a full
+ * load is the one thing guaranteed to drop all of it.
+ */
+function SignOut({ onNavigate }: { onNavigate?: () => void }) {
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <button
+      type="button"
+      className="nav-item w-full text-left"
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        onNavigate?.();
+        try {
+          await api.logout();
+        } catch {
+          // Deliberately swallowed; see the header.
+        }
+        window.location.assign("/welcome");
+      }}
+    >
+      <Icon name="close" size={18} />
+      <span>{busy ? "signing out…" : "sign out"}</span>
+    </button>
   );
 }
 

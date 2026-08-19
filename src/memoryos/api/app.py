@@ -3,12 +3,13 @@ import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from memoryos.api.routes import (
     agent,
     answer,
+    auth,
     chat,
     context,
     decisions,
@@ -24,6 +25,7 @@ from memoryos.api.routes import (
     surfacing,
     timeline,
 )
+from memoryos.api.security import require_session
 from memoryos.application import live
 from memoryos.config import Settings, get_settings
 from memoryos.container import Container
@@ -47,6 +49,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # assembles, and a container-scoped one would be rebuilt per CLI
         # invocation where there is nothing listening.
         app.state.live = live.LiveBus()
+        # M11.0. Process-scoped, like the bus and for the same reason: it is
+        # five integers per client address with no place in the object graph a
+        # request assembles. Its scope is also its limitation — two workers
+        # means two counters — which the README says out loud.
+        app.state.login_limiter = auth.LoginRateLimiter()
         listener = asyncio.create_task(
             live.listen(app.state.live, live.asyncpg_dsn(resolved.database_url))
         )
@@ -61,9 +68,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await listener
             await container.dispose()
 
-    app = FastAPI(title="Memory Intelligence OS", version="0.1.0", lifespan=lifespan)
+    # **Auth is global, and opting out is explicit.** The dependency runs before
+    # every route on this application, including ones added after this line was
+    # written; `security.is_public` names the two prefixes that skip it. The
+    # alternative — decorating each protected route — fails silently in the one
+    # direction that matters, because the endpoint somebody forgets is the
+    # endpoint that leaks.
+    app = FastAPI(
+        title="Memory Intelligence OS",
+        version="0.1.0",
+        lifespan=lifespan,
+        dependencies=[Depends(require_session)],
+    )
     _install_cors(app, resolved)
     app.include_router(health.router)
+    # Before everything the gate protects, for reading order rather than for the
+    # router: `/auth/*` is public because you cannot require a session in order
+    # to obtain one.
+    app.include_router(auth.router)
     app.include_router(sources.router)
     app.include_router(search.router)
     # Before `memories`, and it has to be. Routes are matched in registration
@@ -138,10 +160,17 @@ def _install_cors(app: FastAPI, settings: Settings) -> None:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.cors_origins),
-        # The UI sends no cookies and no Authorization header — there is no auth
-        # in this milestone — so credentials stay off. Turning them on later is a
-        # decision to make alongside whatever introduces auth.
-        allow_credentials=False,
+        # **On as of M11.0, and this is the milestone that was being waited for.**
+        # The session is an `HttpOnly` cookie and the UI is served from a
+        # different origin than the API, so without this the browser sends the
+        # request without the cookie and every authenticated call is a 401 that
+        # looks like a backend bug.
+        #
+        # Safe only because of the check above: `allow_credentials` with `*` is
+        # the combination browsers reject outright, and the wildcard is refused
+        # at startup rather than documented against. Named origins plus
+        # credentials is the pair that works.
+        allow_credentials=True,
         # PATCH joins the list in M5.0: editing a decision is the first write in
         # this API that amends a row rather than creating one, and a browser
         # preflight for a method not named here fails before the request is made.

@@ -3709,6 +3709,132 @@ empty ranking exactly as M3.5 designed, and fusion treats that as "this retrieve
 found nothing" rather than as a failure. The right reading is that Phase 3's
 contribution to context is **unmeasured**, not zero.
 
+## Authentication
+
+M11.0. One account, a password, and a session cookie.
+
+### What this protects, and what it does not
+
+**It stops somebody using the UI on an unlocked machine, or reaching the API
+across the network, without the password.** That is the threat it was built for
+and it is the whole of it.
+
+It is **not** multi-tenant isolation, and the distinction is not pedantic:
+
+- **Nothing is scoped to a user.** Every memory, decision, chunk and chat
+  message in the database is unowned. There is no `user_id` on any of them and
+  no query filters by one. If a second account existed it would read everything
+  the first one wrote. That is why a second account cannot be created — the
+  system is single-user because the *data model* is single-user, not because
+  nobody got around to a registration form. Scoping is M11.1 and is only worth
+  building if this is ever deployed somewhere with more than one person.
+- **The CLI is not authenticated and cannot be.** `memoryos` commands open the
+  database directly and never speak HTTP, so the API's gate is not on the path.
+  Anybody with shell access to the machine and the connection string has the
+  whole corpus, with or without a password. On a local single-user system that
+  is not a gap — it is the same person — but on a shared machine the login is
+  worth exactly as much as the filesystem permissions under it.
+- **The database is not encrypted at rest.** A stolen disk is a read of
+  everything. The password protects the interface, not the bytes.
+- **The rate limiter is in-process.** One uvicorn worker means one counter;
+  running two workers means two counters and ten attempts per window rather
+  than five. Fine for this deployment, wrong for any deployment with a load
+  balancer in front of it, and the fix there is a shared store rather than a
+  bigger number.
+- **There is no password reset by email**, because there is no email. A
+  forgotten password is recovered with `memoryos auth reset-password` from a
+  shell on the machine, which is the same trust boundary as the CLI above.
+
+### Setting it up
+
+```bash
+uv run memoryos auth create-user --email you@example.com
+```
+
+Prompts for the password twice, hidden. There is deliberately no `--password`
+flag: an argument lands in shell history and is visible in `ps` to every other
+user on the machine for as long as the process runs. Minimum twelve characters,
+and nothing else — composition rules push people toward `Password1!`, and
+length is the only requirement that reliably buys entropy.
+
+A second `create-user` is refused, naming the account that exists. To change the
+password:
+
+```bash
+uv run memoryos auth reset-password --email you@example.com
+```
+
+Which also revokes every existing session. A reset that left them alive would
+not have changed anything for whoever is already signed in, which is usually
+the reason for it.
+
+### How it works
+
+**Passwords are Argon2id**, via `argon2-cffi` at the library's defaults. Not
+bcrypt — its 72-byte input truncation is a footgun with no upside — and never a
+bare SHA, which is designed to be fast and so is designed to be brute-forceable.
+The algorithm sits behind a `PasswordHasher` port, so replacing it is one
+adapter and one line of the container. Verification is constant-time inside the
+library; nothing in this codebase compares a password or a hash with `==`.
+
+**Sessions are opaque random tokens**, 32 bytes from `secrets.token_urlsafe`,
+not JWTs. There is one server and a database, so a stateless token buys nothing
+and costs the ability to revoke — which is the entire content of "log out".
+
+**The database stores a SHA-256 of the token, never the token.** If it leaks,
+stored tokens would be live credentials and stored hashes are not, and it costs
+the honest path nothing because the server is handed the token on every request
+and hashes it again. SHA-256 rather than Argon2 is correct in this one place: a
+256-bit random token is not guessable, so the slowness that protects a password
+would defend against nothing at tens of milliseconds per request.
+
+**The cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` outside local.**
+`HttpOnly` means JavaScript cannot read it, so an XSS bug anywhere in the UI
+cannot exfiltrate the session — which is why the frontend stores nothing in
+`localStorage` and has nothing to store. `Secure` is derived from the
+environment rather than hardcoded, because browsers silently drop `Secure`
+cookies over plain HTTP and a hardcoded `true` makes localhost unable to log in
+at all. Thirty-day expiry.
+
+**Login is rate limited to five attempts per fifteen minutes per IP**, on a
+sliding window. Without it the password is brute-forceable at network speed, and
+Argon2's cost is the only thing in the way — a defence measured in attempts per
+second rather than in attempts. Only failures count, and a success clears the
+address, so mistyping four times and then getting it right does not lock you out
+of your own machine. The client is identified by `request.client.host` and
+`X-Forwarded-For` is deliberately not read: trusting a client-settable header
+would let anybody reset their own limit, which is a rate limiter that is worse
+than none because it looks like one.
+
+**An unknown email and a wrong password return the same 401 with the same
+sentence.** Different messages are an account-enumeration oracle. A password
+check runs even when the address is unknown, so the response time does not
+answer the question the error message refused to.
+
+### What is protected
+
+The auth dependency is attached to the FastAPI application, so **every route is
+protected by default and opting out is explicit**. A route added tomorrow is
+covered before anybody thinks about it. The alternative — decorating each
+protected route — fails silently in the one direction that matters, because the
+endpoint somebody forgets is the endpoint that leaks.
+
+Public, and this is the complete list:
+
+| Path | Why |
+|---|---|
+| `/health/live`, `/health/ready` | An orchestrator has no session. Reveals whether Postgres and Neo4j are reachable, and nothing about the corpus. |
+| `/auth/login`, `/auth/logout`, `/auth/me` | You cannot require a session in order to obtain one. |
+| `/docs`, `/redoc`, `/openapi.json` | The shape of the API, not its contents. `make types` reads it without a session. |
+
+Sixty-five routes; five public. The prefix match is on a path *segment*, so
+`/healthy-corpus` would not be made public by beginning with `/health`.
+
+Both `users` and `sessions` are `USER_AUTHORED`. Nothing in the ingestion log
+produces an account or a login, so a replay that truncated them would lock the
+operator out of their own system with no way back in but the CLI.
+
+
 ## Clients
 
 M6.2 gets real events from where the work happens and puts the context back

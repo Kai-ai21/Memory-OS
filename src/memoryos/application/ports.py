@@ -1325,3 +1325,33 @@ class KeywordStore(Protocol):
         an ordinary answer, not an error.
         """
         ...
+
+
+class PasswordHasher(Protocol):
+    """Hashing and checking a password, with the algorithm left outside.
+
+    Two methods, because there are exactly two things a use case needs to do
+    with a password and neither of them is "look at it". `AuthenticateUser` and
+    `CreateUser` talk to this and never import `argon2`; the implementation is
+    `adapters/auth/argon2_hasher.Argon2PasswordHasher`.
+
+    **`verify` takes the stored hash first and returns a bool.** Argument order
+    is the library's, kept so a reader comparing the two files does not have to
+    check; the bool is this port's, because the alternative is every call site
+    catching three exception types to answer one question.
+
+    The contract that matters is not in the signature: **`verify` must be
+    constant-time**. A comparison whose duration depends on how many bytes
+    matched leaks the hash a byte at a time to anybody willing to make enough
+    requests. Every implementation of this port has to inherit that from its
+    library rather than writing the comparison itself, which is why no code in
+    this repository compares a password or a hash with `==`.
+    """
+
+    def hash(self, password: str) -> str:
+        """An encoded hash, carrying its own algorithm, parameters and salt."""
+        ...
+
+    def verify(self, password_hash: str, password: str) -> bool:
+        """True when `password` produced `password_hash`. Never raises."""
+        ...

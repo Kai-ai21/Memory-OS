@@ -158,20 +158,67 @@ describe("the route", () => {
   });
 });
 
-describe("the sign-in shell", () => {
-  it("renders the form and disables every control in it", () => {
-    // There is no user system in this project. A form that looked operable
-    // would be an interface telling a lie, and the worst version of that lie
-    // is the one that takes a password first. `<fieldset disabled>` makes
-    // "inert" a fact about the document rather than a styling choice.
+describe("signing in", () => {
+  /**
+   * **These replace M9.4's "every control is disabled" test, which M11.0
+   * deleted the behaviour of.** The form was a disabled `<fieldset>` while
+   * there was no user system to sign in to; there is one now, and a test still
+   * asserting the controls are inert would be pinning the scaffolding rather
+   * than the product.
+   */
+  it("renders an enabled form and no 'not active yet' notice", () => {
     stubMedia();
     stubFrames();
 
     renderWithProviders(<WelcomePage />, { route: "/welcome" });
 
-    expect(screen.getByLabelText(/email/i)).toBeDisabled();
-    expect(screen.getByLabelText(/password/i)).toBeDisabled();
-    expect(screen.getByRole("button", { name: /continue/i })).toBeDisabled();
-    expect(screen.getByText(/sign-in isn’t active yet/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/email/i)).toBeEnabled();
+    expect(screen.getByLabelText(/password/i)).toBeEnabled();
+    expect(screen.getByRole("button", { name: /continue/i })).toBeEnabled();
+    expect(screen.queryByText(/isn’t active yet/i)).not.toBeInTheDocument();
+  });
+
+  it("posts the credentials to /auth/login with the cookie enabled", async () => {
+    // `credentials: "include"` is the whole reason the session works across
+    // origins, and it is invisible on screen — so it is asserted here or
+    // nowhere.
+    stubMedia();
+    stubFrames();
+    const calls = stubFetch([
+      { match: "/auth/login", body: { id: "u", email: "a@b.c", created_at: "", last_login_at: null } },
+    ]);
+
+    renderWithProviders(<WelcomePage />, { route: "/welcome" });
+    await userEvent.type(screen.getByLabelText(/email/i), "a@b.c");
+    await userEvent.type(screen.getByLabelText(/password/i), "a long enough password");
+    await userEvent.click(screen.getByRole("button", { name: /continue/i }));
+
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/auth/login"))).toBe(true));
+    const login = calls.find((c) => c.url.includes("/auth/login"));
+    expect(login?.method).toBe("POST");
+    expect(login?.body).toEqual({ email: "a@b.c", password: "a long enough password" });
+  });
+
+  it("shows one message for a rejected sign-in", async () => {
+    // The server returns the same 401 for an unknown address and a wrong
+    // password; this asserts the UI does not invent a distinction the API went
+    // to some trouble not to make.
+    stubMedia();
+    stubFrames();
+    stubFetch([
+      { match: "/auth/login", body: { detail: "Incorrect email or password" }, status: 401 },
+    ]);
+
+    renderWithProviders(<WelcomePage />, { route: "/welcome" });
+    await userEvent.type(screen.getByLabelText(/email/i), "a@b.c");
+    await userEvent.type(screen.getByLabelText(/password/i), "wrong password here");
+    await userEvent.click(screen.getByRole("button", { name: /continue/i }));
+
+    const alert = await screen.findByTestId("signin-error");
+    expect(alert).toHaveTextContent("Incorrect email or password");
+    // And nothing was written down. The cookie is the session and it is
+    // HttpOnly; a client that cached anything here would be caching a
+    // credential it is not allowed to hold.
+    expect(window.localStorage.length).toBe(0);
   });
 });

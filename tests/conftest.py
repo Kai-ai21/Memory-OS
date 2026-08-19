@@ -17,7 +17,14 @@ from sqlalchemy.ext.asyncio import (
 
 from memoryos.adapters.db.models import Base
 from memoryos.api.app import create_app
+from memoryos.application.auth import CreateUser
 from memoryos.config import Settings, get_settings
+
+# The account the signed-in `client` fixture uses. Not a secret and not
+# pretending to be one: it exists only inside a database that is truncated
+# between tests, and the suite has to be able to log in without a human.
+TEST_ACCOUNT_EMAIL = "tester@example.invalid"
+TEST_ACCOUNT_PASSWORD = "correct horse battery staple"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -57,13 +64,79 @@ def settings() -> Settings:
     return Settings()
 
 
+async def sign_in(app: object, http_client: AsyncClient) -> None:
+    """Create the account on `app` and log `http_client` into it.
+
+    Exported because two tests build their own application — they need
+    non-default settings — and a signed-in client is now a precondition for
+    reaching any route. Without this they would each grow their own copy of the
+    login, which is three places for the fixture's account to drift from the
+    suite's.
+    """
+    container = app.state.container  # type: ignore[attr-defined]
+    async with container.database.session_factory.begin() as db:
+        await CreateUser(db, container.password_hasher)(
+            TEST_ACCOUNT_EMAIL, TEST_ACCOUNT_PASSWORD
+        )
+    response = await http_client.post(
+        "/auth/login",
+        json={"email": TEST_ACCOUNT_EMAIL, "password": TEST_ACCOUNT_PASSWORD},
+    )
+    assert response.status_code == 200, response.text
+
+
 @pytest.fixture
-async def client(settings: Settings, clean_database: None) -> AsyncIterator[AsyncClient]:
+async def anonymous_client(
+    settings: Settings, clean_database: None
+) -> AsyncIterator[AsyncClient]:
+    """The app with no session. What an unauthenticated caller sees.
+
+    M11.0 made every route but `/health/*` and `/auth/*` require a session, so
+    this is the fixture that can still observe a 401 — and the one the auth
+    tests drive, because they are about obtaining a session rather than having
+    one.
+    """
     app = create_app(settings)
     async with (
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http_client,
     ):
+        yield http_client
+
+
+@pytest.fixture
+async def client(
+    settings: Settings, clean_database: None
+) -> AsyncIterator[AsyncClient]:
+    """The app, signed in.
+
+    **M11.0 changed what this fixture means and deliberately not what it is
+    called.** Every API test in this suite was written against an open API; auth
+    is now global, so without a session all of them would fail with 401 and none
+    of them would be testing what they were written to test. Creating an account
+    and logging in here keeps every existing assertion honest — and makes them
+    stronger, because they now also demonstrate that a signed-in caller reaches
+    each route.
+
+    The login goes through `/auth/login` rather than forging a cookie, so the
+    fixture exercises the same path a browser does. A test that wants to see the
+    gate refuse somebody uses `anonymous_client`.
+    """
+    app = create_app(settings)
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http_client,
+    ):
+        container = app.state.container
+        async with container.database.session_factory.begin() as db:
+            await CreateUser(db, container.password_hasher)(
+                TEST_ACCOUNT_EMAIL, TEST_ACCOUNT_PASSWORD
+            )
+        response = await http_client.post(
+            "/auth/login",
+            json={"email": TEST_ACCOUNT_EMAIL, "password": TEST_ACCOUNT_PASSWORD},
+        )
+        assert response.status_code == 200, response.text
         yield http_client
 
 

@@ -2,34 +2,67 @@
  * The front door: a wordmark, a line of copy, a sign-in form that does not
  * sign anybody in, and the one link that actually goes somewhere.
  *
- * **The form is scaffolding and says so twice.** There is no user system in
- * this project — no users table, no sessions, nothing that could accept a
- * password — so a form that looked operable would be a lie told by an
+ * **M11.0 made the form real.** Until this milestone there was no user system
+ * to sign in to, the fieldset was disabled, and the page said so underneath —
+ * because a form that looked operable would have been a lie told by an
  * interface, and the worst version of that lie is the one that takes a
- * password before admitting it. It is wrapped in a disabled `<fieldset>`,
- * which is the one construct that makes "inert" a fact about the document
- * rather than a styling choice: every control inside is unfocusable and
- * unsubmittable, and assistive technology is told so without a single
- * `aria-*` attribute.
+ * password before admitting it. All of that is gone: it posts to `/auth/login`
+ * and a success lands you on `/`.
  *
- * **Which makes the accent rule do the work here.** Rule 1 of this theme is
- * that the accent means "you can do something here", and on this page exactly
- * one thing qualifies. CONTINUE is the loud element and is dead; `Open MEMO`
- * is quiet and is live. Left alone that is precisely backwards, so the button
- * carries the disabled treatment — dimmed, default cursor — and the link
- * carries the accent, an underline and the arrow. The hierarchy the eye reads
- * and the hierarchy the mouse discovers end up agreeing.
+ * **One error message for every failure.** An unknown address and a wrong
+ * password produce the same sentence, because the server produces the same
+ * response — anything else lets somebody read which addresses have accounts
+ * off the error text. The only failure worded differently is the rate limit,
+ * which is not about the credentials at all.
+ *
+ * Nothing is stored here. The session is an `HttpOnly` cookie the browser
+ * holds and JavaScript cannot read, which is why there is no token in
+ * `localStorage`, no context provider holding one, and nothing to clear on
+ * logout but the server's own record.
  *
  * The card is the only element on the page with a shadow. Everything else sits
  * flat on the canvas, which is what keeps the one raised thing meaning
  * "raised" rather than being one of several.
  */
 
-import { Link } from "react-router-dom";
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 
+import { ApiError, NetworkError, api } from "../../api/client";
 import { FluidParticles } from "./FluidParticles";
 
 export function WelcomePage() {
+  const navigate = useNavigate();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.login(email, password);
+      // `replace`, so the back button does not return to a sign-in page the
+      // session has already passed.
+      navigate("/", { replace: true });
+    } catch (cause) {
+      if (cause instanceof NetworkError) {
+        setError("Could not reach MEMO. Is the API running?");
+      } else if (cause instanceof ApiError && cause.status === 429) {
+        // The one failure that is not about the credentials, and saying so
+        // stops somebody retyping a password that was never the problem.
+        setError("Too many attempts. Try again in a few minutes.");
+      } else {
+        setError("Incorrect email or password");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <FluidParticles>
       <main
@@ -54,19 +87,21 @@ export function WelcomePage() {
         {/* The card is narrower than the copy above it. A sign-in form as wide
             as a sentence reads as a page rather than as an object on one. */}
         <div className="flex w-full max-w-90 flex-col gap-3">
-        <form
-          className="panel panel-raised w-full p-5 text-left"
-          /* Belt and braces. A disabled fieldset cannot submit, so this only
-             fires if somebody removes the fieldset and forgets why it was
-             there — at which point a page reload is the least useful outcome. */
-          onSubmit={(event) => event.preventDefault()}
-        >
-          <fieldset disabled className="flex flex-col gap-3">
-            <legend className="sr-only">Sign in to MEMO (not yet active)</legend>
+        <form className="panel panel-raised w-full p-5 text-left" onSubmit={submit}>
+          <fieldset disabled={busy} className="flex flex-col gap-3">
+            <legend className="sr-only">Sign in to MEMO</legend>
 
             <label className="flex flex-col gap-1.5">
               <span className="meta-label">email</span>
-              <input type="email" name="email" autoComplete="off" className="field" />
+              <input
+                type="email"
+                name="email"
+                autoComplete="username"
+                required
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                className="field"
+              />
             </label>
 
             <label className="flex flex-col gap-1.5">
@@ -74,20 +109,28 @@ export function WelcomePage() {
               <input
                 type="password"
                 name="password"
-                autoComplete="off"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
                 className="field"
               />
             </label>
 
             <button type="submit" className="btn-primary mt-1 w-full">
-              Continue
+              {busy ? "Signing in…" : "Continue"}
             </button>
           </fieldset>
         </form>
 
-        <p className="meta text-ink-3">
-          Sign-in isn&rsquo;t active yet &mdash; MEMO runs locally on your machine.
-        </p>
+        {/* `role="alert"` so the message is announced rather than only drawn:
+            somebody using a screen reader gets no other signal that the form
+            came back. `deny` rather than the accent — this is not an action. */}
+        {error ? (
+          <p role="alert" className="meta text-deny" data-testid="signin-error">
+            {error}
+          </p>
+        ) : null}
         </div>
 
         {/* --- The path that works ----------------------------------------- */}
