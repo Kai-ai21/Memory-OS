@@ -20,6 +20,14 @@
 
 export type IconName =
   | "search"
+  | "agent"
+  | "model"
+  | "judgements"
+  | "surfacing"
+  | "corpus"
+  | "collapse"
+  | "more"
+  | "chevron"
   | "timeline"
   | "graph"
   | "decisions"
@@ -117,6 +125,67 @@ const PATHS: Record<IconName, React.ReactNode> = {
   ),
   close: <path d="m6.5 6.5 11 11m0-11-11 11" />,
   menu: <path d="M4.5 7.5h15m-15 4.5h15m-15 4.5h15" />,
+
+  /* --- M9.8 -------------------------------------------------------------
+   * Five of these exist because the icon is now load-bearing. Until this
+   * milestone the sidebar drew `chat` twice, `insights` twice and `decisions`
+   * twice, which was harmless while every row was also a word in mono caps —
+   * the label was doing the identifying. With the group headings gone and the
+   * label demoted to lowercase body text, the glyph is the first thing the eye
+   * lands on, and two rows that share one are two rows you have to read.
+   */
+  agent: (
+    <>
+      <rect x="4.5" y="8" width="15" height="11" rx="3" />
+      <circle cx="12" cy="4" r="1.2" />
+      <path d="M12 5.2V8" />
+      <path d="M9.5 12.5v1.6M14.5 12.5v1.6" />
+    </>
+  ),
+  model: (
+    <>
+      <circle cx="12" cy="8.2" r="3.4" />
+      <path d="M5.5 19.8a6.5 6.5 0 0 1 13 0" />
+    </>
+  ),
+  judgements: (
+    <>
+      <path d="M12 5.5v14M8.5 19.5h7M5 8.5h14" />
+      <path d="M5 8.5 3 12.8a2.3 2.3 0 0 0 4 0Z" />
+      <path d="M19 8.5 17 12.8a2.3 2.3 0 0 0 4 0Z" />
+    </>
+  ),
+  surfacing: (
+    <>
+      <path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.4 2H5.1Z" />
+      <path d="M10.2 19.6a2 2 0 0 0 3.6 0" />
+    </>
+  ),
+  corpus: (
+    <>
+      <path d="m12 3.7 8 4.1-8 4.2-8-4.2Z" />
+      <path d="m4 12.2 8 4.2 8-4.2" />
+      <path d="m4 16.2 8 4.2 8-4.2" />
+    </>
+  ),
+  /* Header chrome. `collapse` is the panel-with-a-rail glyph the reference
+     uses; `more` is the three dots the footer hides settings behind; `chevron`
+     is the details disclosure and rotates rather than swapping to an up arrow,
+     so the open state is one element in two positions. */
+  collapse: (
+    <>
+      <rect x="3.5" y="5" width="17" height="14" rx="2.5" />
+      <path d="M9.5 5v14" />
+    </>
+  ),
+  more: (
+    <>
+      <circle cx="5.6" cy="12" r="1.3" />
+      <circle cx="12" cy="12" r="1.3" />
+      <circle cx="18.4" cy="12" r="1.3" />
+    </>
+  ),
+  chevron: <path d="m8.5 10.5 3.5 3.5 3.5-3.5" />,
 };
 
 interface Props {

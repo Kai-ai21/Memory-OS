@@ -1,24 +1,34 @@
 /**
- * The persistent column: what this is, where you can go, and what it holds.
+ * The panel: who you are, where you can go, and one thing worth reading.
  *
- * A flat white column separated from the page by a single hairline. The
- * wordmark, one primary action, six nav items with icons, and help pinned to
- * the bottom rule.
+ * **It is a floating panel now, not a column.** Until M9.8 this was a flat
+ * white column flush to the left edge, separated from the page by a hairline.
+ * It is now 264px of glass inset 12px from the top, left and bottom of the
+ * viewport, with a 20px radius — and the 12px of nothing around it is the point
+ * of the change rather than a detail of it. The two drifting radials and the
+ * cursor trail run underneath, and being able to see them past the edges and
+ * through the face is the only thing that makes the material read as glass
+ * instead of as a pale grey rectangle. See `.glass-panel`.
  *
- * **The active item carries no accent.** On dark it was cyan with a fill and an
- * inner glow, because against a void a hairline is not findable in peripheral
- * vision. On light it is a 2px ink rule, a jump to semibold, and a tint — all
- * of which are findable here, and none of which spend the interaction colour on
- * saying where you already are. See rule 1 in `tokens.css`.
+ * **Every row is a glyph and a word, and nothing else.** No pill, no border, no
+ * fill at rest. The group headings are gone — the groups are 20px of space now
+ * — and so is the wordmark, which has moved to being what it always was: the
+ * landing page's job. What is left at the top is an avatar and two controls.
  *
- * **The corpus figures live down here rather than only on `/corpus`.** They are
- * the answer to "is this thing loaded and working", which is a question you ask
- * constantly while using the tool and never want to change page for. They are
- * also the honest frame for every other view: three results out of a corpus of
- * 282 memories means something different from three out of 30,000.
+ * **The active item still carries no accent.** That was true before this
+ * milestone and is the one thing in here that did not change: it is a tint and
+ * a step up in weight, because where you already are is not something you can
+ * click. See rule 1 in `tokens.css`, and the test that pins it.
+ *
+ * **The corpus figures moved behind `details` rather than out.** They are the
+ * answer to "is this thing loaded and working", which is worth one click and is
+ * not worth six permanent rows at the bottom of a panel this quiet — and the
+ * disclosure remembers, so anybody who wants them up keeps them up. They are
+ * also still the honest frame for every other view: three results out of a
+ * corpus of 282 memories means something different from three out of 30,000.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
@@ -27,30 +37,67 @@ import { Icon } from "../components/Icon";
 import { count } from "../lib/format";
 import { GROUPS, HOME, inGroup, type ViewRoute } from "./routes";
 
-export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
-  return (
-    /* Opaque white, both as a column and as the mobile drawer. Nothing here is
-       translucent any more, which removes the problem the dark theme had to
-       work around — a glassy drawer over the article let you read the search
-       results through the navigation. */
-    <div className="flex h-full flex-col gap-6 overflow-y-auto bg-surface px-3 pt-6 pb-4">
-      <Wordmark onNavigate={onNavigate} />
-      <NewConversation onNavigate={onNavigate} />
+/**
+ * Whether the details block is open, across reloads.
+ *
+ * Wrapped in `try` for the same reason the particle preference is: Safari's
+ * private mode throws on `localStorage` rather than returning null, and a
+ * disclosure state is not worth taking the application down over. A read that
+ * fails is a closed block, which is the default anyway.
+ */
+const DETAILS_KEY = "memo:sidebar-details";
 
-      <nav className="flex flex-col gap-5" aria-label="Views">
-        <div className="flex flex-col gap-1">
+function readDetails(): boolean {
+  try {
+    return window.localStorage.getItem(DETAILS_KEY) === "open";
+  } catch {
+    return false;
+  }
+}
+
+function writeDetails(open: boolean): void {
+  try {
+    window.localStorage.setItem(DETAILS_KEY, open ? "open" : "closed");
+  } catch {
+    // Still a preference for this session; the state lives in React either way.
+  }
+}
+
+export function Sidebar({
+  onNavigate,
+  onCollapse,
+}: {
+  onNavigate?: () => void;
+  /** Hide the panel. The shell owns the state; this is the handle for it. */
+  onCollapse?: () => void;
+}) {
+  return (
+    <div className="glass-panel flex h-full flex-col gap-4 overflow-hidden px-2 py-3">
+      <Header onCollapse={onCollapse} />
+
+      {/* The only scrolling region. The card and the footer are pinned, so the
+          promoted card cannot be scrolled out of the panel on a short window —
+          which is the entire reason it is promoted. */}
+      <nav
+        className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto"
+        aria-label="Views"
+      >
+        <div className="flex flex-col gap-0.5">
+          <NewConversation onNavigate={onNavigate} />
           <Item route={HOME} onNavigate={onNavigate} />
           {inGroup("primary").map((route) => (
             <Item key={route.path} route={route} onNavigate={onNavigate} />
           ))}
         </div>
 
-        {GROUPS.filter((group) => group.id !== "primary").map((group) => {
-          const routes = inGroup(group.id);
+        {/* 20px of nothing between the groups, and nothing else. A heading here
+            would be a row you cannot click, at the top of a group whose members
+            already say what they are. */}
+        {GROUPS.filter((group) => group !== "primary").map((group) => {
+          const routes = inGroup(group);
           if (routes.length === 0) return null;
           return (
-            <div key={group.id} className="flex flex-col gap-1">
-              <p className="meta-label px-3 pb-1">{group.label}</p>
+            <div key={group} className="flex flex-col gap-0.5">
               {routes.map((route) => (
                 <Item key={route.path} route={route} onNavigate={onNavigate} />
               ))}
@@ -59,49 +106,81 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         })}
       </nav>
 
-      {/* Pushed to the bottom, which is where a status line belongs: read when
-          looked for, never in the way of the nav above it. */}
-      <div className="mt-auto flex flex-col gap-3 border-t border-rule pt-3">
-        <Pinned onNavigate={onNavigate} />
-        <div className="flex flex-col gap-3 border-t border-rule px-3 pt-3">
-          <CorpusFigures />
-          <Health />
-        </div>
+      <Promoted onNavigate={onNavigate} />
+      <Footer onNavigate={onNavigate} />
+    </div>
+  );
+}
+
+/**
+ * The top row: an avatar, search, and the collapse toggle.
+ *
+ * **The wordmark is gone and this is the right call.** MEMO was a 22px display
+ * face and a tagline sitting above the nav on every screen of the application,
+ * which is a product name introducing itself to somebody who is already inside
+ * the product. The name belongs on the landing page, where there is somebody
+ * who does not know it yet.
+ *
+ * Search here opens the command palette rather than routing to `/search`. There
+ * is already a `search` row four lines below that goes to the view; a second
+ * control doing the identical thing would be a wasted affordance, and the
+ * palette is the thing this icon means everywhere else — jump to anything.
+ */
+function Header({ onCollapse }: { onCollapse?: () => void }) {
+  return (
+    <div className="flex items-center justify-between px-1">
+      <span
+        className="avatar size-8 shrink-0 rounded-full"
+        aria-hidden
+        data-testid="avatar"
+      />
+
+      <div className="flex items-center">
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Search everything"
+          title="Search everything — ⌘K"
+          onClick={() => openPalette()}
+        >
+          <Icon name="search" size={20} />
+        </button>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Hide navigation"
+          title="Hide navigation"
+          onClick={onCollapse}
+        >
+          <Icon name="collapse" size={20} />
+        </button>
       </div>
     </div>
   );
 }
 
-function Wordmark({ onNavigate }: { onNavigate?: () => void }) {
-  return (
-    <NavLink
-      to="/"
-      onClick={onNavigate}
-      className="flex flex-col gap-1 px-3"
-      aria-label="MEMO, chat"
-    >
-      {/* The display face at 22px. MEMORY OS was eleven characters and filled
-          the column at 14px; MEMO is four, and at that size it read as a
-          truncation rather than a name. At this size it occupies roughly the
-          width the old wordmark did, which is what keeps the top block balanced
-          against the button under it. No glow — nothing on light glows. */}
-      <span className="display text-[1.375rem] font-bold tracking-[0.14em] text-ink">
-        MEMO
-      </span>
-      <span className="meta-label">Everything you&rsquo;ve thought</span>
-    </NavLink>
+/** The palette owns ⌘K; dispatching the key is how a button and a keystroke
+ *  stay one implementation rather than two. */
+function openPalette(): void {
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }),
   );
 }
 
 /**
- * The one primary action in the interface.
+ * Starting something new, as a row rather than as a button.
  *
- * Starts a *new session* rather than merely navigating to chat — which is why
- * this and the `chat` nav item both exist and are not redundant. The reference
- * has only this button, because in the reference chat is the whole canvas; here
- * there are sessions, and "go back to what I was saying" and "start something
- * new" are different intentions. Dropping the session parameter is what makes
- * it new: see `ChatPage`, which reads the session from the URL.
+ * It was the one filled, uppercase, glass button in the interface and it sat
+ * above the nav shouting at it. **A panel with one loud object in it is a panel
+ * you read in the order the loudness dictates**, which was: button, wordmark,
+ * everything else. As a row with a `+` in front of it, it is the first thing in
+ * the list because it is first in the list, which is enough — the reference
+ * does exactly this and it is why the reference reads calm.
+ *
+ * It still starts a *new session* rather than merely navigating to chat, which
+ * is why this and the `chat` row are both here and are not redundant. Dropping
+ * the session parameter is what makes it new: see `ChatPage`, which reads the
+ * session from the URL.
  */
 function NewConversation({ onNavigate }: { onNavigate?: () => void }) {
   const navigate = useNavigate();
@@ -109,64 +188,181 @@ function NewConversation({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <button
       type="button"
-      /* **The only glass in the application.** See `.glass-button` — it is also
-         the only element with a backdrop-filter and the only one with a box
-         shadow, and it only reads as glass because `BackgroundLayer` paints
-         something behind the page for it to frost. */
-      className="glass-button mx-3 flex items-center justify-center gap-2"
+      className="nav-item w-full text-left"
       onClick={() => {
         navigate("/");
         onNavigate?.();
       }}
     >
-      <Icon name="add" size={16} />
-      <span>New conversation</span>
+      <Icon name="add" size={20} />
+      <span>new chat</span>
     </button>
   );
 }
 
-/**
- * The pair pinned to the bottom rule, as the reference draws them.
- *
- * **Wired to what exists rather than to what the reference invented.** The
- * mockup shows Settings and Help as two more nav rows; this application has
- * neither page. Help is real and is this: the command palette lists every view
- * in the application with a sentence saying what it answers, which is the only
- * help surface here and a better one than a page of prose would be.
- *
- * There is no settings row. Everything configurable in this system is an
- * environment variable read at startup — weights, models, connection strings —
- * and the one thing you can change from the interface, which directories get
- * read, is `sources` in the nav above. A settings row would have to lead
- * somewhere, and the honest options were a page saying "there are no settings"
- * or a second link to a screen already two inches higher. Both are worse than
- * the gap.
- *
- * **M11.0 adds sign-out, and it goes here rather than in a settings row that
- * still does not exist.** It is the second meta-control this application has
- * and the first one that changes anything, so it sits above `help` — the more
- * consequential of two pinned items should not be the lower one.
- */
-function Pinned({ onNavigate }: { onNavigate?: () => void }) {
+function Item({ route, onNavigate }: { route: ViewRoute; onNavigate?: () => void }) {
   return (
-    <div className="flex flex-col gap-1">
-      <SignOut onNavigate={onNavigate} />
+    <NavLink
+      to={route.path}
+      end={route.path === "/"}
+      onClick={onNavigate}
+      title={route.blurb}
+      className={({ isActive }) => `nav-item ${isActive ? "nav-item-on" : ""}`}
+    >
+      <Icon name={route.icon} size={20} />
+      <span>{route.label}</span>
+    </NavLink>
+  );
+}
+
+/**
+ * The one surfaced thing in the panel.
+ *
+ * White paper with a hairline, in a panel where everything else is text on
+ * glass — which is why the eye goes here and why there must never be a second
+ * one. It is spent on the tour rather than on a figure or a status: somebody
+ * who does not yet know what this application *is* cannot be helped by a count,
+ * and `/overview` is the page that answers the question in numbers that come
+ * from their own corpus.
+ */
+function Promoted({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <NavLink to="/overview" onClick={onNavigate} className="promo shrink-0">
+      <span className="mt-px text-ink-2">
+        <Icon name="help" size={20} />
+      </span>
+      <span className="flex flex-col gap-0.5">
+        <span className="text-body-sm text-ink">What MEMO does</span>
+        <span className="meta text-ink-3">A short tour of how memory works</span>
+      </span>
+    </NavLink>
+  );
+}
+
+/**
+ * Beneath the card, under a hairline: the corpus, and everything meta.
+ *
+ * **Two permanent rows became one three-dot button.** `help` and `sign out`
+ * were pinned to the bottom of every screen — one of them a keyboard shortcut
+ * that is already bound globally, the other a thing you do once a month. Under
+ * `more` they cost a click and no space, which is the correct trade for both.
+ * There is still no settings page in this application and this milestone does
+ * not invent one; `more` holds what actually exists.
+ */
+function Footer({ onNavigate }: { onNavigate?: () => void }) {
+  const [open, setOpen] = useState(readDetails);
+
+  return (
+    <div className="shrink-0 border-t border-rule pt-2">
       <button
         type="button"
         className="nav-item w-full text-left"
+        aria-expanded={open}
+        aria-controls="sidebar-details"
+        data-testid="details-toggle"
         onClick={() => {
-          onNavigate?.();
-          // The palette owns this shortcut; dispatching the key is how a button
-          // and a keystroke stay one implementation rather than two.
-          window.dispatchEvent(
-            new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }),
-          );
+          setOpen((current) => {
+            writeDetails(!current);
+            return !current;
+          });
         }}
       >
-        <Icon name="help" size={18} />
-        <span>help</span>
-        <span className="kbd ml-auto normal-case">⌘K</span>
+        <Icon name="tune" size={20} />
+        <span>details</span>
+        <span
+          className={`ml-auto transition-transform ${open ? "rotate-180" : ""}`}
+          aria-hidden
+        >
+          <Icon name="chevron" size={16} />
+        </span>
       </button>
+
+      {open ? (
+        <div id="sidebar-details" className="flex flex-col gap-3 px-3 py-2">
+          <CorpusFigures />
+          <Health />
+        </div>
+      ) : null}
+
+      <More onNavigate={onNavigate} />
+    </div>
+  );
+}
+
+/**
+ * The meta menu.
+ *
+ * Closes on Escape, on a click anywhere outside it, and on any of its own
+ * items — three exits, because a menu you cannot dismiss by clicking away from
+ * it is the single most common complaint about menus. `Escape` is handled here
+ * rather than in the shell's global handler so that it closes this first and
+ * the drawer second, which is the order a person expects when both are open.
+ */
+function More({ onNavigate }: { onNavigate?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function onPointer(event: MouseEvent) {
+      if (!box.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={box}>
+      <button
+        type="button"
+        className="nav-item w-full text-left"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Icon name="more" size={20} />
+        <span>more</span>
+      </button>
+
+      {open ? (
+        <div
+          role="menu"
+          /* Opaque, unlike everything else in this panel — see `.menu`. It
+             covers two rows of the footer, and glass over text is text you can
+             read through the thing covering it. `bottom-full` because there is
+             nothing below it: this is the last thing in a panel that ends 12px
+             from the bottom of the window. */
+          className="menu absolute bottom-full left-0 z-10 mb-1 flex w-full flex-col gap-0.5 p-1"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="nav-item w-full text-left"
+            onClick={() => {
+              setOpen(false);
+              onNavigate?.();
+              openPalette();
+            }}
+          >
+            <Icon name="help" size={20} />
+            <span>help</span>
+            <span className="kbd ml-auto normal-case">⌘K</span>
+          </button>
+          <SignOut onNavigate={onNavigate} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -190,6 +386,7 @@ function SignOut({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <button
       type="button"
+      role="menuitem"
       className="nav-item w-full text-left"
       disabled={busy}
       onClick={async () => {
@@ -203,26 +400,9 @@ function SignOut({ onNavigate }: { onNavigate?: () => void }) {
         window.location.assign("/welcome");
       }}
     >
-      <Icon name="close" size={18} />
+      <Icon name="close" size={20} />
       <span>{busy ? "signing out…" : "sign out"}</span>
     </button>
-  );
-}
-
-function Item({ route, onNavigate }: { route: ViewRoute; onNavigate?: () => void }) {
-  return (
-    <NavLink
-      to={route.path}
-      end={route.path === "/"}
-      onClick={onNavigate}
-      title={route.blurb}
-      className={({ isActive }) =>
-        `nav-item ${isActive ? "nav-item-on" : ""}`
-      }
-    >
-      <Icon name={route.icon} size={18} />
-      <span>{route.label}</span>
-    </NavLink>
   );
 }
 
@@ -246,7 +426,7 @@ function CorpusFigures() {
     return <p className="meta text-deny">corpus unavailable</p>;
   }
   if (!stats.data) {
-    return <p className="meta text-ink-3">reading corpus…</p>;
+    return <p className="meta text-ink-2">reading corpus…</p>;
   }
 
   return (
@@ -262,7 +442,13 @@ function CorpusFigures() {
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
-      <dt className="meta text-ink-3">{label}</dt>
+      {/* `ink-2` rather than `ink-3`, and only inside this panel. Muted
+          metadata is `ink-3` everywhere in the application because everywhere
+          else it sits on an opaque surface, where it measures 5.4:1. Here the
+          surface is 72% white over a background that can be crossed by the
+          cursor trail, and `ink-3` falls to 3.2:1 under the head of it. One
+          step darker holds AA against everything the background can do. */}
+      <dt className="meta text-ink-2">{label}</dt>
       <dd className="meta text-ink">{value}</dd>
     </div>
   );

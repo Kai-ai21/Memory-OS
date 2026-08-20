@@ -26,15 +26,19 @@
  *      "this is the actionable thing" any more.
  *
  *   2. **Hairlines, not shadows.** Panels are `surface` with a 1px `rule`.
- *      There is exactly one shadow in the entire application and it is on the
- *      one glass element. On light, shadows accumulate into noise faster than
- *      anything else — five soft drop shadows and the page looks like it is
- *      made of stickers.
+ *      Every shadow in this application is on something that floats over the
+ *      background layer rather than sitting on the page — the sidebar panel,
+ *      a primary button, the send pearl, the sign-in card — and there are no
+ *      others. On light, shadows accumulate into noise faster than anything
+ *      else: five soft drop shadows and the page looks like it is made of
+ *      stickers.
  *
- * GLASS is used on exactly one element: the NEW CONVERSATION button. See
- * `.glass-button` in `index.css` and `BackgroundLayer` in the shell, which is
- * the only reason the frosting has anything to frost. More glass will be
- * introduced later, deliberately, once the flat version reads well.
+ * GLASS is the chrome, as of M9.8, and only the chrome: `.glass-panel` is the
+ * sidebar — which now floats in a 12px margin rather than sitting flush as a
+ * column — and `.btn-primary` is every primary action. Both depend on
+ * `BackgroundLayer` in the shell, which is the only reason the frosting has
+ * anything to frost. Nothing inside the reading column is translucent, and
+ * `styles/theme.test.ts` is what keeps it that way.
  *
  * TYPE — three faces, three jobs, unchanged from the dark theme:
  *   display   Space Grotesk. Page titles and the wordmark.
@@ -263,7 +267,11 @@
   --space-12: 3rem;
   --space-16: 4rem;
 
-  --width-sidebar: 17.5rem;
+  /* 264px. Was 17.5rem flush to the edge; the panel is narrower *and* inset by
+   * 12px on each side, so the content column gains almost nothing back — which
+   * is the trade this milestone makes deliberately, since the margin is what
+   * lets the background show past the glass. */
+  --width-sidebar: 16.5rem;
   --width-reading: 75ch;
 
   /* --- The background wash ----------------------------------------------

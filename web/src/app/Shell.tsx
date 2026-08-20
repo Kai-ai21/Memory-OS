@@ -16,8 +16,16 @@
  * navigates to the one there is.
  *
  * Below 768px the sidebar becomes a drawer over the content rather than a
- * squeezed column. A 17.5rem nav beside a 320px article leaves neither of them
+ * squeezed column. A 16.5rem nav beside a 320px article leaves neither of them
  * usable, and the nav is the half you need less often.
+ *
+ * **M9.8 unsticks the sidebar from the edge.** It is a panel floating in a 12px
+ * margin now rather than a column flush against the viewport, so the `aside`
+ * here owns the inset and the radius-clipping and `Sidebar` owns the glass. The
+ * shell also owns whether it is shown at all: the panel's collapse control is a
+ * handle into this component's state, because a component cannot un-render
+ * itself and the button that brings it back has to live somewhere the panel is
+ * not.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -31,6 +39,11 @@ import { Sidebar } from "./Sidebar";
 export function Shell({ children }: { children: React.ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  /* Session state rather than a stored preference, deliberately. Hiding the
+     nav is something you do to get a wide view of one page for a minute, not a
+     way you want the application to start — and a nav that is missing on load
+     because of something you did last Tuesday is a bug report. */
+  const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const main = useRef<HTMLElement>(null);
@@ -106,7 +119,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
           className="btn flex items-center gap-2"
           aria-expanded={drawerOpen}
           aria-controls="sidebar"
-          onClick={() => setDrawerOpen((current) => !current)}
+          onClick={() => {
+            // The drawer and the desktop collapse are one panel in two
+            // positions, so asking for the menu on a phone has to undo a
+            // collapse made on a wider window.
+            setCollapsed(false);
+            setDrawerOpen((current) => !current);
+          }}
         >
           <Icon name="menu" size={16} />
           menu
@@ -133,14 +152,41 @@ export function Shell({ children }: { children: React.ReactNode }) {
           onClick={() => setDrawerOpen(false)}
         />
       ) : null}
-      <aside
-        id="sidebar"
-        className={`fixed inset-y-0 left-0 z-40 w-70 border-r border-rule transition-transform md:sticky md:top-0 md:z-auto md:h-dvh md:w-(--width-sidebar) md:translate-x-0 ${
-          drawerOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
-      >
-        <Sidebar onNavigate={() => setDrawerOpen(false)} />
-      </aside>
+      {/* 12px off the top, left and bottom at every width — the drawer is the
+          same floating panel arriving from off-screen rather than a different
+          object. `-translate-x-[110%]` rather than `-full` so that the shadow
+          and the 12px margin go with it; at `-full` the soft edge of the shadow
+          stays visible against the page. */}
+      {collapsed ? null : (
+        <aside
+          id="sidebar"
+          className={`fixed inset-y-3 left-3 z-40 w-(--width-sidebar) transition-transform md:sticky md:top-3 md:z-auto md:my-3 md:ml-3 md:h-[calc(100dvh-1.5rem)] md:translate-x-0 ${
+            drawerOpen ? "translate-x-0" : "-translate-x-[110%]"
+          }`}
+        >
+          <Sidebar
+            onNavigate={() => setDrawerOpen(false)}
+            onCollapse={() => {
+              setDrawerOpen(false);
+              setCollapsed(true);
+            }}
+          />
+        </aside>
+      )}
+
+      {/* What brings it back. One 32px control in the corner the panel left,
+          and it only exists while the panel does not. */}
+      {collapsed ? (
+        <button
+          type="button"
+          className="panel icon-button fixed top-3 left-3 z-40 hidden md:inline-flex"
+          aria-label="Show navigation"
+          title="Show navigation"
+          onClick={() => setCollapsed(false)}
+        >
+          <Icon name="collapse" size={20} />
+        </button>
+      ) : null}
 
       {/* --- The content ------------------------------------------------- */}
       <main

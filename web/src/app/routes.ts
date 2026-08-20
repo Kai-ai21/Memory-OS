@@ -45,13 +45,19 @@ export interface ViewRoute {
 
 export type GroupId = "primary" | "secondary";
 
-/** Group headings, in sidebar order. The primary group is unlabelled: six
- *  items under the wordmark need no heading, and a heading over them would be
- *  the first thing in the nav and the least useful. */
-export const GROUPS: { id: GroupId; label: string }[] = [
-  { id: "primary", label: "" },
-  { id: "secondary", label: "more" },
-];
+/**
+ * The groups, in sidebar order — and as of M9.8 they have no headings.
+ *
+ * They were `""` and `"more"`, which was already an admission: one of the two
+ * headings had nothing to say, and the other said something the items under it
+ * said better. M9.8 drops both and separates the groups with 20px of nothing,
+ * which is what the reference does and is the only device in a nav that costs
+ * no rows. A heading is a row you cannot click.
+ *
+ * The ids stay, because the *split* is still real: `primary` is the reference's
+ * own six plus chat, `secondary` is everything else this application has.
+ */
+export const GROUPS: GroupId[] = ["primary", "secondary"];
 
 /**
  * Chat sits above the groups rather than inside one.
@@ -142,7 +148,7 @@ export const ROUTES: ViewRoute[] = [
     blurb:
       "Ask a question answered over several retrievals, with every sentence checked against what came back.",
     group: "secondary",
-    icon: "chat",
+    icon: "agent",
     aliases: ["ask", "answer", "question"],
   },
   {
@@ -151,7 +157,7 @@ export const ROUTES: ViewRoute[] = [
     blurb:
       "What the system believes about you, every dimension listed — including the empty ones and why.",
     group: "secondary",
-    icon: "insights",
+    icon: "model",
     aliases: ["user model", "facets"],
   },
   {
@@ -160,7 +166,7 @@ export const ROUTES: ViewRoute[] = [
     blurb:
       "The golden set as it grows: which queries have been judged, and how lopsided each one is.",
     group: "secondary",
-    icon: "decisions",
+    icon: "judgements",
     aliases: ["golden set", "relevance", "labels"],
   },
   {
@@ -169,7 +175,7 @@ export const ROUTES: ViewRoute[] = [
     blurb:
       "What the system volunteered without being asked, and every time it decided to stay quiet.",
     group: "secondary",
-    icon: "insights",
+    icon: "surfacing",
     aliases: ["proactive", "refusals", "interruptions"],
   },
   {
@@ -177,7 +183,7 @@ export const ROUTES: ViewRoute[] = [
     label: "corpus",
     blurb: "Counts and the standing health checks the CLI runs.",
     group: "secondary",
-    icon: "sources",
+    icon: "corpus",
     aliases: ["stats", "doctor", "health"],
   },
 ];
