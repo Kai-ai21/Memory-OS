@@ -1,41 +1,84 @@
 /**
  * The panel: who you are, where you can go, and one thing worth reading.
  *
- * **It is a floating panel now, not a column.** Until M9.8 this was a flat
- * white column flush to the left edge, separated from the page by a hairline.
- * It is now 264px of glass inset 12px from the top, left and bottom of the
- * viewport, with a 20px radius — and the 12px of nothing around it is the point
- * of the change rather than a detail of it. The two drifting radials and the
- * cursor trail run underneath, and being able to see them past the edges and
- * through the face is the only thing that makes the material read as glass
+ * **It is a floating panel, not a column.** 264px of glass inset 12px from the
+ * top, left and bottom of the viewport, with a 20px radius — and the 12px of
+ * nothing around it is the point rather than a detail of it. The two drifting
+ * radials and the cursor trail run underneath, and being able to see them past
+ * the edges and through the face is what makes the material read as glass
  * instead of as a pale grey rectangle. See `.glass-panel`.
  *
- * **Every row is a glyph and a word, and nothing else.** No pill, no border, no
- * fill at rest. The group headings are gone — the groups are 20px of space now
- * — and so is the wordmark, which has moved to being what it always was: the
- * landing page's job. What is left at the top is an avatar and two controls.
+ * **M9.9 takes the terminal out of the navigation.** Every label in here was
+ * lowercase JetBrains Mono at 11px with 0.08em of tracking, which is the
+ * register this application uses for paths, scores, offsets and hashes — and
+ * using it for the nav said that a place you can go is the same kind of thing
+ * as a byte offset. It is not. Navigation is prose: Inter at 14.5px, sentence
+ * case, no tracking, 450 at rest and 600 where you are.
  *
- * **The active item still carries no accent.** That was true before this
- * milestone and is the one thing in here that did not change: it is a tint and
+ * **The mono is still here and is still right — inside `details`.** Four counts
+ * that are read against each other need tabular figures and a column that
+ * lines up. That is the whole of the exception, and `Sidebar.test.tsx` asserts
+ * that nothing outside that block has crossed back over.
+ *
+ * **The icons are lucide now, one family at one weight.** They were
+ * hand-drawn on Material's grid, which was the right call while they were
+ * decoration beside a word in caps; with the caps gone the glyph is the first
+ * thing the eye lands on, and a set drawn by hand at 1.5px next to text at
+ * 14.5px is a set whose inconsistencies you can see. 18px, stroke 1.5 — not
+ * lucide's default 2, which is heavy against text this size and is the single
+ * most common reason an icon set looks clumsy.
+ *
+ * **The active item still carries no accent.** It is a `surface-tint` fill and
  * a step up in weight, because where you already are is not something you can
  * click. See rule 1 in `tokens.css`, and the test that pins it.
  *
- * **The corpus figures moved behind `details` rather than out.** They are the
- * answer to "is this thing loaded and working", which is worth one click and is
- * not worth six permanent rows at the bottom of a panel this quiet — and the
- * disclosure remembers, so anybody who wants them up keeps them up. They are
- * also still the honest frame for every other view: three results out of a
- * corpus of 282 memories means something different from three out of 30,000.
+ * **The corpus figures live behind `details` rather than in the panel.** They
+ * are the answer to "is this thing loaded and working", which is worth one
+ * click and is not worth six permanent rows — and the disclosure remembers, so
+ * anybody who wants them up keeps them up. They are also still the honest frame
+ * for every other view: three results out of a corpus of 282 memories means
+ * something different from three out of 30,000.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import {
+  ChevronDown,
+  Compass,
+  HelpCircle,
+  LogOut,
+  MoreHorizontal,
+  PanelLeft,
+  Plus,
+  Search,
+  SlidersHorizontal,
+} from "lucide-react";
 
 import { api } from "../api/client";
-import { Icon } from "../components/Icon";
 import { count } from "../lib/format";
 import { GROUPS, HOME, inGroup, type ViewRoute } from "./routes";
+
+/** Every glyph in this panel, at one size and one weight. */
+const GLYPH = { size: 18, strokeWidth: 1.5 } as const;
+
+/**
+ * The route table's label, as the panel draws it.
+ *
+ * **The table stays lowercase and this function is why.** `label` is read by
+ * the command palette as well as by the sidebar, and the palette matches typed
+ * text against it — a table full of capitals would mean either a palette that
+ * misses `graph` or a `toLowerCase()` at every comparison. Sentence case is a
+ * fact about how this panel *draws* a label, not about what the label is, so
+ * it lives here.
+ *
+ * First letter only, deliberately. `text-transform: capitalize` would have been
+ * one line of CSS and would render "New Chat" and "Sign Out", which is title
+ * case and is not what was asked for.
+ */
+function sentence(label: string): string {
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
 
 /**
  * Whether the details block is open, across reloads.
@@ -72,17 +115,21 @@ export function Sidebar({
   onCollapse?: () => void;
 }) {
   return (
-    <div className="glass-panel flex h-full flex-col gap-4 overflow-hidden px-2 py-3">
+    /* No horizontal padding on the panel itself: the two hairlines — under the
+       header and above the footer — run the full width of the glass, and a rule
+       that stops 8px short of the edge on both sides reads as a mistake rather
+       than as a decision. Every block below sets its own inset instead. */
+    <div className="glass-panel flex h-full flex-col overflow-hidden py-3">
       <Header onCollapse={onCollapse} />
 
       {/* The only scrolling region. The card and the footer are pinned, so the
           promoted card cannot be scrolled out of the panel on a short window —
           which is the entire reason it is promoted. */}
       <nav
-        className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto"
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 py-3"
         aria-label="Views"
       >
-        <div className="flex flex-col gap-0.5">
+        <div className="nav-group flex flex-col">
           <NewConversation onNavigate={onNavigate} />
           <Item route={HOME} onNavigate={onNavigate} />
           {inGroup("primary").map((route) => (
@@ -90,14 +137,17 @@ export function Sidebar({
           ))}
         </div>
 
-        {/* 20px of nothing between the groups, and nothing else. A heading here
-            would be a row you cannot click, at the top of a group whose members
-            already say what they are. */}
+        {/* 18px between the groups with a hairline through the middle of it,
+            inset 12px from each side so it lines up with the rows rather than
+            with the panel. Drawn by `.nav-group + .nav-group::before` — the gap
+            alone read as inconsistent spacing, and a rule is what turns two
+            runs of rows into two things. Still no headings: a heading is a row
+            you cannot click. */}
         {GROUPS.filter((group) => group !== "primary").map((group) => {
           const routes = inGroup(group);
           if (routes.length === 0) return null;
           return (
-            <div key={group} className="flex flex-col gap-0.5">
+            <div key={group} className="nav-group flex flex-col">
               {routes.map((route) => (
                 <Item key={route.path} route={route} onNavigate={onNavigate} />
               ))}
@@ -122,15 +172,17 @@ export function Sidebar({
  * who does not know it yet.
  *
  * Search here opens the command palette rather than routing to `/search`. There
- * is already a `search` row four lines below that goes to the view; a second
+ * is already a `Search` row four lines below that goes to the view; a second
  * control doing the identical thing would be a wasted affordance, and the
  * palette is the thing this icon means everywhere else — jump to anything.
  */
 function Header({ onCollapse }: { onCollapse?: () => void }) {
   return (
-    <div className="flex items-center justify-between px-1">
+    <div className="flex items-center justify-between border-b border-rule px-3 pb-3.5">
+      {/* 30px, no border. A ring around a gradient is a second edge on an
+          object whose whole job is to be the one soft thing in the panel. */}
       <span
-        className="avatar size-8 shrink-0 rounded-full"
+        className="avatar size-[30px] shrink-0 rounded-full"
         aria-hidden
         data-testid="avatar"
       />
@@ -143,7 +195,7 @@ function Header({ onCollapse }: { onCollapse?: () => void }) {
           title="Search everything — ⌘K"
           onClick={() => openPalette()}
         >
-          <Icon name="search" size={20} />
+          <Search {...GLYPH} />
         </button>
         <button
           type="button"
@@ -152,7 +204,7 @@ function Header({ onCollapse }: { onCollapse?: () => void }) {
           title="Hide navigation"
           onClick={onCollapse}
         >
-          <Icon name="collapse" size={20} />
+          <PanelLeft {...GLYPH} />
         </button>
       </div>
     </div>
@@ -174,11 +226,10 @@ function openPalette(): void {
  * above the nav shouting at it. **A panel with one loud object in it is a panel
  * you read in the order the loudness dictates**, which was: button, wordmark,
  * everything else. As a row with a `+` in front of it, it is the first thing in
- * the list because it is first in the list, which is enough — the reference
- * does exactly this and it is why the reference reads calm.
+ * the list because it is first in the list, which is enough.
  *
  * It still starts a *new session* rather than merely navigating to chat, which
- * is why this and the `chat` row are both here and are not redundant. Dropping
+ * is why this and the `Chat` row are both here and are not redundant. Dropping
  * the session parameter is what makes it new: see `ChatPage`, which reads the
  * session from the URL.
  */
@@ -194,13 +245,15 @@ function NewConversation({ onNavigate }: { onNavigate?: () => void }) {
         onNavigate?.();
       }}
     >
-      <Icon name="add" size={20} />
-      <span>new chat</span>
+      <Plus {...GLYPH} />
+      <span>New chat</span>
     </button>
   );
 }
 
 function Item({ route, onNavigate }: { route: ViewRoute; onNavigate?: () => void }) {
+  const Glyph = route.icon;
+
   return (
     <NavLink
       to={route.path}
@@ -209,8 +262,8 @@ function Item({ route, onNavigate }: { route: ViewRoute; onNavigate?: () => void
       title={route.blurb}
       className={({ isActive }) => `nav-item ${isActive ? "nav-item-on" : ""}`}
     >
-      <Icon name={route.icon} size={20} />
-      <span>{route.label}</span>
+      <Glyph {...GLYPH} />
+      <span>{sentence(route.label)}</span>
     </NavLink>
   );
 }
@@ -224,16 +277,17 @@ function Item({ route, onNavigate }: { route: ViewRoute; onNavigate?: () => void
  * who does not yet know what this application *is* cannot be helped by a count,
  * and `/overview` is the page that answers the question in numbers that come
  * from their own corpus.
+ *
+ * `Compass` rather than `BookOpen`, which is what `/overview` wears four rows
+ * up. Two glyphs for one destination is the same problem as two rows for it.
  */
 function Promoted({ onNavigate }: { onNavigate?: () => void }) {
   return (
-    <NavLink to="/overview" onClick={onNavigate} className="promo shrink-0">
-      <span className="mt-px text-ink-2">
-        <Icon name="help" size={20} />
-      </span>
+    <NavLink to="/overview" onClick={onNavigate} className="promo mx-2 mb-3 shrink-0">
+      <Compass size={16} strokeWidth={1.5} className="mt-px shrink-0 text-ink-3" />
       <span className="flex flex-col gap-0.5">
-        <span className="text-body-sm text-ink">What MEMO does</span>
-        <span className="meta text-ink-3">A short tour of how memory works</span>
+        <span className="promo-title">What MEMO does</span>
+        <span className="promo-subtitle">A short tour of how memory works</span>
       </span>
     </NavLink>
   );
@@ -242,18 +296,18 @@ function Promoted({ onNavigate }: { onNavigate?: () => void }) {
 /**
  * Beneath the card, under a hairline: the corpus, and everything meta.
  *
- * **Two permanent rows became one three-dot button.** `help` and `sign out`
+ * **Two permanent rows became one three-dot button.** `Help` and `Sign out`
  * were pinned to the bottom of every screen — one of them a keyboard shortcut
  * that is already bound globally, the other a thing you do once a month. Under
- * `more` they cost a click and no space, which is the correct trade for both.
+ * `More` they cost a click and no space, which is the correct trade for both.
  * There is still no settings page in this application and this milestone does
- * not invent one; `more` holds what actually exists.
+ * not invent one; `More` holds what actually exists.
  */
 function Footer({ onNavigate }: { onNavigate?: () => void }) {
   const [open, setOpen] = useState(readDetails);
 
   return (
-    <div className="shrink-0 border-t border-rule pt-2">
+    <div className="shrink-0 border-t border-rule px-2 pt-2">
       <button
         type="button"
         className="nav-item w-full text-left"
@@ -267,16 +321,20 @@ function Footer({ onNavigate }: { onNavigate?: () => void }) {
           });
         }}
       >
-        <Icon name="tune" size={20} />
-        <span>details</span>
-        <span
-          className={`ml-auto transition-transform ${open ? "rotate-180" : ""}`}
+        <SlidersHorizontal {...GLYPH} />
+        <span>Details</span>
+        <ChevronDown
+          size={16}
+          strokeWidth={1.5}
           aria-hidden
-        >
-          <Icon name="chevron" size={16} />
-        </span>
+          className={`ml-auto transition-transform duration-[120ms] ${open ? "rotate-180" : ""}`}
+        />
       </button>
 
+      {/* **The one place the mono survives in this panel, and the one place it
+          belongs.** Four counts read against each other need figures that line
+          up in a column; that is what `.meta` is for and what Inter, which has
+          proportional digits by default here, would not give. */}
       {open ? (
         <div id="sidebar-details" className="flex flex-col gap-3 px-3 py-2">
           <CorpusFigures />
@@ -332,8 +390,8 @@ function More({ onNavigate }: { onNavigate?: () => void }) {
         aria-haspopup="menu"
         onClick={() => setOpen((current) => !current)}
       >
-        <Icon name="more" size={20} />
-        <span>more</span>
+        <MoreHorizontal {...GLYPH} />
+        <span>More</span>
       </button>
 
       {open ? (
@@ -344,7 +402,7 @@ function More({ onNavigate }: { onNavigate?: () => void }) {
              read through the thing covering it. `bottom-full` because there is
              nothing below it: this is the last thing in a panel that ends 12px
              from the bottom of the window. */
-          className="menu absolute bottom-full left-0 z-10 mb-1 flex w-full flex-col gap-0.5 p-1"
+          className="menu absolute bottom-full left-0 z-10 mb-1 flex w-full flex-col p-1"
         >
           <button
             type="button"
@@ -356,9 +414,12 @@ function More({ onNavigate }: { onNavigate?: () => void }) {
               openPalette();
             }}
           >
-            <Icon name="help" size={20} />
-            <span>help</span>
-            <span className="kbd ml-auto normal-case">⌘K</span>
+            <HelpCircle {...GLYPH} />
+            <span>Help</span>
+            {/* Not a `.kbd`, which is mono. macOS draws ⌘K in the system face
+                in its own menus, and a key cap in this panel would be the one
+                terminal artefact left in it. */}
+            <span className="shortcut ml-auto">⌘K</span>
           </button>
           <SignOut onNavigate={onNavigate} />
         </div>
@@ -400,8 +461,8 @@ function SignOut({ onNavigate }: { onNavigate?: () => void }) {
         window.location.assign("/welcome");
       }}
     >
-      <Icon name="close" size={20} />
-      <span>{busy ? "signing out…" : "sign out"}</span>
+      <LogOut {...GLYPH} />
+      <span>{busy ? "Signing out…" : "Sign out"}</span>
     </button>
   );
 }

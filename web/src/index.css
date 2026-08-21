@@ -315,16 +315,35 @@
     gap: 0.625rem;
     background-color: var(--color-surface);
     border: 1px solid var(--color-rule);
-    border-radius: var(--radius-lg);
+    border-radius: 10px;
     padding: 0.75rem;
-    color: var(--color-ink);
     transition:
-      border-color 150ms,
-      background-color 150ms;
+      border-color 120ms ease-out,
+      background-color 120ms ease-out;
   }
 
   .promo:hover {
     border-color: var(--color-rule-strong);
+  }
+
+  /* 550 rather than 600. The card is the only surfaced object in the panel and
+   * it does not also need to be the heaviest type in it — at 600 it competes
+   * with the active nav row, which is the one thing in the panel that has to
+   * win. */
+  .promo-title {
+    font-family: var(--font-prose);
+    font-size: 0.875rem;
+    font-weight: 550;
+    line-height: 1.3;
+    color: var(--color-ink);
+  }
+
+  .promo-subtitle {
+    font-family: var(--font-prose);
+    font-size: 0.78125rem;
+    font-weight: 400;
+    line-height: 1.4;
+    color: var(--color-ink-3);
   }
 
   /* The avatar, which is the only saturated object in the chrome. A gradient
@@ -334,9 +353,9 @@
    * it stays quieter than the accent it sits above. */
   .avatar {
     background-image: linear-gradient(
-      145deg,
-      color-mix(in oklab, var(--color-accent) 42%, var(--color-surface)),
-      color-mix(in oklab, var(--color-kind-note) 52%, var(--color-surface))
+      140deg,
+      color-mix(in oklab, var(--color-accent) 34%, var(--color-surface)),
+      color-mix(in oklab, var(--color-kind-note) 40%, var(--color-surface))
     );
   }
 
@@ -358,27 +377,29 @@
       0 8px 24px rgb(15 23 42 / 10%);
   }
 
-  /* A bare 32px square holding one 20px glyph — the header's search and
-   * collapse controls, and the footer's `more`. No border and no fill at rest,
-   * for the same reason the nav items have none: three bordered squares in a
-   * 264px panel is a toolbar, and this is not one. */
+  /* A bare 30px square holding one 18px glyph — the header's search and
+   * collapse controls. No border and no fill at rest, for the same reason the
+   * nav items have none: two bordered squares in a 264px panel is a toolbar,
+   * and this is not one. Sized and weighted to match the nav exactly, because
+   * they are three inches apart and any difference between them reads as one
+   * of the two being wrong. */
   .icon-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 2rem;
-    height: 2rem;
+    width: 1.875rem;
+    height: 1.875rem;
     border-radius: var(--radius-md);
-    color: var(--color-ink-2);
+    color: var(--color-ink-3);
     cursor: pointer;
     transition:
-      color 150ms,
-      background-color 150ms;
+      color 120ms ease-out,
+      background-color 120ms ease-out;
   }
 
   .icon-button:hover {
     color: var(--color-ink);
-    background-color: color-mix(in oklab, var(--color-surface-tint) 55%, transparent);
+    background-color: color-mix(in oklab, var(--color-surface-tint) 50%, transparent);
   }
 
   /* --- The highlight -------------------------------------------------------
@@ -669,43 +690,103 @@
    * here" would mean the one blue thing on screen is the one thing you cannot
    * click. Position is not an action.
    *
-   * **M9.8 takes the row's edges away entirely.** It was a 2px ink left rule on
-   * a bordered, uppercase, 11px row; it is now a 20px outline glyph and a
-   * lowercase label at body size with nothing behind it. Thirteen bordered
-   * pills stacked in a panel read as thirteen objects to get past. Thirteen
-   * rows of text with an icon in front read as a list of places, which is what
-   * a nav is, and the tint only appears under the pointer and under the row you
-   * are on.
+   * **M9.9 stops the nav being a terminal.** It was JetBrains Mono at 11px,
+   * uppercase, with 0.08em of tracking — the register this application uses for
+   * paths, scores, offsets and hashes. Set the nav in it and a place you can go
+   * reads as the same kind of object as a byte offset. It is Inter now, at
+   * 14.5px, sentence case, no tracking: 450 at rest, 600 where you are. Mono
+   * stays for what mono is for, which in this panel is four counts inside
+   * `details` and nothing else.
    *
-   * Both fills are mixed towards transparency rather than laid on solid: the
-   * panel behind them is 72% white over a moving wash, and an opaque grey
-   * rectangle sitting on it would be the one flat thing in a translucent
-   * object.
+   * **One signal per state, not two.** The active row was a 2px ink left rule
+   * *and* a fill; it is now the fill and the weight. The rule was a second
+   * thing saying what the first thing already said, and it made every active
+   * row 2px wider than every inactive one.
+   *
+   * The icon is a step lighter than its label at rest and steps up with it —
+   * `ink-3`/`ink-2` becoming `ink`/`ink`. A glyph drawn at the same darkness as
+   * the text beside it competes with the word for the first fixation, and the
+   * word is the thing that says where the row goes.
    */
   .nav-item {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    height: 2.5rem;
+    height: 2.375rem;
     padding: 0 0.75rem;
     border-radius: var(--radius-md);
-    font-family: var(--font-mono);
-    font-size: var(--text-body-sm);
+    font-family: var(--font-prose);
+    font-size: 0.90625rem;
+    font-weight: 450;
+    letter-spacing: 0;
     color: var(--color-ink-2);
     transition:
-      color 150ms,
-      background-color 150ms;
+      color 120ms ease-out,
+      background-color 120ms ease-out;
+  }
+
+  .nav-item svg {
+    flex-shrink: 0;
+    color: var(--color-ink-3);
+    transition: color 120ms ease-out;
   }
 
   .nav-item:hover {
     color: var(--color-ink);
-    background-color: color-mix(in oklab, var(--color-surface-tint) 55%, transparent);
+    background-color: color-mix(in oklab, var(--color-surface-tint) 50%, transparent);
+  }
+
+  .nav-item:hover svg {
+    color: var(--color-ink-2);
   }
 
   .nav-item-on {
     color: var(--color-ink);
-    font-weight: 500;
-    background-color: color-mix(in oklab, var(--color-surface-tint) 85%, transparent);
+    font-weight: 600;
+    background-color: var(--color-surface-tint);
+  }
+
+  .nav-item-on svg {
+    color: var(--color-ink);
+  }
+
+  /* The keyboard hint beside `Help`, in the body face rather than in `.kbd`.
+   * macOS draws ⌘K in the system face in its own menus, and a key cap here
+   * would be the one terminal artefact left in a panel this milestone spent
+   * itself removing them from. */
+  .shortcut {
+    font-family: var(--font-prose);
+    font-size: 0.75rem;
+    font-weight: 450;
+    color: var(--color-ink-3);
+  }
+
+  /* --- Group separation ----------------------------------------------------
+   * 18px between two runs of rows, with a hairline through the middle of it,
+   * inset 12px from each side so it aligns with the rows rather than with the
+   * panel.
+   *
+   * **The gap alone was not enough and this is why.** A nav whose only
+   * structure is vertical space asks the reader to decide whether 18px means
+   * "new group" or "loose spacing", and the answer is only obvious once you
+   * have already learnt the nav. A rule is not ambiguous. It is also the
+   * cheapest possible architecture: it costs one pixel and no rows, which a
+   * heading — a line of text you cannot click, at the top of a group whose
+   * members already say what they are — does not.
+   */
+  .nav-group + .nav-group {
+    position: relative;
+    margin-top: 1.125rem;
+  }
+
+  .nav-group + .nav-group::before {
+    content: "";
+    position: absolute;
+    top: -0.5625rem;
+    left: 0.75rem;
+    right: 0.75rem;
+    height: 1px;
+    background-color: var(--color-rule);
   }
 
   /* --- Figures ------------------------------------------------------------- */

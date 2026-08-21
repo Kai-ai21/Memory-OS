@@ -1,12 +1,12 @@
 /**
- * The panel, at the three points M9.8 could quietly break it.
+ * The panel, at the points a refinement can quietly undo itself.
  *
- * The redesign removed the group headings, the wordmark, the filled button and
- * the two pinned rows. Every one of those removals is invisible to a route
- * test — the nav still navigates — and two of them are exactly how a nav loses
- * an item without anybody noticing: a view that drops out of the table renders
- * nothing, and a heading that stops rendering takes the group boundary with it.
- * So the first test counts, and it counts *per group*.
+ * M9.8's tests counted the rows, because that milestone removed the headings
+ * and a group boundary is invisible to a route test. M9.9's are about *how the
+ * rows are set*, which is even more invisible: a label that drifts back to
+ * lowercase, a row that loses its glyph, or a `.meta` class copied into the nav
+ * from anywhere else in the application would all render, navigate, and pass
+ * every test this suite had before this file.
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22,34 +22,66 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-/** The nav's own group blocks, in order. */
-function groups(nav: HTMLElement): HTMLElement[] {
-  return Array.from(nav.querySelectorAll<HTMLElement>(":scope > div"));
+/** The panel's root, which is what every structural query starts from. */
+function panel(): HTMLElement {
+  return screen.getByRole("navigation", { name: "Views" }).parentElement!;
 }
 
-describe("the thirteen views", () => {
-  it("renders every one of them, in its group, with no headings left", () => {
-    // Thirteen is not a number this file gets to choose: it is the length of
-    // the route table, which is the one place a view is declared. Comparing
-    // against `ALL_ROUTES` rather than a literal is what makes this test fail
-    // when somebody adds a page and forgets the sidebar, instead of when
-    // somebody adds a page.
+/** Every row in the panel: the nav, plus `Details` and `More` in the footer. */
+function rows(): HTMLElement[] {
+  return Array.from(panel().querySelectorAll<HTMLElement>("a.nav-item, button.nav-item"));
+}
+
+/**
+ * Every class in this application that resolves to JetBrains Mono.
+ *
+ * Listed rather than detected, because jsdom applies no stylesheet: the class
+ * is the contract, and `index.css` is where each of these sets `--font-mono`.
+ */
+const MONO = ["meta", "meta-label", "meta-label-on", "kbd", "code-content", "font-mono"];
+
+describe("every row", () => {
+  it("renders with a glyph and a sentence-case label", () => {
+    // **The inventory, counted rather than trusted.** The nav's share of it
+    // comes from `ALL_ROUTES`, which is the one place a view is declared, so
+    // this fails when somebody adds a page and forgets the sidebar rather than
+    // when somebody adds a page. `New chat`, `Details` and `More` are the three
+    // rows that are not routes and are named here because nothing else names
+    // them.
+    stubFetch(SHELL_ROUTES);
+    renderWithProviders(<Sidebar />);
+
+    const labels = rows().map((row) => row.textContent?.trim() ?? "");
+
+    expect(labels).toEqual([
+      "New chat",
+      ...ALL_ROUTES.map(
+        (route) => route.label.charAt(0).toUpperCase() + route.label.slice(1),
+      ),
+      "Details",
+      "More",
+    ]);
+
+    for (const row of rows()) {
+      // One glyph, and the label beside it capitalised. A row that lost its
+      // icon would look like a mistake and break nothing.
+      expect(row.querySelector("svg")).toBeTruthy();
+      const label = row.querySelector("span")?.textContent ?? "";
+      expect(label).toMatch(/^[A-Z]/);
+      expect(label).not.toBe(label.toUpperCase());
+    }
+  });
+
+  it("keeps the two groups, separated by a rule rather than a heading", () => {
+    // The rule is a `::before` on `.nav-group + .nav-group`, so the DOM
+    // evidence for a group boundary is the class — and a nav flattened into one
+    // block would still render every row and still pass the count above.
     stubFetch(SHELL_ROUTES);
     renderWithProviders(<Sidebar />);
 
     const nav = screen.getByRole("navigation", { name: "Views" });
-    const labels = within(nav)
-      .getAllByRole("link")
-      .map((link) => link.textContent);
+    const blocks = Array.from(nav.querySelectorAll<HTMLElement>(".nav-group"));
 
-    expect(labels).toEqual(ALL_ROUTES.map((route) => route.label));
-    expect(labels).toHaveLength(13);
-
-    // **The groups survive the headings.** They are 20px of space now, so the
-    // only thing left that says a group exists is the DOM structure — and a
-    // flattened nav would still render all thirteen rows and still pass every
-    // assertion above.
-    const blocks = groups(nav);
     expect(blocks).toHaveLength(2);
     expect(within(blocks[0]).getAllByRole("link")).toHaveLength(
       inGroup("primary").length + 1, // + chat, which sits above the groups
@@ -57,36 +89,15 @@ describe("the thirteen views", () => {
     expect(within(blocks[1]).getAllByRole("link")).toHaveLength(
       inGroup("secondary").length,
     );
-
-    // No heading, and specifically not the one that used to be here.
     expect(within(nav).queryAllByRole("heading")).toHaveLength(0);
-    expect(within(nav).queryByText("more")).not.toBeInTheDocument();
-  });
-
-  it("gives every row a glyph, and starts the list with new chat", () => {
-    // The icons are what make thirteen rows read as navigation rather than as
-    // a list of words — the argument for the whole change. A row that lost its
-    // glyph would look like a mistake and break nothing.
-    stubFetch(SHELL_ROUTES);
-    renderWithProviders(<Sidebar />);
-
-    const nav = screen.getByRole("navigation", { name: "Views" });
-    for (const link of within(nav).getAllByRole("link")) {
-      expect(link.querySelector("svg")).toBeTruthy();
-    }
-
-    // A row, not a filled button: it wears the same class every nav item does.
-    const start = within(nav).getByRole("button", { name: "new chat" });
-    expect(start.className).toMatch(/nav-item/);
-    expect(start.querySelector("svg")).toBeTruthy();
   });
 });
 
 describe("where you are", () => {
   it("marks the active row without spending the accent on it", () => {
     // **Rule 1, pinned at the point it is most tempting to break.** The active
-    // item is a tint and a step up in weight. If the accent comes back, the
-    // one blue thing on the screen is the one thing you cannot click.
+    // item is a `surface-tint` fill and a jump to 600. If the accent comes
+    // back, the one blue thing on the screen is the one thing you cannot click.
     //
     // Asserted on the class contract because jsdom applies no stylesheet; the
     // colour behind `nav-item-on` is checked in `styles/theme.test.ts`.
@@ -99,9 +110,38 @@ describe("where you are", () => {
       .filter((link) => link.getAttribute("aria-current") === "page");
 
     expect(current).toHaveLength(1);
-    expect(current[0]).toHaveTextContent("timeline");
+    expect(current[0]).toHaveTextContent("Timeline");
     expect(current[0].className).toMatch(/nav-item-on/);
     expect(current[0].className).not.toMatch(/accent/);
+  });
+});
+
+describe("the mono", () => {
+  it("appears nowhere in the panel except inside the details block", async () => {
+    // **The whole argument of M9.9 in one assertion.** JetBrains Mono is this
+    // application's register for paths, scores, offsets and hashes; navigation
+    // is prose. The exception is four counts that are read against each other
+    // and need a column that lines up, and it is an exception precisely
+    // because it is bounded — so this opens the disclosure first, which is the
+    // only state in which any mono is allowed to exist here at all.
+    stubFetch(SHELL_ROUTES);
+    renderWithProviders(<Sidebar />);
+
+    await userEvent.click(screen.getByTestId("details-toggle"));
+    await screen.findByTestId("sidebar-figures");
+
+    const details = document.getElementById("sidebar-details");
+    expect(details).toBeTruthy();
+
+    const monospaced = Array.from(
+      panel().querySelectorAll<HTMLElement>(MONO.map((name) => `.${name}`).join(",")),
+    );
+
+    // There is some — the figures — and every last piece of it is in the block.
+    expect(monospaced.length).toBeGreaterThan(0);
+    for (const element of monospaced) {
+      expect(details!.contains(element)).toBe(true);
+    }
   });
 });
 

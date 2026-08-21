@@ -185,6 +185,25 @@ describe("text contrast on the glass panel", () => {
     expect(contrast(token("ink-2"), worst)).toBeGreaterThanOrEqual(AA);
   });
 
+  it("the active row clears AA on its own fill", () => {
+    // The active row is the one place in the panel with an opaque background:
+    // `surface-tint` at full strength, which is what M9.9 replaced a
+    // half-transparent mix with. Nothing behind the panel can reach the text on
+    // it, so this one is a flat pair and is comfortable — 15.8:1.
+    expect(contrast(token("ink"), token("surface-tint"))).toBeGreaterThanOrEqual(AA);
+  });
+
+  it("keeps the resting glyph above the 3:1 bar for non-text", () => {
+    // **The icons are `ink-3` and they are not text.** WCAG asks 3:1 of a
+    // graphical object that carries meaning rather than the 4.5:1 it asks of a
+    // label, and that is the right bar here: the glyph identifies a row, and
+    // the word beside it says the same thing at 4.5:1 or better. Under the head
+    // of the cursor stroke this is 3.2:1, which is the tightest non-text
+    // measurement in the interface — if the panel is made more transparent, or
+    // the stroke darker, this is the row that says so first.
+    expect(contrast(token("ink-3"), worst)).toBeGreaterThanOrEqual(3);
+  });
+
   it("keeps the panel lighter than the ground it floats on", () => {
     // The panel has to read as *above* the page. If the composite ever goes
     // darker than `ground`, the glass has become a grey rectangle and no

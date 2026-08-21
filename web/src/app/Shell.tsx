@@ -31,6 +31,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
+import { PanelLeft } from "lucide-react";
+
 import { Icon } from "../components/Icon";
 import { BackgroundLayer } from "./BackgroundLayer";
 import { CommandPalette } from "./CommandPalette";
@@ -184,7 +186,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           title="Show navigation"
           onClick={() => setCollapsed(false)}
         >
-          <Icon name="collapse" size={20} />
+          <PanelLeft size={18} strokeWidth={1.5} />
         </button>
       ) : null}
 
