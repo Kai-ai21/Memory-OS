@@ -27,6 +27,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { HEAD_ALPHA } from "../lib/brush";
+
 // Read from disk rather than imported. `?raw` would be tidier, but the Tailwind
 // Vite plugin claims every `.css` request and hands back an empty string for a
 // raw one — measured, not assumed. The node types are pulled in by the
@@ -34,6 +36,7 @@ import { describe, expect, it } from "vitest";
 // only `vite/client`, and widening it globally would put `process` in scope for
 // every component in the application.
 const TOKENS = readFileSync(resolve(process.cwd(), "src/styles/tokens.css"), "utf8");
+const INDEX_CSS = readFileSync(resolve(process.cwd(), "src/index.css"), "utf8");
 
 /** Pull one `--color-*: #rrggbb;` declaration out of the stylesheet. */
 function token(name: string): string {
@@ -111,5 +114,100 @@ describe("text contrast", () => {
     // `ink-3`. If it ever comes back, this says why it left.
     expect(contrast("#94A3B8", surface)).toBeLessThan(AA);
     expect(token("ink-3")).not.toBe("#94A3B8");
+  });
+});
+
+/**
+ * The sidebar is not a surface any more, and this block is what M9.8 owes for
+ * that.
+ *
+ * Every ratio above is text on an opaque token colour. The nav labels are now
+ * text on 72% white over *whatever is behind the panel*, which is the page
+ * ground, two soft radial washes, and — because the sidebar is deliberately not
+ * a particle shelter — the cursor trail at up to `HEAD_ALPHA` of ink. "It looks
+ * fine" is not an answer for a background that moves, so the composite is
+ * computed and the worst case is the one asserted.
+ *
+ * The blur is ignored, which makes this pessimistic in the right direction: a
+ * 12px gaussian spreads the stroke's peak out and can only *raise* the measured
+ * background luminance under any given label.
+ */
+describe("text contrast on the glass panel", () => {
+  /** The panel's own white alpha, read from the declaration rather than typed. */
+  function panelAlpha(): number {
+    const match = INDEX_CSS.match(
+      /\.glass-panel\s*\{[^}]*background:\s*rgb\(255 255 255 \/ (\d+)%\)/,
+    );
+    if (!match) throw new Error(".glass-panel declares no rgb(255 255 255 / N%) background");
+    return Number(match[1]) / 100;
+  }
+
+  /** `over` composited under `alpha` of white, as a hex. */
+  function underGlass(over: string, alpha: number): string {
+    const channels = [1, 3, 5].map((at) => {
+      const value = parseInt(over.slice(at, at + 2), 16);
+      return Math.round(alpha * 255 + (1 - alpha) * value);
+    });
+    return `#${channels.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  /** `ink` laid over `ground` at `alpha` — the cursor trail, at its head. */
+  function inked(alpha: number): string {
+    const ink = token("ink");
+    const ground = token("ground");
+    const channels = [1, 3, 5].map((at) => {
+      const a = parseInt(ink.slice(at, at + 2), 16);
+      const b = parseInt(ground.slice(at, at + 2), 16);
+      return Math.round(alpha * a + (1 - alpha) * b);
+    });
+    return `#${channels.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  const alpha = panelAlpha();
+  /** The panel at rest: nothing behind it but the page. */
+  const calm = underGlass(token("ground"), alpha);
+  /** The panel at its darkest: the head of the cursor stroke directly behind. */
+  const worst = underGlass(inked(HEAD_ALPHA), alpha);
+
+  it.each([
+    ["ink", "the active row"],
+    ["ink-2", "every other row"],
+  ])("%s (%s) meets AA on the panel at rest", (name) => {
+    expect(contrast(token(name), calm)).toBeGreaterThanOrEqual(AA);
+  });
+
+  it("holds AA for the nav label with the cursor trail directly behind it", () => {
+    // **This is the tightest number in the theme and it is worth knowing the
+    // margin.** `ink-2` on the calm panel is comfortable; under the head of the
+    // stroke it is at the bar rather than above it. If the panel is ever made
+    // more transparent, or the stroke darker, this is what says so — and the
+    // fix is one of those two values, not the label colour.
+    expect(contrast(token("ink-2"), worst)).toBeGreaterThanOrEqual(AA);
+  });
+
+  it("the active row clears AA on its own fill", () => {
+    // The active row is the one place in the panel with an opaque background:
+    // `surface-tint` at full strength, which is what M9.9 replaced a
+    // half-transparent mix with. Nothing behind the panel can reach the text on
+    // it, so this one is a flat pair and is comfortable — 15.8:1.
+    expect(contrast(token("ink"), token("surface-tint"))).toBeGreaterThanOrEqual(AA);
+  });
+
+  it("keeps the resting glyph above the 3:1 bar for non-text", () => {
+    // **The icons are `ink-3` and they are not text.** WCAG asks 3:1 of a
+    // graphical object that carries meaning rather than the 4.5:1 it asks of a
+    // label, and that is the right bar here: the glyph identifies a row, and
+    // the word beside it says the same thing at 4.5:1 or better. Under the head
+    // of the cursor stroke this is 3.2:1, which is the tightest non-text
+    // measurement in the interface — if the panel is made more transparent, or
+    // the stroke darker, this is the row that says so first.
+    expect(contrast(token("ink-3"), worst)).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps the panel lighter than the ground it floats on", () => {
+    // The panel has to read as *above* the page. If the composite ever goes
+    // darker than `ground`, the glass has become a grey rectangle and no
+    // amount of shadow will rescue it.
+    expect(luminance(calm)).toBeGreaterThan(luminance(token("ground")));
   });
 });

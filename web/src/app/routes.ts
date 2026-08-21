@@ -28,7 +28,22 @@
  * zero, which is more useful than a generic "not built yet" ever was.
  */
 
-import type { IconName } from "../components/Icon";
+import {
+  Bell,
+  BookOpen,
+  Bot,
+  CheckSquare,
+  Clock,
+  Database,
+  FolderOpen,
+  GitBranch,
+  Lightbulb,
+  MessageSquare,
+  Network,
+  Search,
+  UserCircle,
+  type LucideIcon,
+} from "lucide-react";
 
 export interface ViewRoute {
   path: string;
@@ -37,21 +52,36 @@ export interface ViewRoute {
   /** One sentence: what this view answers. */
   blurb: string;
   group: GroupId;
-  /** The glyph beside it in the sidebar. See `components/Icon`. */
-  icon: IconName;
+  /**
+   * The glyph beside it in the sidebar.
+   *
+   * **The component itself, not a name.** M9.9 moved the nav to lucide, and
+   * the indirection a name bought — a `PATHS` table keyed by string — bought
+   * nothing once the drawings came from a library: it cost a union type to
+   * maintain, a lookup that could miss, and one more file to open to find out
+   * what a row looks like. `icon: Clock` is the answer to "what is beside
+   * timeline" on the line that asks it.
+   */
+  icon: LucideIcon;
   /** Extra terms the palette matches on, for things called two names. */
   aliases?: string[];
 }
 
 export type GroupId = "primary" | "secondary";
 
-/** Group headings, in sidebar order. The primary group is unlabelled: six
- *  items under the wordmark need no heading, and a heading over them would be
- *  the first thing in the nav and the least useful. */
-export const GROUPS: { id: GroupId; label: string }[] = [
-  { id: "primary", label: "" },
-  { id: "secondary", label: "more" },
-];
+/**
+ * The groups, in sidebar order — and as of M9.8 they have no headings.
+ *
+ * They were `""` and `"more"`, which was already an admission: one of the two
+ * headings had nothing to say, and the other said something the items under it
+ * said better. M9.8 drops both and separates the groups with 20px of nothing,
+ * which is what the reference does and is the only device in a nav that costs
+ * no rows. A heading is a row you cannot click.
+ *
+ * The ids stay, because the *split* is still real: `primary` is the reference's
+ * own six plus chat, `secondary` is everything else this application has.
+ */
+export const GROUPS: GroupId[] = ["primary", "secondary"];
 
 /**
  * Chat sits above the groups rather than inside one.
@@ -67,7 +97,7 @@ export const HOME: ViewRoute = {
   blurb:
     "Type a thought and it is kept; ask a question and it is answered from everything kept, with citations.",
   group: "primary",
-  icon: "chat",
+  icon: MessageSquare,
   aliases: ["say", "write", "note", "ask", "message", "front door"],
 };
 
@@ -78,7 +108,7 @@ export const ROUTES: ViewRoute[] = [
     blurb:
       "Semantic search over every chunk, with the matched span highlighted and the ranking explained.",
     group: "primary",
-    icon: "search",
+    icon: Search,
     aliases: ["find", "query", "retrieve"],
   },
   {
@@ -87,7 +117,7 @@ export const ROUTES: ViewRoute[] = [
     blurb:
       "When the corpus happened — activity by period, stacked by kind, with the silences drawn.",
     group: "primary",
-    icon: "timeline",
+    icon: Clock,
     aliases: ["activity", "gaps", "history"],
   },
   {
@@ -96,7 +126,7 @@ export const ROUTES: ViewRoute[] = [
     blurb:
       "The entity graph: what the corpus talks about, and which claims connect two things.",
     group: "primary",
-    icon: "graph",
+    icon: Network,
     aliases: ["entities", "relationships", "neo4j"],
   },
   {
@@ -105,7 +135,7 @@ export const ROUTES: ViewRoute[] = [
     blurb:
       "Decisions with their alternatives, assumptions and outcomes — and the patterns across them.",
     group: "primary",
-    icon: "decisions",
+    icon: GitBranch,
     aliases: ["choices", "outcomes", "assumptions", "patterns"],
   },
   {
@@ -114,7 +144,7 @@ export const ROUTES: ViewRoute[] = [
     blurb:
       "What the system has concluded about how you work — and, for every dimension, whether it has enough evidence to conclude anything.",
     group: "primary",
-    icon: "insights",
+    icon: Lightbulb,
     aliases: ["patterns", "reflections", "model", "beliefs", "calibration"],
   },
   {
@@ -123,7 +153,7 @@ export const ROUTES: ViewRoute[] = [
     blurb:
       "The directories this reads from, and how to add one. Folders are still right for code.",
     group: "primary",
-    icon: "sources",
+    icon: FolderOpen,
     aliases: ["folders", "files", "directories", "sync", "repo", "ingest"],
   },
 
@@ -133,7 +163,7 @@ export const ROUTES: ViewRoute[] = [
     label: "overview",
     blurb: "What this system holds right now, in numbers that come from the corpus.",
     group: "secondary",
-    icon: "document",
+    icon: BookOpen,
     aliases: ["home", "start", "figures", "summary"],
   },
   {
@@ -142,7 +172,7 @@ export const ROUTES: ViewRoute[] = [
     blurb:
       "Ask a question answered over several retrievals, with every sentence checked against what came back.",
     group: "secondary",
-    icon: "chat",
+    icon: Bot,
     aliases: ["ask", "answer", "question"],
   },
   {
@@ -151,7 +181,7 @@ export const ROUTES: ViewRoute[] = [
     blurb:
       "What the system believes about you, every dimension listed — including the empty ones and why.",
     group: "secondary",
-    icon: "insights",
+    icon: UserCircle,
     aliases: ["user model", "facets"],
   },
   {
@@ -160,7 +190,7 @@ export const ROUTES: ViewRoute[] = [
     blurb:
       "The golden set as it grows: which queries have been judged, and how lopsided each one is.",
     group: "secondary",
-    icon: "decisions",
+    icon: CheckSquare,
     aliases: ["golden set", "relevance", "labels"],
   },
   {
@@ -169,7 +199,7 @@ export const ROUTES: ViewRoute[] = [
     blurb:
       "What the system volunteered without being asked, and every time it decided to stay quiet.",
     group: "secondary",
-    icon: "insights",
+    icon: Bell,
     aliases: ["proactive", "refusals", "interruptions"],
   },
   {
@@ -177,7 +207,7 @@ export const ROUTES: ViewRoute[] = [
     label: "corpus",
     blurb: "Counts and the standing health checks the CLI runs.",
     group: "secondary",
-    icon: "sources",
+    icon: Database,
     aliases: ["stats", "doctor", "health"],
   },
 ];
@@ -203,7 +233,7 @@ export const SUB_ROUTES: ViewRoute[] = [
     label: "record a decision",
     blurb: "Write down a choice, its alternatives, and the confidence you hold now.",
     group: "secondary",
-    icon: "add",
+    icon: GitBranch,
     aliases: ["new decision", "decide"],
   },
   {
@@ -211,7 +241,7 @@ export const SUB_ROUTES: ViewRoute[] = [
     label: "review queue",
     blurb: "Decisions the system found in the corpus, waiting to be accepted or rejected.",
     group: "secondary",
-    icon: "decisions",
+    icon: GitBranch,
     aliases: ["suggestions", "queue"],
   },
   {
@@ -219,7 +249,7 @@ export const SUB_ROUTES: ViewRoute[] = [
     label: "outcome queue",
     blurb: "How recorded decisions actually turned out, waiting to be confirmed.",
     group: "secondary",
-    icon: "decisions",
+    icon: GitBranch,
     aliases: ["results", "worked", "failed"],
   },
   {
@@ -227,7 +257,7 @@ export const SUB_ROUTES: ViewRoute[] = [
     label: "assumptions",
     blurb: "What decisions assumed, grouped, and which assumptions held.",
     group: "secondary",
-    icon: "decisions",
+    icon: GitBranch,
     aliases: ["held", "beliefs"],
   },
   {
@@ -236,7 +266,7 @@ export const SUB_ROUTES: ViewRoute[] = [
     blurb:
       "Behavioural patterns across decisions, with counter-evidence at equal weight, and calibration.",
     group: "secondary",
-    icon: "insights",
+    icon: Lightbulb,
     aliases: ["calibration", "habits"],
   },
 ];

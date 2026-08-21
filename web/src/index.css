@@ -7,8 +7,18 @@
  *
  * The structural device is a **flat panel on a light ground, bounded by a
  * hairline**. No shadows, no frosting, no fills doing the work of a border —
- * with exactly one exception, `.glass-button`, which is the NEW CONVERSATION
- * button and is the only glass in the application.
+ * inside the content column.
+ *
+ * **M9.8 moves glass from one button to the chrome, and only to the chrome.**
+ * `.glass-panel` is the sidebar, floating in a 12px margin with the wash and
+ * the cursor trail running underneath it, and `.btn-primary` is every primary
+ * action in the application. Those two, and nothing else: a frosted panel needs
+ * something behind it to be frosted *of*, and the only things in this layout
+ * with anything behind them are the ones that float over the background layer.
+ * A card in the middle of an article has white paper behind it, so frosting it
+ * would produce a slightly grey rectangle at the cost of a compositor pass.
+ * `styles/theme.test.ts` counts the `backdrop-filter` declarations, and the
+ * count is two.
  *
  * **This file is where the light theme is won or lost.** The dark version had
  * hierarchy for free: cyan glowing out of a void is findable without any other
@@ -258,43 +268,138 @@
     display: none;
   }
 
-  /* --- The one glass element ----------------------------------------------
-   * NEW CONVERSATION, and nothing else, ever, until we decide otherwise
-   * deliberately.
+  /* --- The floating panel -------------------------------------------------
+   * The sidebar, and the object this milestone is about.
    *
-   * This is the only element in the application with a `backdrop-filter` and
-   * the only one with a `box-shadow`. It works because `BackgroundLayer` paints
-   * two soft radials behind the whole page — without them the blur has nothing
-   * to blur and this is a white button with a white border. The two-part shadow
-   * is a tight contact shadow plus a wide soft one, which is what separates
-   * "sitting on the surface" from "floating above it".
+   * It is not a column any more. It sits in a 12px margin off three edges of
+   * the viewport with a 20px radius, and **the gap is the whole point**: the
+   * two drifting radials and the cursor trail run underneath it and are visible
+   * through it, which is the only reason the frosting reads as frosting rather
+   * than as a pale grey fill. Take `BackgroundLayer` away and this is a white
+   * rectangle with a white border — see the test that pins the shell mounting
+   * it.
+   *
+   * `saturate(1.4)` alongside the blur, and it is doing more than the blur is.
+   * Blur alone averages what is behind the glass towards grey; pushing the
+   * saturation back up is what keeps the blue and violet washes recognisable as
+   * colour after they have been smeared, and colour behind the panel is what
+   * the eye reads as depth.
+   *
+   * **The inset bottom hairline is not a flourish.** Without it the panel has a
+   * lit top edge from the white border and nothing at the bottom, and a shape
+   * lit on one side only reads as an unfinished rectangle rather than as an
+   * object with a thickness. One pixel of ink at 5% closes it.
    */
-  .glass-button {
-    background: rgb(255 255 255 / 65%);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+  .glass-panel {
+    background: rgb(255 255 255 / 72%);
+    backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
     border: 1px solid rgb(255 255 255 / 90%);
+    border-radius: 20px;
     box-shadow:
       0 1px 2px rgb(15 23 42 / 4%),
-      0 8px 24px rgb(15 23 42 / 6%);
-    border-radius: 12px;
-    color: var(--color-ink);
-    font-family: var(--font-mono);
-    font-size: var(--text-label);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    padding: 0.7rem 1rem;
-    cursor: pointer;
-    transition:
-      background-color 150ms,
-      box-shadow 150ms;
+      0 12px 32px rgb(15 23 42 / 7%),
+      inset 0 -1px 0 rgb(15 23 42 / 5%);
   }
 
-  .glass-button:hover {
-    background: rgb(255 255 255 / 85%);
+  /* --- The promoted card ---------------------------------------------------
+   * The one opaque surface inside the panel, and it is opaque *because* it is
+   * the only one. Everything else in the sidebar is text on glass; a single
+   * white card with a hairline is the strongest thing that layout can do
+   * without raising its voice, and it stops being strong the moment there are
+   * two of them. Do not add a second.
+   */
+  .promo {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.625rem;
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-rule);
+    border-radius: 10px;
+    padding: 0.75rem;
+    transition:
+      border-color 120ms ease-out,
+      background-color 120ms ease-out;
+  }
+
+  .promo:hover {
+    border-color: var(--color-rule-strong);
+  }
+
+  /* 550 rather than 600. The card is the only surfaced object in the panel and
+   * it does not also need to be the heaviest type in it — at 600 it competes
+   * with the active nav row, which is the one thing in the panel that has to
+   * win. */
+  .promo-title {
+    font-family: var(--font-prose);
+    font-size: 0.875rem;
+    font-weight: 550;
+    line-height: 1.3;
+    color: var(--color-ink);
+  }
+
+  .promo-subtitle {
+    font-family: var(--font-prose);
+    font-size: 0.78125rem;
+    font-weight: 400;
+    line-height: 1.4;
+    color: var(--color-ink-3);
+  }
+
+  /* The avatar, which is the only saturated object in the chrome. A gradient
+   * rather than a photograph or an initial: this application has exactly one
+   * account and knows nothing about who holds it, so anything more specific
+   * would be invented. Mixed towards `surface` from two of the kind colours, so
+   * it stays quieter than the accent it sits above. */
+  .avatar {
+    background-image: linear-gradient(
+      140deg,
+      color-mix(in oklab, var(--color-accent) 34%, var(--color-surface)),
+      color-mix(in oklab, var(--color-kind-note) 40%, var(--color-surface))
+    );
+  }
+
+  /* The menu `more` opens, and it is deliberately **not** glass.
+   *
+   * It was, for one build. A translucent popover inside a translucent panel
+   * lets you read the rows it is covering straight through it, which is the
+   * exact failure the dark theme had with its frosted drawer over the search
+   * results — legible material, illegible text. Anything that covers something
+   * else in this application is opaque. The shadow is what says it is in front,
+   * since it has no ground of its own to be lighter than.
+   */
+  .menu {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-lg);
     box-shadow:
-      0 1px 2px rgb(15 23 42 / 6%),
-      0 10px 28px rgb(15 23 42 / 9%);
+      0 1px 2px rgb(15 23 42 / 5%),
+      0 8px 24px rgb(15 23 42 / 10%);
+  }
+
+  /* A bare 30px square holding one 18px glyph — the header's search and
+   * collapse controls. No border and no fill at rest, for the same reason the
+   * nav items have none: two bordered squares in a 264px panel is a toolbar,
+   * and this is not one. Sized and weighted to match the nav exactly, because
+   * they are three inches apart and any difference between them reads as one
+   * of the two being wrong. */
+  .icon-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.875rem;
+    height: 1.875rem;
+    border-radius: var(--radius-md);
+    color: var(--color-ink-3);
+    cursor: pointer;
+    transition:
+      color 120ms ease-out,
+      background-color 120ms ease-out;
+  }
+
+  .icon-button:hover {
+    color: var(--color-ink);
+    background-color: color-mix(in oklab, var(--color-surface-tint) 50%, transparent);
   }
 
   /* --- The highlight -------------------------------------------------------
@@ -463,6 +568,9 @@
     outline: none;
   }
 
+  /* Secondary, and deliberately unchanged by M9.8: flat, a hairline, no blur
+   * and no shadow. The primary treatment only means something while there is
+   * something plainer beside it. */
   .btn {
     border: 1px solid var(--color-rule-strong);
     background-color: var(--color-surface);
@@ -500,31 +608,64 @@
     background-color: var(--color-accent-soft);
   }
 
-  /* The one solid button: the send action. Filled accent with white on it —
-   * the only place the accent is a background rather than an edge, and the
-   * only element on any screen that is doing something irreversible. */
+  /* The primary action, anywhere in the application: glass.
+   *
+   * It was a filled accent rectangle, which was the one place the accent was a
+   * background rather than an edge. M9.8 replaces the fill with the same
+   * material the sidebar is made of, one step lighter and one step tighter —
+   * 16px of blur against the panel's 20, a 10px radius against its 20 — so a
+   * button reads as a small piece of the same glass rather than as a different
+   * idea. What makes it a *primary* action now is that it is raised: it is the
+   * only thing on a page with a shadow under it.
+   *
+   * **Its three states are three shadows, not three colours.** Hover lifts it
+   * (more white, a wider shadow); press settles it onto the paper (less white,
+   * the shadow all but gone), which is the same model `.pearl` uses two hundred
+   * lines up. Disabled is not a dimmed version of any of them: the blur and the
+   * shadow are switched off and the label drops to `ink-3`, because glass that
+   * cannot be pressed should stop looking like an object above the page.
+   */
   .btn-primary {
-    border: 1px solid var(--color-accent);
-    background-color: var(--color-accent);
-    border-radius: var(--radius-DEFAULT);
-    color: var(--color-surface);
-    padding: 0.4rem 0.8rem;
+    background: rgb(255 255 255 / 68%);
+    backdrop-filter: blur(16px) saturate(1.4);
+    -webkit-backdrop-filter: blur(16px) saturate(1.4);
+    border: 1px solid rgb(255 255 255 / 90%);
+    border-radius: 10px;
+    box-shadow:
+      0 1px 2px rgb(15 23 42 / 4%),
+      0 4px 12px rgb(15 23 42 / 6%);
+    color: var(--color-ink);
+    padding: 0.45rem 0.9rem;
     font-family: var(--font-mono);
     font-size: var(--text-label);
     letter-spacing: 0.08em;
     text-transform: uppercase;
     cursor: pointer;
-    transition: background-color 150ms;
+    transition:
+      background-color 150ms,
+      box-shadow 150ms;
   }
 
   .btn-primary:hover:not(:disabled) {
-    background-color: var(--color-accent-strong);
-    border-color: var(--color-accent-strong);
+    background: rgb(255 255 255 / 80%);
+    box-shadow:
+      0 1px 2px rgb(15 23 42 / 5%),
+      0 8px 20px rgb(15 23 42 / 8%);
+  }
+
+  .btn-primary:active:not(:disabled) {
+    background: rgb(255 255 255 / 60%);
+    box-shadow: 0 1px 2px rgb(15 23 42 / 4%);
   }
 
   .btn-primary:disabled {
     cursor: default;
-    opacity: 0.45;
+    background: rgb(255 255 255 / 55%);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-color: var(--color-rule);
+    color: var(--color-ink-3);
+    box-shadow: none;
   }
 
   .btn-affirm-on {
@@ -544,38 +685,108 @@
    *
    * On dark it was cyan with a fill and an inner glow, and that was right
    * there: against a void you cannot find a hairline in peripheral vision. On
-   * light the ground is bright enough that a 2px ink rule and a jump to
-   * semibold are findable on their own — and spending the interaction colour on
-   * "you are here" would mean the one blue thing on screen is the one thing you
-   * cannot click. Position is not an action.
+   * light the ground is bright enough that a tint and a jump in weight are
+   * findable on their own — and spending the interaction colour on "you are
+   * here" would mean the one blue thing on screen is the one thing you cannot
+   * click. Position is not an action.
+   *
+   * **M9.9 stops the nav being a terminal.** It was JetBrains Mono at 11px,
+   * uppercase, with 0.08em of tracking — the register this application uses for
+   * paths, scores, offsets and hashes. Set the nav in it and a place you can go
+   * reads as the same kind of object as a byte offset. It is Inter now, at
+   * 14.5px, sentence case, no tracking: 450 at rest, 600 where you are. Mono
+   * stays for what mono is for, which in this panel is four counts inside
+   * `details` and nothing else.
+   *
+   * **One signal per state, not two.** The active row was a 2px ink left rule
+   * *and* a fill; it is now the fill and the weight. The rule was a second
+   * thing saying what the first thing already said, and it made every active
+   * row 2px wider than every inactive one.
+   *
+   * The icon is a step lighter than its label at rest and steps up with it —
+   * `ink-3`/`ink-2` becoming `ink`/`ink`. A glyph drawn at the same darkness as
+   * the text beside it competes with the word for the first fixation, and the
+   * word is the thing that says where the row goes.
    */
   .nav-item {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    border-left: 2px solid transparent;
-    border-radius: 0 var(--radius-DEFAULT) var(--radius-DEFAULT) 0;
-    padding: 0.55rem 0.75rem;
-    font-family: var(--font-mono);
-    font-size: var(--text-label);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    height: 2.375rem;
+    padding: 0 0.75rem;
+    border-radius: var(--radius-md);
+    font-family: var(--font-prose);
+    font-size: 0.90625rem;
+    font-weight: 450;
+    letter-spacing: 0;
     color: var(--color-ink-2);
     transition:
-      color 150ms,
-      background-color 150ms;
+      color 120ms ease-out,
+      background-color 120ms ease-out;
+  }
+
+  .nav-item svg {
+    flex-shrink: 0;
+    color: var(--color-ink-3);
+    transition: color 120ms ease-out;
   }
 
   .nav-item:hover {
     color: var(--color-ink);
-    background-color: var(--color-surface-tint);
+    background-color: color-mix(in oklab, var(--color-surface-tint) 50%, transparent);
+  }
+
+  .nav-item:hover svg {
+    color: var(--color-ink-2);
   }
 
   .nav-item-on {
-    border-left-color: var(--color-ink);
     color: var(--color-ink);
-    font-weight: 700;
+    font-weight: 600;
     background-color: var(--color-surface-tint);
+  }
+
+  .nav-item-on svg {
+    color: var(--color-ink);
+  }
+
+  /* The keyboard hint beside `Help`, in the body face rather than in `.kbd`.
+   * macOS draws ⌘K in the system face in its own menus, and a key cap here
+   * would be the one terminal artefact left in a panel this milestone spent
+   * itself removing them from. */
+  .shortcut {
+    font-family: var(--font-prose);
+    font-size: 0.75rem;
+    font-weight: 450;
+    color: var(--color-ink-3);
+  }
+
+  /* --- Group separation ----------------------------------------------------
+   * 18px between two runs of rows, with a hairline through the middle of it,
+   * inset 12px from each side so it aligns with the rows rather than with the
+   * panel.
+   *
+   * **The gap alone was not enough and this is why.** A nav whose only
+   * structure is vertical space asks the reader to decide whether 18px means
+   * "new group" or "loose spacing", and the answer is only obvious once you
+   * have already learnt the nav. A rule is not ambiguous. It is also the
+   * cheapest possible architecture: it costs one pixel and no rows, which a
+   * heading — a line of text you cannot click, at the top of a group whose
+   * members already say what they are — does not.
+   */
+  .nav-group + .nav-group {
+    position: relative;
+    margin-top: 1.125rem;
+  }
+
+  .nav-group + .nav-group::before {
+    content: "";
+    position: absolute;
+    top: -0.5625rem;
+    left: 0.75rem;
+    right: 0.75rem;
+    height: 1px;
+    background-color: var(--color-rule);
   }
 
   /* --- Figures ------------------------------------------------------------- */

@@ -73,10 +73,11 @@ describe("accent means interaction, never position", () => {
 describe("hairlines, not shadows", () => {
   it("declares no drop shadow that is not sanctioned", () => {
     // Shadows accumulate into noise on light faster than anything else. The
-    // allowed ones: the glass button's two-part shadow, its hover, the panel
-    // inset that marks an opened row, the focus rings — which are rings rather
-    // than drop shadows and are how `accent` says "you are here now" — and, as
-    // of M9.4, `.panel-raised`.
+    // allowed ones: the glass panel's three-part stack and the primary
+    // button's two, with their hover and press variants, the panel inset that
+    // marks an opened row, the focus rings — which are rings rather than drop
+    // shadows and are how `accent` says "you are here now" — `.panel-raised`
+    // since M9.4, and the pearl.
     //
     // Two of them are real drop shadows and each is used on exactly one
     // element: `.panel-raised` on the landing page's sign-in card, which floats
@@ -129,21 +130,47 @@ describe("hairlines, not shadows", () => {
   });
 });
 
-describe("glass is used on exactly one element", () => {
-  it("declares one glass class and no other backdrop-filter", () => {
-    const blurred = [...INDEX_CSS.matchAll(/^\s*backdrop-filter:/gm)];
-    // One declaration, plus its `-webkit-` twin, and both are `.glass-button`.
-    expect(blurred).toHaveLength(1);
-    expect(rule(".glass-button")).toMatch(/backdrop-filter/);
+describe("glass is the chrome, and only the chrome", () => {
+  it("declares exactly two blurred surfaces: the panel and the primary button", () => {
+    // **M9.8 changed the number and not the rule.** It was one — the NEW
+    // CONVERSATION button — and the argument for the cap has never been about
+    // the count: a `backdrop-filter` costs a compositor pass and only buys
+    // anything where there is something behind the element to blur. In this
+    // layout that means the sidebar panel, which floats in a 12px margin over
+    // the background layer, and a primary button, which floats over whatever
+    // page it is on. A frosted card in the middle of an article has white
+    // paper behind it and would be a slightly grey rectangle.
+    //
+    // `none` is not a blurred surface: `.btn-primary:disabled` switches the
+    // frosting off, which is the point of that state.
+    const blurred = [...INDEX_CSS.matchAll(/^\s*backdrop-filter:\s*([^;]+);/gm)]
+      .map((match) => match[1].trim())
+      .filter((value) => value !== "none");
+
+    expect(blurred).toHaveLength(2);
+    expect(rule(".glass-panel")).toMatch(/backdrop-filter/);
+    expect(rule(".btn-primary")).toMatch(/backdrop-filter/);
   });
 
-  it("is applied by exactly one component, and it is the primary action", () => {
+  it("puts the panel on exactly one component, and it is the sidebar", () => {
+    // The panel treatment is the chrome's identity. If it spreads to a view,
+    // the thing that says "this is the frame and that is the page" is gone.
     const users = components()
-      .filter(([, source]) => /className=[^>]*\bglass-button\b/.test(source))
+      .filter(([, source]) => /className=[^>]*\bglass-panel\b/.test(source))
       .map(([path]) => path);
 
     expect(users).toHaveLength(1);
     expect(users[0]).toMatch(/Sidebar\.tsx$/);
+  });
+
+  it("leaves the secondary button flat", () => {
+    // The primary treatment only means anything while there is something
+    // plainer beside it: `.btn` keeps its hairline and gets no blur and no
+    // shadow.
+    const secondary = rule(".btn");
+    expect(secondary).toMatch(/--color-rule-strong/);
+    expect(secondary).not.toMatch(/backdrop-filter/);
+    expect(secondary).not.toMatch(/box-shadow/);
   });
 
   it("has something behind it to frost", () => {

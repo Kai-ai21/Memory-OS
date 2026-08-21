@@ -196,20 +196,27 @@ describe("where reflections are not", () => {
     // this test protects is about *volunteering*. Nothing on that page speaks
     // unasked, and the reflections section on it renders the count and the
     // threshold — never the reflections themselves.
+    //
+    // M9.9 capitalises them, and nothing else here moves. The route table still
+    // spells every label lowercase — the palette matches typed text against it
+    // — but the sidebar draws navigation as prose rather than as terminal
+    // output, so a row's text is `Timeline`. The property this test exists for
+    // is the *membership* of this list, which is unchanged: thirteen
+    // destinations, and `/decisions/reflections` is not one of them.
     ).toEqual([
-      "chat",
-      "search",
-      "timeline",
-      "graph",
-      "decisions",
-      "insights",
-      "sources",
-      "overview",
-      "agent",
-      "model",
-      "judgements",
-      "surfacing",
-      "corpus",
+      "Chat",
+      "Search",
+      "Timeline",
+      "Graph",
+      "Decisions",
+      "Insights",
+      "Sources",
+      "Overview",
+      "Agent",
+      "Model",
+      "Judgements",
+      "Surfacing",
+      "Corpus",
     ]);
   });
 });

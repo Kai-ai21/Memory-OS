@@ -126,9 +126,13 @@ export const READY = {
 /**
  * The requests the shell itself makes on every route.
  *
- * The sidebar reads stats and readiness on all fourteen views, so a test that
- * renders `<App />` for any reason needs these routed or the harness throws on
- * an unstubbed request. Spread it into the route list rather than repeated.
+ * `/stats` and `/health/ready` are the sidebar's, and as of M9.8 it only asks
+ * for them when the `details` block is open — which it is not by default. They
+ * stay in this list because the disclosure is remembered in `localStorage`, so
+ * whether a given test makes those two requests depends on state a previous
+ * test may have left behind, and a harness that throws on an unstubbed request
+ * would turn that into a flake. Spread it into the route list rather than
+ * repeated.
  */
 /** What `/chat/attach/limits` returns: 50MB, and the parsers' own suffixes. */
 export const ATTACH_LIMITS = {

@@ -56,7 +56,7 @@ describe("navigation", () => {
     renderWithProviders(<App />, { route: "/" });
 
     const nav = screen.getByRole("navigation");
-    await userEvent.click(within(nav).getByRole("link", { name: "overview" }));
+    await userEvent.click(within(nav).getByRole("link", { name: "Overview" }));
 
     expect(
       await screen.findByRole("heading", { name: /a corpus that remembers why/i }),
@@ -70,13 +70,18 @@ describe("navigation", () => {
   // as loose text because several of these words also appear in the sidebar or
   // in a page's own body copy, and a text match would pass without the route
   // having changed at all.
+  // **Sentence case since M9.9, and that is why these strings moved.** The
+  // route table still spells every label lowercase — the palette matches typed
+  // text against it — but the sidebar draws it as prose, so the accessible name
+  // of a nav link is now `Timeline` rather than `timeline`. The assertion is
+  // unchanged in what it means: click the row, land on the page.
   it.each([
-    ["timeline", /date provenance/i],
-    ["judgements", /golden set/i],
-    ["surfacing", /^surfacing$/i],
-    ["model", /user model/i],
-    ["corpus", /health checks/i],
-    ["sources", /where else this reads from/i],
+    ["Timeline", /date provenance/i],
+    ["Judgements", /golden set/i],
+    ["Surfacing", /^surfacing$/i],
+    ["Model", /user model/i],
+    ["Corpus", /health checks/i],
+    ["Sources", /where else this reads from/i],
   ])("navigating to %s renders that route", async (label, heading) => {
     stubEverything();
     renderWithProviders(<App />, { route: "/" });
@@ -100,14 +105,14 @@ describe("navigation", () => {
     renderWithProviders(<App />, { route: "/" });
 
     const nav = screen.getByRole("navigation");
-    await userEvent.click(within(nav).getByRole("link", { name: "timeline" }));
+    await userEvent.click(within(nav).getByRole("link", { name: "Timeline" }));
 
     await waitFor(() => {
       const current = within(nav)
         .getAllByRole("link")
         .filter((link) => link.getAttribute("aria-current") === "page");
       expect(current).toHaveLength(1);
-      expect(current[0]).toHaveTextContent("timeline");
+      expect(current[0]).toHaveTextContent("Timeline");
     });
   });
 
@@ -124,14 +129,14 @@ describe("navigation", () => {
     renderWithProviders(<App />, { route: "/" });
 
     const nav = screen.getByRole("navigation");
-    await userEvent.click(within(nav).getByRole("link", { name: "timeline" }));
+    await userEvent.click(within(nav).getByRole("link", { name: "Timeline" }));
 
     await waitFor(() => {
       const current = within(nav)
         .getAllByRole("link")
         .filter((link) => link.getAttribute("aria-current") === "page");
       expect(current).toHaveLength(1);
-      expect(current[0]).toHaveTextContent("timeline");
+      expect(current[0]).toHaveTextContent("Timeline");
       expect(current[0].className).toMatch(/nav-item-on/);
       // No accent, in any of the spellings that would put it there.
       expect(current[0].className).not.toMatch(/accent/);
@@ -146,7 +151,7 @@ describe("navigation", () => {
     renderWithProviders(<App />, { route: "/" });
 
     const nav = screen.getByRole("navigation");
-    await userEvent.click(within(nav).getByRole("link", { name: "search" }));
+    await userEvent.click(within(nav).getByRole("link", { name: "Search" }));
 
     expect(await screen.findByText(/nothing searched yet/i)).toBeInTheDocument();
   });

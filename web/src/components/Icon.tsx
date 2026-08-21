@@ -8,10 +8,19 @@
  * these are hand-drawn on Material's own 24px grid and shipped as part of the
  * JavaScript, which costs about two kilobytes.
  *
- * Stroke rather than fill, at 1.5px on a 24px grid, because every one of these
- * sits next to an 11px mono label on a translucent panel: a filled glyph at that
- * size reads as a solid blob through a backdrop blur, and the stroke weight is
- * what keeps the icon and its label looking like they belong to each other.
+ * Stroke rather than fill, at 1.5px on a 24px grid: a filled glyph at this size
+ * reads as a solid blob, and the stroke weight is what keeps an icon and its
+ * label looking like they belong to each other.
+ *
+ * **M9.9 moved the sidebar off this set and it is not a repudiation of it.**
+ * The nav is thirteen glyphs that have to be told apart at a glance beside
+ * 14.5px prose, and lucide draws that set consistently because one person drew
+ * all of it — see `app/routes.ts`, which now holds the components themselves.
+ * What is left here is what has always been true of these: they are the glyphs
+ * this application draws *inside* its own screens, next to mono, at 14 to 17px,
+ * where the set is small enough to stay coherent by hand and a dependency would
+ * be a dependency for five drawings. The eight this file gained in M9.8 for the
+ * sidebar left with it.
  *
  * `aria-hidden` throughout and never the only label. Each of these appears
  * beside real text — a nav item, a button — so announcing the icon as well
@@ -121,7 +130,7 @@ const PATHS: Record<IconName, React.ReactNode> = {
 
 interface Props {
   name: IconName;
-  /** Pixel size. 20 for nav and buttons, 16 inline beside mono text. */
+  /** Pixel size. 17 for a button, 14 to 16 inline beside mono text. */
   size?: number;
   className?: string;
 }

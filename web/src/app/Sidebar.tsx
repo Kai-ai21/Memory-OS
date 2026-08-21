@@ -1,56 +1,153 @@
 /**
- * The persistent column: what this is, where you can go, and what it holds.
+ * The panel: who you are, where you can go, and one thing worth reading.
  *
- * A flat white column separated from the page by a single hairline. The
- * wordmark, one primary action, six nav items with icons, and help pinned to
- * the bottom rule.
+ * **It is a floating panel, not a column.** 264px of glass inset 12px from the
+ * top, left and bottom of the viewport, with a 20px radius — and the 12px of
+ * nothing around it is the point rather than a detail of it. The two drifting
+ * radials and the cursor trail run underneath, and being able to see them past
+ * the edges and through the face is what makes the material read as glass
+ * instead of as a pale grey rectangle. See `.glass-panel`.
  *
- * **The active item carries no accent.** On dark it was cyan with a fill and an
- * inner glow, because against a void a hairline is not findable in peripheral
- * vision. On light it is a 2px ink rule, a jump to semibold, and a tint — all
- * of which are findable here, and none of which spend the interaction colour on
- * saying where you already are. See rule 1 in `tokens.css`.
+ * **M9.9 takes the terminal out of the navigation.** Every label in here was
+ * lowercase JetBrains Mono at 11px with 0.08em of tracking, which is the
+ * register this application uses for paths, scores, offsets and hashes — and
+ * using it for the nav said that a place you can go is the same kind of thing
+ * as a byte offset. It is not. Navigation is prose: Inter at 14.5px, sentence
+ * case, no tracking, 450 at rest and 600 where you are.
  *
- * **The corpus figures live down here rather than only on `/corpus`.** They are
- * the answer to "is this thing loaded and working", which is a question you ask
- * constantly while using the tool and never want to change page for. They are
- * also the honest frame for every other view: three results out of a corpus of
- * 282 memories means something different from three out of 30,000.
+ * **The mono is still here and is still right — inside `details`.** Four counts
+ * that are read against each other need tabular figures and a column that
+ * lines up. That is the whole of the exception, and `Sidebar.test.tsx` asserts
+ * that nothing outside that block has crossed back over.
+ *
+ * **The icons are lucide now, one family at one weight.** They were
+ * hand-drawn on Material's grid, which was the right call while they were
+ * decoration beside a word in caps; with the caps gone the glyph is the first
+ * thing the eye lands on, and a set drawn by hand at 1.5px next to text at
+ * 14.5px is a set whose inconsistencies you can see. 18px, stroke 1.5 — not
+ * lucide's default 2, which is heavy against text this size and is the single
+ * most common reason an icon set looks clumsy.
+ *
+ * **The active item still carries no accent.** It is a `surface-tint` fill and
+ * a step up in weight, because where you already are is not something you can
+ * click. See rule 1 in `tokens.css`, and the test that pins it.
+ *
+ * **The corpus figures live behind `details` rather than in the panel.** They
+ * are the answer to "is this thing loaded and working", which is worth one
+ * click and is not worth six permanent rows — and the disclosure remembers, so
+ * anybody who wants them up keeps them up. They are also still the honest frame
+ * for every other view: three results out of a corpus of 282 memories means
+ * something different from three out of 30,000.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import {
+  ChevronDown,
+  Compass,
+  HelpCircle,
+  LogOut,
+  MoreHorizontal,
+  PanelLeft,
+  Plus,
+  Search,
+  SlidersHorizontal,
+} from "lucide-react";
 
 import { api } from "../api/client";
-import { Icon } from "../components/Icon";
 import { count } from "../lib/format";
 import { GROUPS, HOME, inGroup, type ViewRoute } from "./routes";
 
-export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
-  return (
-    /* Opaque white, both as a column and as the mobile drawer. Nothing here is
-       translucent any more, which removes the problem the dark theme had to
-       work around — a glassy drawer over the article let you read the search
-       results through the navigation. */
-    <div className="flex h-full flex-col gap-6 overflow-y-auto bg-surface px-3 pt-6 pb-4">
-      <Wordmark onNavigate={onNavigate} />
-      <NewConversation onNavigate={onNavigate} />
+/** Every glyph in this panel, at one size and one weight. */
+const GLYPH = { size: 18, strokeWidth: 1.5 } as const;
 
-      <nav className="flex flex-col gap-5" aria-label="Views">
-        <div className="flex flex-col gap-1">
+/**
+ * The route table's label, as the panel draws it.
+ *
+ * **The table stays lowercase and this function is why.** `label` is read by
+ * the command palette as well as by the sidebar, and the palette matches typed
+ * text against it — a table full of capitals would mean either a palette that
+ * misses `graph` or a `toLowerCase()` at every comparison. Sentence case is a
+ * fact about how this panel *draws* a label, not about what the label is, so
+ * it lives here.
+ *
+ * First letter only, deliberately. `text-transform: capitalize` would have been
+ * one line of CSS and would render "New Chat" and "Sign Out", which is title
+ * case and is not what was asked for.
+ */
+function sentence(label: string): string {
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+/**
+ * Whether the details block is open, across reloads.
+ *
+ * Wrapped in `try` for the same reason the particle preference is: Safari's
+ * private mode throws on `localStorage` rather than returning null, and a
+ * disclosure state is not worth taking the application down over. A read that
+ * fails is a closed block, which is the default anyway.
+ */
+const DETAILS_KEY = "memo:sidebar-details";
+
+function readDetails(): boolean {
+  try {
+    return window.localStorage.getItem(DETAILS_KEY) === "open";
+  } catch {
+    return false;
+  }
+}
+
+function writeDetails(open: boolean): void {
+  try {
+    window.localStorage.setItem(DETAILS_KEY, open ? "open" : "closed");
+  } catch {
+    // Still a preference for this session; the state lives in React either way.
+  }
+}
+
+export function Sidebar({
+  onNavigate,
+  onCollapse,
+}: {
+  onNavigate?: () => void;
+  /** Hide the panel. The shell owns the state; this is the handle for it. */
+  onCollapse?: () => void;
+}) {
+  return (
+    /* No horizontal padding on the panel itself: the two hairlines — under the
+       header and above the footer — run the full width of the glass, and a rule
+       that stops 8px short of the edge on both sides reads as a mistake rather
+       than as a decision. Every block below sets its own inset instead. */
+    <div className="glass-panel flex h-full flex-col overflow-hidden py-3">
+      <Header onCollapse={onCollapse} />
+
+      {/* The only scrolling region. The card and the footer are pinned, so the
+          promoted card cannot be scrolled out of the panel on a short window —
+          which is the entire reason it is promoted. */}
+      <nav
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 py-3"
+        aria-label="Views"
+      >
+        <div className="nav-group flex flex-col">
+          <NewConversation onNavigate={onNavigate} />
           <Item route={HOME} onNavigate={onNavigate} />
           {inGroup("primary").map((route) => (
             <Item key={route.path} route={route} onNavigate={onNavigate} />
           ))}
         </div>
 
-        {GROUPS.filter((group) => group.id !== "primary").map((group) => {
-          const routes = inGroup(group.id);
+        {/* 18px between the groups with a hairline through the middle of it,
+            inset 12px from each side so it lines up with the rows rather than
+            with the panel. Drawn by `.nav-group + .nav-group::before` — the gap
+            alone read as inconsistent spacing, and a rule is what turns two
+            runs of rows into two things. Still no headings: a heading is a row
+            you cannot click. */}
+        {GROUPS.filter((group) => group !== "primary").map((group) => {
+          const routes = inGroup(group);
           if (routes.length === 0) return null;
           return (
-            <div key={group.id} className="flex flex-col gap-1">
-              <p className="meta-label px-3 pb-1">{group.label}</p>
+            <div key={group} className="nav-group flex flex-col">
               {routes.map((route) => (
                 <Item key={route.path} route={route} onNavigate={onNavigate} />
               ))}
@@ -59,49 +156,82 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         })}
       </nav>
 
-      {/* Pushed to the bottom, which is where a status line belongs: read when
-          looked for, never in the way of the nav above it. */}
-      <div className="mt-auto flex flex-col gap-3 border-t border-rule pt-3">
-        <Pinned onNavigate={onNavigate} />
-        <div className="flex flex-col gap-3 border-t border-rule px-3 pt-3">
-          <CorpusFigures />
-          <Health />
-        </div>
+      <Promoted onNavigate={onNavigate} />
+      <Footer onNavigate={onNavigate} />
+    </div>
+  );
+}
+
+/**
+ * The top row: an avatar, search, and the collapse toggle.
+ *
+ * **The wordmark is gone and this is the right call.** MEMO was a 22px display
+ * face and a tagline sitting above the nav on every screen of the application,
+ * which is a product name introducing itself to somebody who is already inside
+ * the product. The name belongs on the landing page, where there is somebody
+ * who does not know it yet.
+ *
+ * Search here opens the command palette rather than routing to `/search`. There
+ * is already a `Search` row four lines below that goes to the view; a second
+ * control doing the identical thing would be a wasted affordance, and the
+ * palette is the thing this icon means everywhere else — jump to anything.
+ */
+function Header({ onCollapse }: { onCollapse?: () => void }) {
+  return (
+    <div className="flex items-center justify-between border-b border-rule px-3 pb-3.5">
+      {/* 30px, no border. A ring around a gradient is a second edge on an
+          object whose whole job is to be the one soft thing in the panel. */}
+      <span
+        className="avatar size-[30px] shrink-0 rounded-full"
+        aria-hidden
+        data-testid="avatar"
+      />
+
+      <div className="flex items-center">
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Search everything"
+          title="Search everything — ⌘K"
+          onClick={() => openPalette()}
+        >
+          <Search {...GLYPH} />
+        </button>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Hide navigation"
+          title="Hide navigation"
+          onClick={onCollapse}
+        >
+          <PanelLeft {...GLYPH} />
+        </button>
       </div>
     </div>
   );
 }
 
-function Wordmark({ onNavigate }: { onNavigate?: () => void }) {
-  return (
-    <NavLink
-      to="/"
-      onClick={onNavigate}
-      className="flex flex-col gap-1 px-3"
-      aria-label="MEMO, chat"
-    >
-      {/* The display face at 22px. MEMORY OS was eleven characters and filled
-          the column at 14px; MEMO is four, and at that size it read as a
-          truncation rather than a name. At this size it occupies roughly the
-          width the old wordmark did, which is what keeps the top block balanced
-          against the button under it. No glow — nothing on light glows. */}
-      <span className="display text-[1.375rem] font-bold tracking-[0.14em] text-ink">
-        MEMO
-      </span>
-      <span className="meta-label">Everything you&rsquo;ve thought</span>
-    </NavLink>
+/** The palette owns ⌘K; dispatching the key is how a button and a keystroke
+ *  stay one implementation rather than two. */
+function openPalette(): void {
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }),
   );
 }
 
 /**
- * The one primary action in the interface.
+ * Starting something new, as a row rather than as a button.
  *
- * Starts a *new session* rather than merely navigating to chat — which is why
- * this and the `chat` nav item both exist and are not redundant. The reference
- * has only this button, because in the reference chat is the whole canvas; here
- * there are sessions, and "go back to what I was saying" and "start something
- * new" are different intentions. Dropping the session parameter is what makes
- * it new: see `ChatPage`, which reads the session from the URL.
+ * It was the one filled, uppercase, glass button in the interface and it sat
+ * above the nav shouting at it. **A panel with one loud object in it is a panel
+ * you read in the order the loudness dictates**, which was: button, wordmark,
+ * everything else. As a row with a `+` in front of it, it is the first thing in
+ * the list because it is first in the list, which is enough.
+ *
+ * It still starts a *new session* rather than merely navigating to chat, which
+ * is why this and the `Chat` row are both here and are not redundant. Dropping
+ * the session parameter is what makes it new: see `ChatPage`, which reads the
+ * session from the URL.
  */
 function NewConversation({ onNavigate }: { onNavigate?: () => void }) {
   const navigate = useNavigate();
@@ -109,64 +239,191 @@ function NewConversation({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <button
       type="button"
-      /* **The only glass in the application.** See `.glass-button` — it is also
-         the only element with a backdrop-filter and the only one with a box
-         shadow, and it only reads as glass because `BackgroundLayer` paints
-         something behind the page for it to frost. */
-      className="glass-button mx-3 flex items-center justify-center gap-2"
+      className="nav-item w-full text-left"
       onClick={() => {
         navigate("/");
         onNavigate?.();
       }}
     >
-      <Icon name="add" size={16} />
-      <span>New conversation</span>
+      <Plus {...GLYPH} />
+      <span>New chat</span>
     </button>
   );
 }
 
-/**
- * The pair pinned to the bottom rule, as the reference draws them.
- *
- * **Wired to what exists rather than to what the reference invented.** The
- * mockup shows Settings and Help as two more nav rows; this application has
- * neither page. Help is real and is this: the command palette lists every view
- * in the application with a sentence saying what it answers, which is the only
- * help surface here and a better one than a page of prose would be.
- *
- * There is no settings row. Everything configurable in this system is an
- * environment variable read at startup — weights, models, connection strings —
- * and the one thing you can change from the interface, which directories get
- * read, is `sources` in the nav above. A settings row would have to lead
- * somewhere, and the honest options were a page saying "there are no settings"
- * or a second link to a screen already two inches higher. Both are worse than
- * the gap.
- *
- * **M11.0 adds sign-out, and it goes here rather than in a settings row that
- * still does not exist.** It is the second meta-control this application has
- * and the first one that changes anything, so it sits above `help` — the more
- * consequential of two pinned items should not be the lower one.
- */
-function Pinned({ onNavigate }: { onNavigate?: () => void }) {
+function Item({ route, onNavigate }: { route: ViewRoute; onNavigate?: () => void }) {
+  const Glyph = route.icon;
+
   return (
-    <div className="flex flex-col gap-1">
-      <SignOut onNavigate={onNavigate} />
+    <NavLink
+      to={route.path}
+      end={route.path === "/"}
+      onClick={onNavigate}
+      title={route.blurb}
+      className={({ isActive }) => `nav-item ${isActive ? "nav-item-on" : ""}`}
+    >
+      <Glyph {...GLYPH} />
+      <span>{sentence(route.label)}</span>
+    </NavLink>
+  );
+}
+
+/**
+ * The one surfaced thing in the panel.
+ *
+ * White paper with a hairline, in a panel where everything else is text on
+ * glass — which is why the eye goes here and why there must never be a second
+ * one. It is spent on the tour rather than on a figure or a status: somebody
+ * who does not yet know what this application *is* cannot be helped by a count,
+ * and `/overview` is the page that answers the question in numbers that come
+ * from their own corpus.
+ *
+ * `Compass` rather than `BookOpen`, which is what `/overview` wears four rows
+ * up. Two glyphs for one destination is the same problem as two rows for it.
+ */
+function Promoted({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <NavLink to="/overview" onClick={onNavigate} className="promo mx-2 mb-3 shrink-0">
+      <Compass size={16} strokeWidth={1.5} className="mt-px shrink-0 text-ink-3" />
+      <span className="flex flex-col gap-0.5">
+        <span className="promo-title">What MEMO does</span>
+        <span className="promo-subtitle">A short tour of how memory works</span>
+      </span>
+    </NavLink>
+  );
+}
+
+/**
+ * Beneath the card, under a hairline: the corpus, and everything meta.
+ *
+ * **Two permanent rows became one three-dot button.** `Help` and `Sign out`
+ * were pinned to the bottom of every screen — one of them a keyboard shortcut
+ * that is already bound globally, the other a thing you do once a month. Under
+ * `More` they cost a click and no space, which is the correct trade for both.
+ * There is still no settings page in this application and this milestone does
+ * not invent one; `More` holds what actually exists.
+ */
+function Footer({ onNavigate }: { onNavigate?: () => void }) {
+  const [open, setOpen] = useState(readDetails);
+
+  return (
+    <div className="shrink-0 border-t border-rule px-2 pt-2">
       <button
         type="button"
         className="nav-item w-full text-left"
+        aria-expanded={open}
+        aria-controls="sidebar-details"
+        data-testid="details-toggle"
         onClick={() => {
-          onNavigate?.();
-          // The palette owns this shortcut; dispatching the key is how a button
-          // and a keystroke stay one implementation rather than two.
-          window.dispatchEvent(
-            new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }),
-          );
+          setOpen((current) => {
+            writeDetails(!current);
+            return !current;
+          });
         }}
       >
-        <Icon name="help" size={18} />
-        <span>help</span>
-        <span className="kbd ml-auto normal-case">⌘K</span>
+        <SlidersHorizontal {...GLYPH} />
+        <span>Details</span>
+        <ChevronDown
+          size={16}
+          strokeWidth={1.5}
+          aria-hidden
+          className={`ml-auto transition-transform duration-[120ms] ${open ? "rotate-180" : ""}`}
+        />
       </button>
+
+      {/* **The one place the mono survives in this panel, and the one place it
+          belongs.** Four counts read against each other need figures that line
+          up in a column; that is what `.meta` is for and what Inter, which has
+          proportional digits by default here, would not give. */}
+      {open ? (
+        <div id="sidebar-details" className="flex flex-col gap-3 px-3 py-2">
+          <CorpusFigures />
+          <Health />
+        </div>
+      ) : null}
+
+      <More onNavigate={onNavigate} />
+    </div>
+  );
+}
+
+/**
+ * The meta menu.
+ *
+ * Closes on Escape, on a click anywhere outside it, and on any of its own
+ * items — three exits, because a menu you cannot dismiss by clicking away from
+ * it is the single most common complaint about menus. `Escape` is handled here
+ * rather than in the shell's global handler so that it closes this first and
+ * the drawer second, which is the order a person expects when both are open.
+ */
+function More({ onNavigate }: { onNavigate?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function onPointer(event: MouseEvent) {
+      if (!box.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={box}>
+      <button
+        type="button"
+        className="nav-item w-full text-left"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <MoreHorizontal {...GLYPH} />
+        <span>More</span>
+      </button>
+
+      {open ? (
+        <div
+          role="menu"
+          /* Opaque, unlike everything else in this panel — see `.menu`. It
+             covers two rows of the footer, and glass over text is text you can
+             read through the thing covering it. `bottom-full` because there is
+             nothing below it: this is the last thing in a panel that ends 12px
+             from the bottom of the window. */
+          className="menu absolute bottom-full left-0 z-10 mb-1 flex w-full flex-col p-1"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="nav-item w-full text-left"
+            onClick={() => {
+              setOpen(false);
+              onNavigate?.();
+              openPalette();
+            }}
+          >
+            <HelpCircle {...GLYPH} />
+            <span>Help</span>
+            {/* Not a `.kbd`, which is mono. macOS draws ⌘K in the system face
+                in its own menus, and a key cap in this panel would be the one
+                terminal artefact left in it. */}
+            <span className="shortcut ml-auto">⌘K</span>
+          </button>
+          <SignOut onNavigate={onNavigate} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -190,6 +447,7 @@ function SignOut({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <button
       type="button"
+      role="menuitem"
       className="nav-item w-full text-left"
       disabled={busy}
       onClick={async () => {
@@ -203,26 +461,9 @@ function SignOut({ onNavigate }: { onNavigate?: () => void }) {
         window.location.assign("/welcome");
       }}
     >
-      <Icon name="close" size={18} />
-      <span>{busy ? "signing out…" : "sign out"}</span>
+      <LogOut {...GLYPH} />
+      <span>{busy ? "Signing out…" : "Sign out"}</span>
     </button>
-  );
-}
-
-function Item({ route, onNavigate }: { route: ViewRoute; onNavigate?: () => void }) {
-  return (
-    <NavLink
-      to={route.path}
-      end={route.path === "/"}
-      onClick={onNavigate}
-      title={route.blurb}
-      className={({ isActive }) =>
-        `nav-item ${isActive ? "nav-item-on" : ""}`
-      }
-    >
-      <Icon name={route.icon} size={18} />
-      <span>{route.label}</span>
-    </NavLink>
   );
 }
 
@@ -246,7 +487,7 @@ function CorpusFigures() {
     return <p className="meta text-deny">corpus unavailable</p>;
   }
   if (!stats.data) {
-    return <p className="meta text-ink-3">reading corpus…</p>;
+    return <p className="meta text-ink-2">reading corpus…</p>;
   }
 
   return (
@@ -262,7 +503,13 @@ function CorpusFigures() {
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
-      <dt className="meta text-ink-3">{label}</dt>
+      {/* `ink-2` rather than `ink-3`, and only inside this panel. Muted
+          metadata is `ink-3` everywhere in the application because everywhere
+          else it sits on an opaque surface, where it measures 5.4:1. Here the
+          surface is 72% white over a background that can be crossed by the
+          cursor trail, and `ink-3` falls to 3.2:1 under the head of it. One
+          step darker holds AA against everything the background can do. */}
+      <dt className="meta text-ink-2">{label}</dt>
       <dd className="meta text-ink">{value}</dd>
     </div>
   );
