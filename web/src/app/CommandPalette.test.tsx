@@ -239,3 +239,78 @@ describe("what it offers", () => {
     expect(first).toHaveAttribute("aria-selected", "false");
   });
 });
+
+/**
+ * M9.11 — the palette stopped being a list of routes.
+ *
+ * The two assertions that matter for the rewrite: that a subsequence reaches a
+ * route nobody could reach with `includes`, and that Enter activates whatever
+ * is highlighted rather than whatever happens to be first.
+ */
+describe("fuzzy matching and activation", () => {
+  it("matches a subsequence and activates the highlighted row on Enter", async () => {
+    stubFetch([...SHELL_ROUTES, { match: "/chat", body: [] }, { match: "/memories", body: [] }]);
+    renderWithProviders(<App />, { route: "/" });
+
+    await userEvent.keyboard("{Meta>}k{/Meta}");
+    const box = await screen.findByLabelText("Command");
+
+    /* `dnw` is not a substring of `decisions/new` — the old `includes` matcher
+       found nothing for this, which is the whole reason `lib/fuzzy` exists. */
+    await userEvent.type(box, "dnw");
+
+    const options = await screen.findAllByRole("option");
+    expect(options[0]).toHaveTextContent("record a decision");
+    expect(options[0]).toHaveAttribute("aria-selected", "true");
+
+    // Down one, then Enter — it must open the second row, not the first.
+    await userEvent.keyboard("{ArrowDown}");
+    const moved = screen.getAllByRole("option");
+    expect(moved[1]).toHaveAttribute("aria-selected", "true");
+    const wanted = moved[1].textContent ?? "";
+
+    await userEvent.keyboard("{Enter}");
+
+    /* The palette stays mounted and only `open` flips — see the module note on
+       `showModal` — so "closed" is the element's own state, not its absence. */
+    await waitFor(() =>
+      expect(screen.getByTestId("palette-results").closest("dialog")!.open).toBe(false),
+    );
+    expect(wanted.length).toBeGreaterThan(0);
+  });
+
+  it("shows recents before anything is typed, most recent first", async () => {
+    window.localStorage.setItem(
+      "memo:recents",
+      JSON.stringify([
+        { to: "/memory/abc", label: "src/worker.py", kind: "memory" },
+        { to: "/timeline", label: "timeline", kind: "view" },
+      ]),
+    );
+    stubFetch([...SHELL_ROUTES, { match: "/chat", body: [] }, { match: "/memories", body: [] }]);
+    renderWithProviders(<App />, { route: "/" });
+
+    await userEvent.keyboard("{Meta>}k{/Meta}");
+    await screen.findByLabelText("Command");
+
+    const options = await screen.findAllByRole("option");
+    // Recents lead, in stored order. This is the group the feature exists for.
+    expect(options[0]).toHaveTextContent("src/worker.py");
+    expect(options[1]).toHaveTextContent("timeline");
+
+    // And the group is labelled, so the list reads as sections rather than a run.
+    expect(screen.getByText("recent")).toBeInTheDocument();
+    window.localStorage.clear();
+  });
+
+  it("offers actions, which are not navigation", async () => {
+    stubFetch([...SHELL_ROUTES, { match: "/chat", body: [] }, { match: "/memories", body: [] }]);
+    renderWithProviders(<App />, { route: "/" });
+
+    await userEvent.keyboard("{Meta>}k{/Meta}");
+    await userEvent.type(await screen.findByLabelText("Command"), "sign");
+
+    const options = await screen.findAllByRole("option");
+    expect(options.some((o) => /sign out/.test(o.textContent ?? ""))).toBe(true);
+  });
+});

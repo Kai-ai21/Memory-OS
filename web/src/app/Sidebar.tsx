@@ -59,6 +59,7 @@ import {
 import { api } from "../api/client";
 import { count } from "../lib/format";
 import { Button } from "../components/primitives";
+import { TOGGLE_DETAILS_EVENT } from "./CommandPalette";
 import { GROUPS, HOME, inGroup, type ViewRoute } from "./routes";
 
 /** Every glyph in this panel, at one size and one weight. */
@@ -320,6 +321,23 @@ function Footer({
   onShortcuts?: () => void;
 }) {
   const [open, setOpen] = useState(readDetails);
+
+  /* The palette's `toggle details` action lands here. An event rather than a
+     prop threaded down from the shell: this component already owns the state
+     and already persists it, and the alternative is lifting a disclosure
+     toggle three levels so that one palette row can reach it. The sidebar
+     dispatches ⌘K in the other direction for the same reason — see
+     `openPalette`. */
+  useEffect(() => {
+    function onToggle() {
+      setOpen((current) => {
+        writeDetails(!current);
+        return !current;
+      });
+    }
+    window.addEventListener(TOGGLE_DETAILS_EVENT, onToggle);
+    return () => window.removeEventListener(TOGGLE_DETAILS_EVENT, onToggle);
+  }, []);
 
   return (
     <div className="shrink-0 border-t border-rule px-2 pt-2">
