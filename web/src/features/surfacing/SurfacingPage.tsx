@@ -24,7 +24,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, type Surfaced } from "../../api/client";
 import { Empty, Failure, Loading, SectionHeading, Tag } from "../../components/primitives";
-import { timestamp } from "../../lib/format";
+import { RelativeTime } from "../../components/RelativeTime";
 
 export function SurfacingPage() {
   const [includeRefused, setIncludeRefused] = useState(true);
@@ -139,7 +139,7 @@ function DecisionRow({
         <Tag>{row.surfaced ? "surfaced" : "quiet"}</Tag>
         <span className={tone}>{row.focus}</span>
         {row.trigger_kind ? <span>{row.trigger_kind}</span> : null}
-        <span>{timestamp(row.decided_at)}</span>
+        <RelativeTime value={row.decided_at} />
         {row.verdict === "dismissed" ? <span className="text-deny">dismissed</span> : null}
         {row.verdict === "useful" ? <span className="text-affirm">useful</span> : null}
       </div>

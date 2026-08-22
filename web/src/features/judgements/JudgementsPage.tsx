@@ -12,7 +12,8 @@ import { Link } from "react-router-dom";
 
 import { api } from "../../api/client";
 import { Empty, Failure, Loading, SectionHeading } from "../../components/primitives";
-import { count, timestamp } from "../../lib/format";
+import { RelativeTime } from "../../components/RelativeTime";
+import { count } from "../../lib/format";
 
 export function JudgementsPage() {
   const summaries = useQuery({ queryKey: ["judgements"], queryFn: api.judgements });
@@ -75,7 +76,7 @@ export function JudgementsPage() {
                   <td className="meta py-1.5 pr-4 text-deny">{row.not_relevant}</td>
                   <td className="meta py-1.5 pr-4 text-accent">{row.missing}</td>
                   <td className="meta py-1.5 pr-4 text-ink-3">
-                    {timestamp(row.last_judged_at)}
+                    <RelativeTime value={row.last_judged_at} />
                   </td>
                   <td className="py-1.5">
                     <Link

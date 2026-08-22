@@ -20,6 +20,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api, type DecisionIn } from "../../api/client";
 import { Failure, SectionHeading } from "../../components/primitives";
+import { submitOnCmdEnter } from "../../lib/submit";
 
 interface OptionDraft {
   description: string;
@@ -118,7 +119,7 @@ export function DecisionForm() {
   }
 
   return (
-    <form className="flex max-w-3xl flex-col gap-5" onSubmit={onSubmit}>
+    <form className="flex max-w-3xl flex-col gap-5" onSubmit={onSubmit} onKeyDown={submitOnCmdEnter}>
       <SectionHeading right={prefill.acceptSuggestionId ? "from a suggestion" : undefined}>
         record a decision
       </SectionHeading>

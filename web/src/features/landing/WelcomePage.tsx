@@ -141,7 +141,7 @@ export function WelcomePage() {
              live" is legible without reading a word — rule 1, doing the job it
              was reserved for. Set a step larger than the copy so the eye finds
              it after the card rather than never. */
-          className="font-prose text-accent text-body-md font-medium underline decoration-1 underline-offset-4 transition-[text-decoration-thickness] hover:decoration-2"
+          className="font-prose text-accent text-body-md font-medium underline decoration-1 underline-offset-4 transition-[text-decoration-thickness] duration-(--dur-state) ease-(--ease-out) hover:decoration-2"
         >
           Open MEMO &rarr;
         </Link>

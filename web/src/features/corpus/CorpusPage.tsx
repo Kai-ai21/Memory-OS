@@ -11,7 +11,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../../api/client";
-import { Failure, Loading, Meta, SectionHeading } from "../../components/primitives";
+import { Empty, Failure, Loading, Meta, SectionHeading } from "../../components/primitives";
 import { count, percent } from "../../lib/format";
 
 export function CorpusPage() {
@@ -110,6 +110,17 @@ export function CorpusPage() {
             <p className={`meta ${doctor.data.healthy ? "text-affirm" : "text-deny"}`}>
               {doctor.data.healthy ? "healthy" : "problems found"}
             </p>
+            {/* A doctor run that returned no checks at all. Not the same as a
+                healthy one — healthy is a list of `ok` rows — and rendering it
+                as an empty `<ul>` under a green "healthy" would claim the
+                corpus passed checks that never ran. */}
+            {doctor.data.findings.length === 0 ? (
+              <Empty title="No checks reported">
+                The run completed but returned no checks, which usually means the
+                API is a version behind this page. Re-run it, or check the server
+                log for a check that failed to load.
+              </Empty>
+            ) : null}
             <ul>
               {doctor.data.findings.map((finding) => {
                 // Three states, not two. A non-zero advisory is a capability

@@ -40,9 +40,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, type ChatMessage, type MessageIntent } from "../../api/client";
 import { Icon } from "../../components/Icon";
-import { Empty, Failure } from "../../components/primitives";
+import { submitOnCmdEnter } from "../../lib/submit";
+import { RelativeTime } from "../../components/RelativeTime";
+import { Button, Empty, Failure } from "../../components/primitives";
 import { connectionParts } from "../../lib/connections";
-import { fileSize, timestamp } from "../../lib/format";
+import { fileSize } from "../../lib/format";
 import { AttachmentList } from "./Attachments";
 import { Refusal } from "./Refusal";
 import { SessionRail } from "./SessionRail";
@@ -373,7 +375,7 @@ function Turn({ message }: { message: ChatMessage }) {
     <li className="flex flex-col gap-2" data-testid="message">
       <div className="flex flex-wrap items-baseline gap-3">
         <span className="meta-label text-ink-2">you</span>
-        <span className="meta text-ink-3">{timestamp(message.created_at)}</span>
+        <RelativeTime value={message.created_at} className="meta text-ink-3" />
         <IntentMark message={message} />
         {superseded ? (
           <span className="meta text-ink-3" data-testid="superseded">
@@ -715,13 +717,16 @@ function Composer({
       /* `surface` with a hairline, and an accent focus ring when you are typing
          into it. Flat: the composer is the one thing on the chat screen that is
          a control rather than content, and the border is what says so. */
-      className={`panel sticky bottom-4 relative flex flex-col gap-2 p-4 transition-shadow focus-within:border-accent focus-within:shadow-[0_0_0_3px_var(--color-accent-soft)] ${
+      className={`panel sticky bottom-4 relative flex flex-col gap-2 p-4 transition-shadow duration-(--dur-state) ease-(--ease-out) focus-within:border-accent focus-within:shadow-[0_0_0_3px_var(--color-accent-soft)] ${
         over ? "border-accent" : ""
       }`}
       onSubmit={(event) => {
         event.preventDefault();
         submit();
       }}
+      // Enter already sends from the textarea below; this is what makes the
+      // ⌘Enter habit work here too, and what covers the rest of the form.
+      onKeyDown={submitOnCmdEnter}
       // The drop target is the composer rather than the whole page. A page-wide
       // target catches a file somebody meant to drop on another window, and the
       // highlight has to say *where* it will land.
@@ -850,17 +855,25 @@ function Composer({
           the button is a control you use every time, and giving the control its
           own row would push the box taller for something that fits in a corner
           that was already empty. */}
-      <button
+      <Button
         type="submit"
         className="pearl absolute right-4 bottom-4 flex size-9 items-center justify-center"
+        /* `sendable` is already false while `busy` — see above — so the
+           disabling is not doubled up here. `loading` is what swaps the arrow
+           for the spinner, and it is the whole visible difference between "you
+           have nothing to send" and "what you sent is in flight". Those were
+           the same dead grey disc before this milestone, which is why a slow
+           send read as a broken button. */
+        loading={busy}
         disabled={!sendable}
         aria-label="Send"
-        title={sendable ? "Send — or press enter" : "Nothing to send yet"}
-      >
-        <span className="relative z-10 flex">
-          <Icon name="send" size={17} />
-        </span>
-      </button>
+        title={busy ? "Sending…" : sendable ? "Send — or press enter" : "Nothing to send yet"}
+        icon={
+          <span className="relative z-10 flex">
+            <Icon name="send" size={17} />
+          </span>
+        }
+      />
     </form>
   );
 }

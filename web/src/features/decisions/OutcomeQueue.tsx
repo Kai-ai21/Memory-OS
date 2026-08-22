@@ -26,7 +26,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, type OutcomeSuggestion } from "../../api/client";
 import { Empty, Failure, Loading, SectionHeading, Tag } from "../../components/primitives";
-import { timestamp } from "../../lib/format";
+import { RelativeTime } from "../../components/RelativeTime";
 
 interface Draft {
   description?: string | null;
@@ -172,7 +172,7 @@ function CandidateRow({
       <div className="meta mb-2 flex flex-wrap items-baseline gap-3 text-ink-3">
         <Tag>{row.status}</Tag>
         <span>{row.model_id}</span>
-        <span>{timestamp(row.suggested_at)}</span>
+        <RelativeTime value={row.suggested_at} />
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -185,7 +185,7 @@ function CandidateRow({
             {row.decision_question}
           </Link>
           <p className="meta text-ink-3">
-            decided {timestamp(row.decision_decided_at)}
+            decided <RelativeTime value={row.decision_decided_at} />
           </p>
 
           <p className="meta-label mt-2 text-ink-2">what the model says happened</p>

@@ -8,6 +8,10 @@
  * isolated so a canvas or a cursor-following field can replace its contents
  * later without touching this file.
  *
+ * **`?` opens the shortcuts sheet, and that sheet is the reason the rest of
+ * these are worth having.** Four of the five bindings below were, until M9.10,
+ * documented nowhere a user could see — see `ShortcutsSheet.tsx`.
+ *
  * **The shortcuts are registered here rather than per page.** `/` used to be
  * bound inside the search view, which meant it worked on exactly one of fifteen
  * routes and silently did nothing on the other fourteen — the failure mode of a
@@ -36,10 +40,12 @@ import { PanelLeft } from "lucide-react";
 import { Icon } from "../components/Icon";
 import { BackgroundLayer } from "./BackgroundLayer";
 import { CommandPalette } from "./CommandPalette";
+import { ShortcutsSheet } from "./ShortcutsSheet";
 import { Sidebar } from "./Sidebar";
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   /* Session state rather than a stored preference, deliberately. Hiding the
      nav is something you do to get a wide view of one page for a minute, not a
@@ -51,6 +57,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const main = useRef<HTMLElement>(null);
 
   const closePalette = useCallback(() => setPaletteOpen(false), []);
+  const closeShortcuts = useCallback(() => setShortcutsOpen(false), []);
 
   // Navigating from the drawer closes it. Without this the nav stays over the
   // page you just asked for, which reads as a click that did nothing.
@@ -82,6 +89,20 @@ export function Shell({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      /* `?` opens the sheet, and like `/` it is a character — so it is only a
+         shortcut when nothing is being typed into. Guarded on the modifiers
+         too: `⌘?` and `Ctrl+?` are browser and OS bindings, and claiming them
+         would be this application taking a key it does not own.
+
+         Matched on `event.key` rather than on shift-plus-slash, because `?` is
+         an unshifted key on several layouts and a `shiftKey` check would make
+         the shortcut unreachable on all of them. */
+      if (event.key === "?" && !typing && !event.metaKey && !event.ctrlKey) {
+        event.preventDefault();
+        setShortcutsOpen((current) => !current);
+        return;
+      }
+
       if (event.key === "Escape") {
         // Both dismissals live here rather than in the components, so that
         // "Esc closes whatever is over the page" is one rule with one
@@ -90,6 +111,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         // state twice is harmless.
         if (drawerOpen) setDrawerOpen(false);
         setPaletteOpen(false);
+        setShortcutsOpen(false);
       }
     }
 
@@ -162,12 +184,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
       {collapsed ? null : (
         <aside
           id="sidebar"
-          className={`fixed inset-y-3 left-3 z-40 w-(--width-sidebar) transition-transform md:sticky md:top-3 md:z-auto md:my-3 md:ml-3 md:h-[calc(100dvh-1.5rem)] md:translate-x-0 ${
+          className={`fixed inset-y-3 left-3 z-40 w-(--width-sidebar) transition-transform duration-(--dur-travel) ease-(--ease-out) md:sticky md:top-3 md:z-auto md:my-3 md:ml-3 md:h-[calc(100dvh-1.5rem)] md:translate-x-0 ${
             drawerOpen ? "translate-x-0" : "-translate-x-[110%]"
           }`}
         >
           <Sidebar
             onNavigate={() => setDrawerOpen(false)}
+            onShortcuts={() => setShortcutsOpen(true)}
             onCollapse={() => {
               setDrawerOpen(false);
               setCollapsed(true);
@@ -208,6 +231,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </main>
 
       <CommandPalette open={paletteOpen} onClose={closePalette} />
+      <ShortcutsSheet open={shortcutsOpen} onClose={closeShortcuts} />
     </div>
   );
 }

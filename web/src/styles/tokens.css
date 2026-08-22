@@ -257,6 +257,30 @@
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
 
+  /* --- Motion -------------------------------------------------------------
+   * Two durations, one curve, and nothing else in the application may invent a
+   * third. Before M9.10 there were four — 120ms, 150ms, 160ms and whatever
+   * Tailwind's `transition-*` default happened to be — which is not a design
+   * decision anybody made, it is four people picking a number that felt right
+   * on the component in front of them. The eye cannot tell 120 from 160 on one
+   * element; it can absolutely tell that a menu and the button that opened it
+   * settle at different moments.
+   *
+   * **150ms for anything that changes on a state flip** — hover, focus, a
+   * colour, a small rotate. **200ms for anything that travels** — the drawer,
+   * a panel, a sheet arriving. Longer than 200 is where "smooth" turns into
+   * "this application is thinking about it", and this is an instrument.
+   *
+   * `ease-out` for both, and it is the whole reason two durations are enough:
+   * motion that decelerates into place is motion that has already told you
+   * where it is going by the time it arrives. `ease-in-out` — Tailwind's
+   * default, and one of the four this replaces — spends its first third going
+   * nowhere, which is what reads as sluggish at any duration.
+   */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --dur-state: 150ms;
+  --dur-travel: 200ms;
+
   /* --- Space ------------------------------------------------------------- */
   --space-1: 0.25rem;
   --space-2: 0.5rem;

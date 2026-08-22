@@ -47,6 +47,7 @@ import {
   ChevronDown,
   Compass,
   HelpCircle,
+  Keyboard,
   LogOut,
   MoreHorizontal,
   PanelLeft,
@@ -57,6 +58,7 @@ import {
 
 import { api } from "../api/client";
 import { count } from "../lib/format";
+import { Button } from "../components/primitives";
 import { GROUPS, HOME, inGroup, type ViewRoute } from "./routes";
 
 /** Every glyph in this panel, at one size and one weight. */
@@ -109,10 +111,13 @@ function writeDetails(open: boolean): void {
 export function Sidebar({
   onNavigate,
   onCollapse,
+  onShortcuts,
 }: {
   onNavigate?: () => void;
   /** Hide the panel. The shell owns the state; this is the handle for it. */
   onCollapse?: () => void;
+  /** Open the shortcuts sheet. The shell owns it, for the same reason. */
+  onShortcuts?: () => void;
 }) {
   return (
     /* No horizontal padding on the panel itself: the two hairlines — under the
@@ -157,7 +162,7 @@ export function Sidebar({
       </nav>
 
       <Promoted onNavigate={onNavigate} />
-      <Footer onNavigate={onNavigate} />
+      <Footer onNavigate={onNavigate} onShortcuts={onShortcuts} />
     </div>
   );
 }
@@ -296,6 +301,10 @@ function Promoted({ onNavigate }: { onNavigate?: () => void }) {
 /**
  * Beneath the card, under a hairline: the corpus, and everything meta.
  *
+ * **M9.10 adds `Shortcuts` to `More`.** It is the third thing under there that
+ * is about the application rather than in it, and it exists because `?` cannot
+ * advertise itself — see the note on the row.
+ *
  * **Two permanent rows became one three-dot button.** `Help` and `Sign out`
  * were pinned to the bottom of every screen — one of them a keyboard shortcut
  * that is already bound globally, the other a thing you do once a month. Under
@@ -303,7 +312,13 @@ function Promoted({ onNavigate }: { onNavigate?: () => void }) {
  * There is still no settings page in this application and this milestone does
  * not invent one; `More` holds what actually exists.
  */
-function Footer({ onNavigate }: { onNavigate?: () => void }) {
+function Footer({
+  onNavigate,
+  onShortcuts,
+}: {
+  onNavigate?: () => void;
+  onShortcuts?: () => void;
+}) {
   const [open, setOpen] = useState(readDetails);
 
   return (
@@ -327,7 +342,7 @@ function Footer({ onNavigate }: { onNavigate?: () => void }) {
           size={16}
           strokeWidth={1.5}
           aria-hidden
-          className={`ml-auto transition-transform duration-[120ms] ${open ? "rotate-180" : ""}`}
+          className={`ml-auto transition-transform duration-(--dur-state) ease-(--ease-out) ${open ? "rotate-180" : ""}`}
         />
       </button>
 
@@ -342,7 +357,7 @@ function Footer({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       ) : null}
 
-      <More onNavigate={onNavigate} />
+      <More onNavigate={onNavigate} onShortcuts={onShortcuts} />
     </div>
   );
 }
@@ -356,7 +371,13 @@ function Footer({ onNavigate }: { onNavigate?: () => void }) {
  * rather than in the shell's global handler so that it closes this first and
  * the drawer second, which is the order a person expects when both are open.
  */
-function More({ onNavigate }: { onNavigate?: () => void }) {
+function More({
+  onNavigate,
+  onShortcuts,
+}: {
+  onNavigate?: () => void;
+  onShortcuts?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
@@ -404,6 +425,27 @@ function More({ onNavigate }: { onNavigate?: () => void }) {
              from the bottom of the window. */
           className="menu absolute bottom-full left-0 z-10 mb-1 flex w-full flex-col p-1"
         >
+          {/* **The sheet needs a way in that is not the sheet's own shortcut.**
+              `?` opens it, and somebody who does not know `?` exists is
+              precisely the person the sheet is for — a shortcut that can only
+              be discovered by pressing it is not discoverable. This row is the
+              answer to that, and `More` is where it belongs: it is meta about
+              the application rather than a place in it, which is the same
+              reason Help and Sign out are here. */}
+          <button
+            type="button"
+            role="menuitem"
+            className="nav-item w-full text-left"
+            onClick={() => {
+              setOpen(false);
+              onNavigate?.();
+              onShortcuts?.();
+            }}
+          >
+            <Keyboard {...GLYPH} />
+            <span>Shortcuts</span>
+            <span className="shortcut ml-auto">?</span>
+          </button>
           <button
             type="button"
             role="menuitem"
@@ -445,11 +487,11 @@ function SignOut({ onNavigate }: { onNavigate?: () => void }) {
   const [busy, setBusy] = useState(false);
 
   return (
-    <button
-      type="button"
+    <Button
       role="menuitem"
       className="nav-item w-full text-left"
-      disabled={busy}
+      loading={busy}
+      icon={<LogOut {...GLYPH} />}
       onClick={async () => {
         setBusy(true);
         onNavigate?.();
@@ -461,9 +503,8 @@ function SignOut({ onNavigate }: { onNavigate?: () => void }) {
         window.location.assign("/welcome");
       }}
     >
-      <LogOut {...GLYPH} />
-      <span>{busy ? "Signing out…" : "Sign out"}</span>
-    </button>
+      <span>Sign out</span>
+    </Button>
   );
 }
 

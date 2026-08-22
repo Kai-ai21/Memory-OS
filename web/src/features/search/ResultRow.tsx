@@ -20,7 +20,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, type MatchedChunk, type MemoryHit } from "../../api/client";
 import { DateStamp } from "../../components/DateStamp";
 import { Highlighted } from "../../components/Highlighted";
-import { Tag } from "../../components/primitives";
+import { CopyButton, Tag } from "../../components/primitives";
 import { isCode, range, score as fmtScore } from "../../lib/format";
 import { JudgementButtons, type JudgementTarget } from "../judgements/JudgementButtons";
 import { ExplanationPanel } from "./Explanation";
@@ -116,17 +116,24 @@ export function ResultRow({
         >
           {fmtScore(hit.score)}
         </span>
-        <Link
-          to={`/memory/${hit.memory_id}`}
-          // What the arrow keys walk. See `SearchPage.step` — the row's other
-          // controls are reachable by tab, but the arrows move between results
-          // rather than between every focusable thing inside one.
-          data-result-link
-          className="min-w-48 flex-1 basis-48 truncate font-mono text-sm text-accent underline decoration-rule-strong decoration-1 underline-offset-2 hover:decoration-edge"
-          title={hit.external_key}
-        >
-          {hit.external_key}
-        </Link>
+        {/* The path and the control that copies it, as one unit. `group` is
+            what `CopyButton` hangs its reveal off — the button is invisible
+            until this row is hovered or something in it has focus, so a page
+            of twenty results is not a page of twenty clipboard icons. */}
+        <span className="group flex min-w-48 flex-1 basis-48 items-baseline gap-1">
+          <Link
+            to={`/memory/${hit.memory_id}`}
+            // What the arrow keys walk. See `SearchPage.step` — the row's other
+            // controls are reachable by tab, but the arrows move between results
+            // rather than between every focusable thing inside one.
+            data-result-link
+            className="truncate font-mono text-sm text-accent underline decoration-rule-strong decoration-1 underline-offset-2 hover:decoration-edge"
+            title={hit.external_key}
+          >
+            {hit.external_key}
+          </Link>
+          <CopyButton value={hit.external_key} label="path" />
+        </span>
         <Tag>{hit.kind}</Tag>
         <span className="hidden shrink-0 sm:inline">
           <DateStamp value={hit.occurred_at} provenance={hit.occurred_at_source} />
