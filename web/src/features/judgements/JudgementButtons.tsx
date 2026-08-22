@@ -13,6 +13,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api, type JudgementIn, type Verdict } from "../../api/client";
+import { useToast } from "../../lib/toast";
 
 export interface JudgementTarget {
   queryText: string;
@@ -61,6 +62,7 @@ export function JudgementButtons({
   compact = false,
 }: Props) {
   const client = useQueryClient();
+  const toast = useToast();
 
   const mutation = useMutation({
     mutationFn: (verdict: Verdict) => {
@@ -84,6 +86,11 @@ export function JudgementButtons({
     onSuccess: (_data, verdict) => {
       // The /judgements page counts these, so its cache is now stale.
       void client.invalidateQueries({ queryKey: ["judgements"] });
+      /* The button does take an active state, so this is the borderline case
+         for a toast — it earns one because judging is the one act here whose
+         *effect* is somewhere else entirely: a row on `/judgements` and a
+         number in the golden set, neither of them on this screen. */
+      toast.show(`Judged ${verdict.replace("_", " ")}`);
       onRecorded?.(verdict);
     },
   });

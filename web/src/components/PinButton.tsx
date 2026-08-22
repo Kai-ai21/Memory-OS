@@ -13,6 +13,7 @@
 import { Pin as PinIcon } from "lucide-react";
 
 import { togglePin, usePins } from "../lib/pins";
+import { useToast } from "../lib/toast";
 
 export function PinButton({
   memoryId,
@@ -27,6 +28,7 @@ export function PinButton({
 }) {
   const pins = usePins();
   const pinned = pins.some((pin) => pin.id === memoryId);
+  const toast = useToast();
 
   return (
     <button
@@ -42,7 +44,13 @@ export function PinButton({
         // Nearly always inside a link or an expander.
         event.preventDefault();
         event.stopPropagation();
-        onToggled?.(togglePin({ id: memoryId, label }));
+        const nowPinned = togglePin({ id: memoryId, label });
+        /* Pinning moves something into a sidebar you may not be looking at,
+           and unpinning removes it from one — neither has a visible result
+           where the click happened, which is the whole test for whether an
+           action deserves a toast. */
+        toast.show(nowPinned ? "Pinned" : "Unpinned");
+        onToggled?.(nowPinned);
       }}
     >
       <PinIcon size={12} strokeWidth={2} fill={pinned ? "currentColor" : "none"} />

@@ -21,6 +21,7 @@ import { api, type ChatSession } from "../../api/client";
 import { Button, Failure } from "../../components/primitives";
 import { RelativeTime } from "../../components/RelativeTime";
 import { count } from "../../lib/format";
+import { useToast } from "../../lib/toast";
 
 export function SessionRail({
   current,
@@ -90,9 +91,16 @@ function Row({
   onSelect: (id: string) => void;
 }) {
   const client = useQueryClient();
+  const toast = useToast();
+  const archiving = session.archived_at === null;
   const archive = useMutation({
-    mutationFn: () => api.archiveSession(session.id, session.archived_at === null),
-    onSuccess: () => void client.invalidateQueries({ queryKey: ["chat-sessions"] }),
+    mutationFn: () => api.archiveSession(session.id, archiving),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["chat-sessions"] });
+      // The row leaves the list, which is a change you notice only if you were
+      // watching that corner of the screen.
+      toast.show(archiving ? "Conversation archived" : "Conversation restored");
+    },
   });
 
   return (

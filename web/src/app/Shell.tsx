@@ -44,6 +44,7 @@ import { SettingsSheet } from "./SettingsSheet";
 import { ShortcutsSheet } from "./ShortcutsSheet";
 import { SplitPanel } from "./SplitPanel";
 import { SplitProvider } from "./SplitProvider";
+import { ToastProvider } from "./Toaster";
 import { useCloseSplitOnDuplicate, useSplit, useSplitShortcuts } from "../lib/split";
 import { Sidebar } from "./Sidebar";
 
@@ -57,7 +58,12 @@ import { Sidebar } from "./Sidebar";
 export function Shell({ children }: { children: React.ReactNode }) {
   return (
     <SplitProvider>
-      <ShellFrame>{children}</ShellFrame>
+      {/* Inside the shell rather than around the router: the sign-in screen has
+          no actions that confirm, and a toast region floating over it would be
+          a fixed element with nothing to say. */}
+      <ToastProvider>
+        <ShellFrame>{children}</ShellFrame>
+      </ToastProvider>
     </SplitProvider>
   );
 }

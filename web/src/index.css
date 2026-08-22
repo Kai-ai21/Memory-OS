@@ -159,6 +159,21 @@
     }
   }
 
+  /* The toast's arrival. Rise and fade, 150ms — the `--dur-state` distance,
+   * because a confirmation appearing is a state change and not a journey.
+   * `motion-safe:` on the element means this never runs for anybody who asked
+   * for stillness; the toast still appears, it just does not travel. */
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
   @keyframes drift {
     0% {
       transform: translate(0, 0) scale(1);

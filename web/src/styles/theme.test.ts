@@ -110,12 +110,6 @@ describe("hairlines, not shadows", () => {
   it.each([
     ["panel-raised", /WelcomePage\.tsx$/],
     ["pearl", /ChatPage\.tsx$/],
-    // M9.11's hover preview. A third raised class rather than a third *user*
-    // of an existing one: `.panel-raised` is two shadow layers tuned for a
-    // 420px card over a moving canvas, and at tooltip size that reads as a
-    // smudge. The rule being kept is one raised treatment per kind of floating
-    // object, which is what stops shadows accumulating into noise.
-    ["popover", /MemoryPreview\.tsx$/],
   ])("%s is used by exactly one component", (klass, expected) => {
     // The other half of the rule above, and the half a colour check cannot
     // see: either class could spread to a dozen components without changing a
@@ -129,6 +123,31 @@ describe("hairlines, not shadows", () => {
 
     expect(users).toHaveLength(1);
     expect(users[0]).toMatch(expected);
+  });
+
+  it("keeps .popover to the transient overlays, and nothing else", () => {
+    /* **A shared treatment, unlike the two above, and the distinction is the
+     * point.** `.panel-raised` and `.pearl` are one-per-screen objects — the
+     * argument for each is that it is the only one of its kind in view.
+     * `.popover` is a *category*: a small surface that appears over the page,
+     * says one thing, and leaves. The hover preview and the toast are the same
+     * kind of object and must lift the same way, so a second class for the
+     * second one would be the actual mistake.
+     *
+     * What is still forbidden is the class reaching something that sits on the
+     * page rather than floating over it, which is how a light theme
+     * accumulates shadows until it looks like it is made of stickers — see
+     * rule 2 in `tokens.css`. Hence an allowlist rather than no test.
+     */
+    const allowed = [/MemoryPreview\.tsx$/, /Toaster\.tsx$/];
+    const users = components()
+      .filter(([, source]) => /className=[^>]*\bpopover\b/.test(source))
+      .map(([path]) => path);
+
+    expect(users).toHaveLength(allowed.length);
+    for (const pattern of allowed) {
+      expect(users.some((path) => pattern.test(path)), `${pattern} uses .popover`).toBe(true);
+    }
   });
 
   it("uses the hairline token for panel edges", () => {
