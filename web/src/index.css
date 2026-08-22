@@ -249,6 +249,24 @@
       0 16px 40px -12px rgb(15 23 42 / 12%);
   }
 
+  /* The hover preview, and the second raised object in the application.
+   *
+   * **Not `.panel-raised`.** That shadow is tuned for a 420px sign-in card
+   * floating over a moving canvas — two layers, one of them 40px wide — and at
+   * the size of a tooltip it reads as a smudge rather than as a lift. Rule 2 in
+   * `tokens.css` permits a shadow on anything that genuinely floats over the
+   * page rather than sitting on it, which a preview card does by definition;
+   * what it forbids is shadows on things that are already on paper.
+   *
+   * Ink at low alpha rather than black, for the reason every shadow here is:
+   * a neutral shadow on a warm white ground goes grey and dirty.
+   */
+  .popover {
+    box-shadow:
+      0 1px 2px 0 rgb(15 23 42 / 6%),
+      0 8px 24px -8px rgb(15 23 42 / 14%);
+  }
+
   /* --- The send button ------------------------------------------------------
    * "Pearl": a small round object with a light source above it, rather than a
    * flat disc with an arrow on it.

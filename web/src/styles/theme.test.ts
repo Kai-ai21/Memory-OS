@@ -110,6 +110,12 @@ describe("hairlines, not shadows", () => {
   it.each([
     ["panel-raised", /WelcomePage\.tsx$/],
     ["pearl", /ChatPage\.tsx$/],
+    // M9.11's hover preview. A third raised class rather than a third *user*
+    // of an existing one: `.panel-raised` is two shadow layers tuned for a
+    // 420px card over a moving canvas, and at tooltip size that reads as a
+    // smudge. The rule being kept is one raised treatment per kind of floating
+    // object, which is what stops shadows accumulating into noise.
+    ["popover", /MemoryPreview\.tsx$/],
   ])("%s is used by exactly one component", (klass, expected) => {
     // The other half of the rule above, and the half a colour check cannot
     // see: either class could spread to a dozen components without changing a

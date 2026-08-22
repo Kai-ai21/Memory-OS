@@ -22,6 +22,7 @@ import { count } from "../../lib/format";
 import { Refusal } from "./Refusal";
 import type { AnswerStream } from "./useAnswerStream";
 import { SplitOpenButton } from "../../app/SplitPanel";
+import { MemoryPreview } from "../../components/MemoryPreview";
 
 export function StreamingAnswer({ state }: { state: AnswerStream }) {
   const withdrawn = state.done?.replacement != null;
@@ -178,12 +179,14 @@ function Citations({ state }: { state: AnswerStream }) {
            see `SplitOpenButton`. This is the citation the split feature was
            built for: checking the evidence must not cost you the answer. */
         <li key={`${citation.locator}-${citation.excerpt.slice(0, 24)}`} className="group">
-          <Link
-            to={`/memory/${citation.memory_id}`}
-            className="meta font-mono text-ink hover:text-accent hover:underline"
-          >
-            {citation.locator}
-          </Link>
+          <MemoryPreview memoryId={citation.memory_id}>
+            <Link
+              to={`/memory/${citation.memory_id}`}
+              className="meta font-mono text-ink hover:text-accent hover:underline"
+            >
+              {citation.locator}
+            </Link>
+          </MemoryPreview>
           <SplitOpenButton memoryId={citation.memory_id} label={citation.locator} />
           <span className="meta ml-2 text-ink-3">{citation.excerpt.slice(0, 140)}</span>
         </li>

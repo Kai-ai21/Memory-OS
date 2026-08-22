@@ -26,6 +26,7 @@ import { JudgementButtons, type JudgementTarget } from "../judgements/JudgementB
 import { ExplanationPanel } from "./Explanation";
 import type { Verdict } from "../../api/client";
 import { SplitOpenButton } from "../../app/SplitPanel";
+import { MemoryPreview } from "../../components/MemoryPreview";
 
 interface Props {
   hit: MemoryHit;
@@ -122,6 +123,7 @@ export function ResultRow({
             until this row is hovered or something in it has focus, so a page
             of twenty results is not a page of twenty clipboard icons. */}
         <span className="group flex min-w-48 flex-1 basis-48 items-baseline gap-1">
+          <MemoryPreview memoryId={hit.memory_id} className="min-w-0 flex-1">
           <Link
             to={`/memory/${hit.memory_id}`}
             // What the arrow keys walk. See `SearchPage.step` — the row's other
@@ -133,6 +135,7 @@ export function ResultRow({
           >
             {hit.external_key}
           </Link>
+          </MemoryPreview>
           <CopyButton value={hit.external_key} label="path" />
           {/* Read a result beside the list it came from, rather than instead
               of it. The comparison between hit three and hit four is the whole

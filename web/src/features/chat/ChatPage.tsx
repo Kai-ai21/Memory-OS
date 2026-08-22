@@ -54,6 +54,7 @@ import { useAnswerStream } from "./useAnswerStream";
 import { useCommands } from "./useCommands";
 import { useLiveEvents } from "./useLiveEvents";
 import { SplitOpenButton } from "../../app/SplitPanel";
+import { MemoryPreview } from "../../components/MemoryPreview";
 
 /**
  * How often a message that is still indexing is asked about.
@@ -629,12 +630,14 @@ function Answer({ message }: { message: ChatMessage }) {
               >
                 {citation.memory_id ? (
                   <span className="flex items-baseline gap-1">
-                    <Link
-                      to={`/memory/${citation.memory_id}`}
-                      className="meta font-mono text-accent hover:underline"
-                    >
-                      {citation.locator}
-                    </Link>
+                    <MemoryPreview memoryId={citation.memory_id}>
+                      <Link
+                        to={`/memory/${citation.memory_id}`}
+                        className="meta font-mono text-accent hover:underline"
+                      >
+                        {citation.locator}
+                      </Link>
+                    </MemoryPreview>
                     {/* The whole argument for the split, in one control: read
                         the source without losing the answer that cited it. */}
                     <SplitOpenButton memoryId={citation.memory_id} label={citation.locator} />
