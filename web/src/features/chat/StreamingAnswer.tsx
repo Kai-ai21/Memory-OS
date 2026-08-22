@@ -21,6 +21,7 @@ import { Link } from "react-router-dom";
 import { count } from "../../lib/format";
 import { Refusal } from "./Refusal";
 import type { AnswerStream } from "./useAnswerStream";
+import { SplitOpenButton } from "../../app/SplitPanel";
 
 export function StreamingAnswer({ state }: { state: AnswerStream }) {
   const withdrawn = state.done?.replacement != null;
@@ -173,13 +174,17 @@ function Citations({ state }: { state: AnswerStream }) {
   return (
     <ul className="mt-2 flex flex-col gap-1" data-testid="streaming-citations">
       {state.citations.map((citation) => (
-        <li key={`${citation.locator}-${citation.excerpt.slice(0, 24)}`}>
+        /* `group` so the split control reveals on hover of the whole row —
+           see `SplitOpenButton`. This is the citation the split feature was
+           built for: checking the evidence must not cost you the answer. */
+        <li key={`${citation.locator}-${citation.excerpt.slice(0, 24)}`} className="group">
           <Link
             to={`/memory/${citation.memory_id}`}
             className="meta font-mono text-ink hover:text-accent hover:underline"
           >
             {citation.locator}
           </Link>
+          <SplitOpenButton memoryId={citation.memory_id} label={citation.locator} />
           <span className="meta ml-2 text-ink-3">{citation.excerpt.slice(0, 140)}</span>
         </li>
       ))}

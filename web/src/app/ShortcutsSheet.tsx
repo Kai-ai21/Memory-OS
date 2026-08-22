@@ -50,6 +50,7 @@ interface Shortcut {
 const SHORTCUTS: Shortcut[] = [
   { keys: ["⌘", "K"], what: "Open the command palette — jump to any view or memory" },
   { keys: ["/"], what: "Focus the search box", scope: "goes to search where there is none" },
+  { keys: ["⌘", "\\"], what: "Open a memory beside your work", scope: "the split panel" },
   { keys: ["⌘", "↵"], what: "Send", scope: "in any message or answer box" },
   { keys: ["↵"], what: "Send", scope: "in the chat composer" },
   { keys: ["⇧", "↵"], what: "Start a new line", scope: "in the chat composer" },

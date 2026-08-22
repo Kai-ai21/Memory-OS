@@ -41,9 +41,27 @@ import { Icon } from "../components/Icon";
 import { BackgroundLayer } from "./BackgroundLayer";
 import { CommandPalette } from "./CommandPalette";
 import { ShortcutsSheet } from "./ShortcutsSheet";
+import { SplitPanel } from "./SplitPanel";
+import { SplitProvider } from "./SplitProvider";
+import { useCloseSplitOnDuplicate, useSplit, useSplitShortcuts } from "../lib/split";
 import { Sidebar } from "./Sidebar";
 
+/**
+ * The provider has to sit outside the frame that reads it.
+ *
+ * `Shell` itself calls `useSplit` (through `useSplitShortcuts` and the panel),
+ * so it cannot also be the component that provides the context — a component
+ * never sees its own provider. Hence the thin wrapper.
+ */
 export function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <SplitProvider>
+      <ShellFrame>{children}</ShellFrame>
+    </SplitProvider>
+  );
+}
+
+function ShellFrame({ children }: { children: React.ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -57,6 +75,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const main = useRef<HTMLElement>(null);
 
   const closePalette = useCallback(() => setPaletteOpen(false), []);
+
+  // ⌘\ and the split's own Esc. Assembled here with the rest of the keyboard
+  // model even though the binding lives beside the state it needs.
+  useSplitShortcuts();
+  useCloseSplitOnDuplicate(location.pathname);
+  const splitOpen = useSplit().memoryId !== null;
   const closeShortcuts = useCallback(() => setShortcutsOpen(false), []);
 
   // Navigating from the drawer closes it. Without this the nav stays over the
@@ -218,7 +242,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
         id="main"
         ref={main}
         tabIndex={-1}
-        className="min-w-0 flex-1 px-5 py-6 outline-none sm:px-8 md:px-8 md:py-10"
+        /* `overflow-y-auto` and a fixed height only once the split is open.
+           The page scrolls the window normally — that is the right behaviour
+           for a document and it is what every route expects — but two panes
+           that scroll the window together are not a split, they are one long
+           column cut in half. */
+        className={`min-w-0 flex-1 px-5 py-6 outline-none sm:px-8 md:px-8 md:py-10 ${
+          splitOpen ? "h-dvh overflow-y-auto" : ""
+        }`}
       >
         {/* Marked as a shelter for the background field: the cursor trail is
             multiplied to zero inside this box and climbs back to full strength
@@ -229,6 +260,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
           {children}
         </div>
       </main>
+
+      {/* Below `md` the panel would leave neither pane usable — the sidebar
+          already becomes a drawer at that width for the same reason. */}
+      <div className="hidden md:contents">
+        <SplitPanel />
+      </div>
 
       <CommandPalette open={paletteOpen} onClose={closePalette} />
       <ShortcutsSheet open={shortcutsOpen} onClose={closeShortcuts} />

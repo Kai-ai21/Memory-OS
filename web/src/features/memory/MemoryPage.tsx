@@ -25,8 +25,14 @@ import { count, isCode, range, shortHash } from "../../lib/format";
 import { VersionTimeline } from "./VersionTimeline";
 import { recordRecent } from "../../lib/recents";
 
-export function MemoryPage() {
-  const { id = "" } = useParams();
+export function MemoryPage({ id: given }: { id?: string } = {}) {
+  /* The route's id, unless one was handed in. The split panel renders this
+     same component beside another page — see `app/SplitPanel` — where there is
+     no route parameter to read, and forking a second memory view so the two
+     could drift is exactly what should not happen to the most detailed screen
+     in the application. */
+  const { id: routeId = "" } = useParams();
+  const id = given ?? routeId;
   // `?offset=` is where a citation points. Landing on the cited span rather than
   // at the top of the file is the difference between a reference and a
   // suggestion to go looking.
