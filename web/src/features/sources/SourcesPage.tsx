@@ -23,8 +23,9 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, type Source } from "../../api/client";
-import { Empty, Failure, Loading, SectionHeading } from "../../components/primitives";
-import { count, timestamp } from "../../lib/format";
+import { Button, Empty, Failure, Loading, SectionHeading } from "../../components/primitives";
+import { RelativeTime } from "../../components/RelativeTime";
+import { count } from "../../lib/format";
 
 export function SourcesPage() {
   const sources = useQuery({ queryKey: ["sources"], queryFn: api.sources });
@@ -120,28 +121,36 @@ function Row({ source }: { source: Source }) {
       <td className="meta py-1 pr-4 text-ink-3">{source.kind}</td>
       <td className="meta py-1 pr-4">{count(source.memories)}</td>
       <td className="meta py-1 pr-4">{count(source.chunks)}</td>
-      <td className="meta py-1 pr-4 text-ink-3">{timestamp(source.last_sync_at)}</td>
-      <td className="meta py-1 pr-4 text-ink-3">{timestamp(source.last_full_sync_at)}</td>
+      <td className="meta py-1 pr-4 text-ink-3">
+        <RelativeTime value={source.last_sync_at} />
+      </td>
+      <td className="meta py-1 pr-4 text-ink-3">
+        <RelativeTime value={source.last_full_sync_at} />
+      </td>
       <td className="py-1">
         {walkable ? (
           <span className="flex gap-2">
-            <button
-              type="button"
-              className="btn"
+            {/* Both are disabled while either is in flight — they hit the same
+                endpoint on the same source — but only the one that was pressed
+                spins. A spinner on the button nobody clicked would be the
+                interface reporting the wrong action as in progress. */}
+            <Button
+              className="btn inline-flex items-center gap-1.5"
               onClick={() => sync.mutate(false)}
+              loading={sync.isPending && sync.variables === false}
               disabled={sync.isPending}
             >
-              {sync.isPending ? "queued…" : "sync"}
-            </button>
-            <button
-              type="button"
-              className="btn"
+              sync
+            </Button>
+            <Button
+              className="btn inline-flex items-center gap-1.5"
               onClick={() => sync.mutate(true)}
+              loading={sync.isPending && sync.variables === true}
               disabled={sync.isPending}
               title="Walks everything and reconciles deletions"
             >
               full
-            </button>
+            </Button>
           </span>
         ) : (
           <span className="meta text-ink-3" title="Messages are pushed, not walked">

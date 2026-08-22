@@ -18,8 +18,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, type ChatSession } from "../../api/client";
-import { Failure } from "../../components/primitives";
-import { count, timestamp } from "../../lib/format";
+import { Button, Failure } from "../../components/primitives";
+import { RelativeTime } from "../../components/RelativeTime";
+import { count } from "../../lib/format";
 
 export function SessionRail({
   current,
@@ -117,24 +118,23 @@ function Row({
           {session.title ?? <span className="text-ink-3 italic">untitled</span>}
         </span>
         <span className="meta text-ink-3">
-          {timestamp(session.last_activity)} · {count(session.message_count)}{" "}
+          <RelativeTime value={session.last_activity} /> · {count(session.message_count)}{" "}
           {session.message_count === 1 ? "message" : "messages"}
           {session.archived_at ? " · archived" : ""}
         </span>
       </button>
-      <button
-        type="button"
-        className="meta shrink-0 text-ink-3 hover:text-accent"
+      <Button
+        className="meta inline-flex shrink-0 items-center gap-1.5 text-ink-3 hover:text-accent"
         title={
           session.archived_at
             ? "Bring this conversation back into the list"
             : "Hide this conversation. Every message stays a memory and stays searchable."
         }
         onClick={() => archive.mutate()}
-        disabled={archive.isPending}
+        loading={archive.isPending}
       >
         {session.archived_at ? "restore" : "archive"}
-      </button>
+      </Button>
     </li>
   );
 }

@@ -29,6 +29,7 @@ import { useMutation } from "@tanstack/react-query";
 
 import { api, type AgentAnswer, type AgentClaim } from "../../api/client";
 import { Empty, Failure, Loading, Meta, SectionHeading, Tag } from "../../components/primitives";
+import { submitOnCmdEnter } from "../../lib/submit";
 
 export function AgentPage() {
   const [question, setQuestion] = useState("");
@@ -39,6 +40,7 @@ export function AgentPage() {
   return (
     <div className="space-y-5">
       <form
+        onKeyDown={submitOnCmdEnter}
         className="flex items-baseline gap-2 border-b border-rule-strong pb-2"
         onSubmit={(event) => {
           event.preventDefault();

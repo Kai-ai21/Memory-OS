@@ -67,6 +67,88 @@ export function timestampUtc(value: string | null | undefined): string {
   });
 }
 
+/* --- Relative time --------------------------------------------------------
+ *
+ * **This is a reversal, and the reason it is safe is the `title`.** The note on
+ * `timestamp` above argued for absolute times on the grounds that "3 days ago"
+ * is useless for correlating an `ingested_at` against a log line, and that
+ * argument was and is correct. What it got wrong was treating the two as a
+ * choice: the absolute value does not have to be *displayed* to be available,
+ * and every relative stamp this application renders carries the full timestamp
+ * in its `title`. So the glanceable form is on screen and the correlatable one
+ * is one hover away, which is strictly more than showing only the absolute.
+ *
+ * What that buys is the common case. Almost every date in this interface is
+ * read as "how stale is this" — the last sync, the last time a source was
+ * seen, when a decision was recorded — and answering it from an absolute
+ * timestamp is arithmetic the reader does against today's date, every time,
+ * for every row.
+ *
+ * `Intl.RelativeTimeFormat` rather than a date library. It is in every browser
+ * this targets, it localises, and the alternative is 12KB to render eight
+ * strings.
+ */
+
+/** The thresholds, largest unit first. Days stop at a week — see `relativeTime`. */
+const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ["day", 86_400],
+  ["hour", 3_600],
+  ["minute", 60],
+];
+
+const RELATIVE = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+
+/**
+ * "2 hours ago", "yesterday", "3 days ago" — and a date once it is past a week.
+ *
+ * **A week is the cut-off and it is not arbitrary.** Relative time is worth
+ * something while the reader can still hold the reference point: "3 days ago"
+ * lands, "23 days ago" is a number they have to convert back into a date to do
+ * anything with. Past seven days the absolute date is both shorter and more
+ * useful, so that is what it returns.
+ *
+ * `numeric: "auto"` is what produces "yesterday" instead of "1 day ago", which
+ * is the whole reason to use the platform formatter rather than a template.
+ *
+ * Future dates work by the same arithmetic and read as "in 2 hours". They are
+ * rare here but not impossible — a review due date is one — and a formatter
+ * that silently rendered them as past would be worse than one that never saw
+ * them.
+ */
+export function relativeTime(value: string | null | undefined, now: Date = new Date()): string {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+
+  const seconds = (parsed.getTime() - now.getTime()) / 1000;
+  const magnitude = Math.abs(seconds);
+
+  // Beyond a week in either direction, the date itself. No time of day: at this
+  // distance the hour is noise, and the `title` still carries it.
+  if (magnitude >= 7 * 86_400) {
+    return parsed.toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+    });
+  }
+
+  // Under a minute is "now" rather than "in 3 seconds" or "3 seconds ago". The
+  // precision is real and nobody wants it.
+  if (magnitude < 60) return "just now";
+
+  for (const [unit, size] of UNITS) {
+    if (magnitude >= size) {
+      // Truncated towards zero, so 90 minutes is "1 hour ago" rather than
+      // "2 hours ago". Rounding up reports a thing as older than it is, and
+      // for a freshness read that is the direction that misleads.
+      return RELATIVE.format(Math.trunc(seconds / size), unit);
+    }
+  }
+
+  return "just now";
+}
+
 /** A hash, shortened for display but never for comparison. */
 export function shortHash(value: string | null | undefined, length = 12): string {
   if (!value) return "—";

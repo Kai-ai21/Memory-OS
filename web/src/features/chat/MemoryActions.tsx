@@ -27,6 +27,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { api, type ChatMessage, type DeletionScope } from "../../api/client";
+import { Button } from "../../components/primitives";
 
 /**
  * The controls on one of your own stored messages.
@@ -181,13 +182,13 @@ function CorrectForm({
         readable — what you thought before you corrected it is part of the record.
       </p>
       <div className="flex items-baseline gap-3">
-        <button
+        <Button
           type="submit"
-          className="meta text-accent hover:underline"
-          disabled={correct.isPending}
+          className="meta inline-flex items-center gap-1.5 text-accent hover:underline"
+          loading={correct.isPending}
         >
-          {correct.isPending ? "correcting…" : "save the correction"}
-        </button>
+          save the correction
+        </Button>
         <button type="button" className="meta text-ink-3" onClick={onCancel}>
           cancel
         </button>
@@ -286,9 +287,13 @@ function TagForm({
         </div>
       ) : null}
       <div className="flex items-baseline gap-3">
-        <button type="submit" className="meta text-accent hover:underline">
-          {tag.isPending ? "tagging…" : "apply"}
-        </button>
+        <Button
+          type="submit"
+          className="meta inline-flex items-center gap-1.5 text-accent hover:underline"
+          loading={tag.isPending}
+        >
+          apply
+        </Button>
         <button type="button" className="meta text-ink-3" onClick={onCancel}>
           cancel
         </button>
@@ -321,14 +326,13 @@ function RemoveFromView({
     onSuccess: (result) => onDone(result.detail),
   });
   return (
-    <button
-      type="button"
-      className="meta text-ink-2 hover:text-accent"
+    <Button
+      className="meta inline-flex items-center gap-1.5 text-ink-2 hover:text-accent"
       onClick={() => remove.mutate()}
-      disabled={remove.isPending}
+      loading={remove.isPending}
     >
-      {remove.isPending ? "removing…" : "remove from view"}
-    </button>
+      remove from view
+    </Button>
   );
 }
 
@@ -401,14 +405,14 @@ export function DeleteDialog({
         autoComplete="off"
       />
       <div className="flex items-baseline gap-3">
-        <button
-          type="button"
-          className="meta text-deny hover:underline disabled:text-ink-3 disabled:no-underline"
-          disabled={typed.trim().toLowerCase() !== "delete" || purge.isPending}
+        <Button
+          className="meta inline-flex items-center gap-1.5 text-deny hover:underline disabled:text-ink-3 disabled:no-underline"
+          disabled={typed.trim().toLowerCase() !== "delete"}
+          loading={purge.isPending}
           onClick={() => purge.mutate()}
         >
-          {purge.isPending ? "deleting…" : "delete permanently"}
-        </button>
+          delete permanently
+        </Button>
         <button type="button" className="meta text-ink-3" onClick={onCancel}>
           cancel
         </button>
@@ -484,13 +488,12 @@ export function RestoreControl({
     onSuccess: (result) => onDone(result.detail),
   });
   return (
-    <button
-      type="button"
-      className="meta text-accent hover:underline"
+    <Button
+      className="meta inline-flex items-center gap-1.5 text-accent hover:underline"
       onClick={() => restore.mutate()}
-      disabled={restore.isPending}
+      loading={restore.isPending}
     >
-      {restore.isPending ? "restoring…" : "restore"}
-    </button>
+      restore
+    </Button>
   );
 }

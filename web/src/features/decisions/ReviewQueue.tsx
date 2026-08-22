@@ -24,7 +24,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, type Suggestion } from "../../api/client";
 import { Empty, Failure, Loading, SectionHeading, Tag } from "../../components/primitives";
-import { timestamp } from "../../lib/format";
+import { RelativeTime } from "../../components/RelativeTime";
+
 import type { PrefilledDraft } from "./DecisionForm";
 
 interface Draft {
@@ -169,7 +170,7 @@ function SuggestionRow({
           {row.source_name}:{where}
         </span>
         <span>{row.model_id}</span>
-        <span>{timestamp(row.suggested_at)}</span>
+        <RelativeTime value={row.suggested_at} />
       </div>
 
       {/* Two columns on a wide screen, stacked on a narrow one. The draft never

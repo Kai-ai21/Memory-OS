@@ -62,23 +62,103 @@
     color: var(--color-ink);
   }
 
+  /* A heading is a phrase, so it should break like one. Left to itself a
+   * two-line title drops its last word onto a line of its own, and an orphan
+   * under a 32px display face is the most visible piece of bad typesetting a
+   * page can have. `balance` asks the browser to even the lines instead; it is
+   * capped at a handful of lines by the spec, which is exactly the range
+   * headings live in and the reason it is safe to apply to all of them. */
+  h1,
+  h2,
+  h3,
+  h4,
+  .display,
+  .display-page {
+    text-wrap: balance;
+  }
+
   /* Visible focus, and only for keyboard users. This UI is driven from the
    * keyboard, so the focus ring is functional rather than an accessibility
    * afterthought — and it is `accent`, which is rule 1 working as intended: a
    * focused thing is a thing you are about to act on. */
   :focus-visible {
     outline: 2px solid var(--color-accent);
-    outline-offset: 1px;
+    outline-offset: 2px;
+    /* The ring follows the shape it is around rather than boxing it. Without
+     * this a focused pill gets a rectangle drawn around it, which is the tell
+     * that the ring was added to the page rather than to the component. */
+    border-radius: inherit;
   }
 
+  /* And nothing may opt out with a bare `:focus`. `:focus` fires on mouse
+   * clicks too, which is why people delete focus styles and take keyboard
+   * navigation down with them; `:focus-visible` is the browser's own answer to
+   * exactly that, and it is the only hook this application uses. */
+
+  /* --- Scrollbars ---------------------------------------------------------
+   * The last unstyled thing in the interface. A default macOS or Windows
+   * scrollbar is a chunky grey slab with its own idea of what a border radius
+   * is, and it sits inside panels drawn to a 1px hairline — one element on the
+   * page ignoring the entire visual language.
+   *
+   * Both syntaxes, because they are not alternatives: `scrollbar-width` and
+   * `scrollbar-color` are the standard and are what Firefox implements, and the
+   * `::-webkit-` pseudo-elements are what Chrome and Safari still read. A
+   * declaration for one is a browser left on the default.
+   *
+   * The track is transparent rather than tinted — a channel drawn down the side
+   * of every scrollable region is a permanent vertical line the eye has to
+   * learn to ignore, and the thumb alone says everything a scrollbar needs to.
+   */
   * {
     scrollbar-color: var(--color-rule-strong) transparent;
     scrollbar-width: thin;
   }
 
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-rule-strong);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-ink-3);
+  }
+
+  /* The square where the two bars meet, which defaults to a grey block. */
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
   /* The background wash drifts, and the palette and drawer appear. Nothing else
    * moves — and even these stop for anybody who has asked the OS for
    * stillness. */
+  /* The shimmer a skeleton carries. A band of slightly lighter tint travelling
+   * across the block — the standard treatment, and the reason it is standard is
+   * that it says "this is arriving" without claiming to know how long it will
+   * take, which is the one thing a progress bar cannot do honestly here.
+   *
+   * `transform` on a pseudo-element rather than `background-position` on the
+   * block itself: a moving gradient repaints the element every frame, and a
+   * translated overlay is composited. Slow — 1.8s — because a fast shimmer on
+   * a screen full of skeleton rows is a strobe. */
+  @keyframes shimmer {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(100%);
+    }
+  }
+
   @keyframes drift {
     0% {
       transform: translate(0, 0) scale(1);
@@ -88,13 +168,26 @@
     }
   }
 
+  /* Everything that moves, stopped — in one place, for anybody who asked the OS
+   * for stillness. A blanket rule rather than a `prefers-reduced-motion` branch
+   * per component: the per-component version is one somebody forgets to write,
+   * and the failure is invisible to everyone who does not need it.
+   *
+   * `scroll-behavior` is in here for the same reason. A smooth-scrolled jump is
+   * motion the person did not ask for, and it is the one this rule used to
+   * miss. */
   @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto !important;
+    }
+
     *,
     *::before,
     *::after {
       animation-duration: 0.01ms !important;
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
     }
   }
 }
@@ -185,9 +278,9 @@
     color: var(--color-surface);
     cursor: pointer;
     transition:
-      transform 160ms ease,
-      box-shadow 160ms ease,
-      background-color 160ms ease;
+      transform var(--dur-state) var(--ease-out),
+      box-shadow var(--dur-state) var(--ease-out),
+      background-color var(--dur-state) var(--ease-out);
     box-shadow:
       inset 0 0.3rem 0.55rem -0.25rem rgb(255 255 255 / 55%),
       inset 0 -0.15rem 0.3rem -0.1rem rgb(15 23 42 / 45%),
@@ -213,8 +306,8 @@
     );
     pointer-events: none;
     transition:
-      opacity 160ms ease,
-      transform 160ms ease;
+      opacity var(--dur-state) var(--ease-out),
+      transform var(--dur-state) var(--ease-out);
   }
 
   /* Hover: the sheen brightens and the object lifts. One pixel — a pearl this
@@ -318,8 +411,8 @@
     border-radius: 10px;
     padding: 0.75rem;
     transition:
-      border-color 120ms ease-out,
-      background-color 120ms ease-out;
+      border-color var(--dur-state) var(--ease-out),
+      background-color var(--dur-state) var(--ease-out);
   }
 
   .promo:hover {
@@ -393,8 +486,8 @@
     color: var(--color-ink-3);
     cursor: pointer;
     transition:
-      color 120ms ease-out,
-      background-color 120ms ease-out;
+      color var(--dur-state) var(--ease-out),
+      background-color var(--dur-state) var(--ease-out);
   }
 
   .icon-button:hover {
@@ -538,10 +631,19 @@
     font-family: var(--font-mono);
   }
 
+  /* **The ring is the one in the base layer, and this rule no longer removes
+   * it.** It used to read `outline: none` plus a 3px `accent-soft` box-shadow,
+   * which is the single most common way a design system ends up with two focus
+   * treatments: the fields get one look and every button, link and menu item
+   * gets another, and neither is wrong on its own. Worse, it hung off `:focus`
+   * rather than `:focus-visible`, so the soft ring appeared on mouse clicks
+   * too — and the outline it suppressed was the one keyboard users needed.
+   *
+   * What is left is the border colour, which is not a ring and is worth
+   * keeping on plain `:focus`: it says "you are typing in here" to somebody who
+   * clicked, without competing with the ring drawn for somebody who tabbed. */
   .field:focus {
     border-color: var(--color-accent);
-    box-shadow: 0 0 0 3px var(--color-accent-soft);
-    outline: none;
   }
 
   /* The search box: the primary act of the application. A panel rather than a
@@ -562,15 +664,85 @@
     color: var(--color-ink-3);
   }
 
+  /* The same correction as `.field` above, for the same reason. */
   .field-prominent:focus {
     border-color: var(--color-accent);
-    box-shadow: 0 0 0 3px var(--color-accent-soft);
-    outline: none;
   }
 
   /* Secondary, and deliberately unchanged by M9.8: flat, a hairline, no blur
    * and no shadow. The primary treatment only means something while there is
    * something plainer beside it. */
+  /* --- Skeletons and the spinner ------------------------------------------
+   * **A skeleton where the shape is known, a spinner only where it is not.**
+   *
+   * The two are not interchangeable and the choice is not a matter of taste. A
+   * page loading a list of results knows how many rows it is about to draw and
+   * how tall each one is, so it can draw that and let the content replace it in
+   * place — nothing moves when the data lands. A spinner in the same spot
+   * throws all of that away and then shifts the entire page down when it is
+   * replaced by content of a different height.
+   *
+   * A spinner is right in exactly one situation, which is the one it is used
+   * for below: a **button** that has been pressed and is waiting. There is no
+   * layout to predict there — the button is already the size it will stay — and
+   * the only thing that needs saying is "this is working".
+   *
+   * `surface-tint` per the brief. Note the pseudo-element carries the shimmer
+   * and the block carries the base: `overflow: hidden` on the block clips the
+   * travelling band to the shape, so a skeleton with a radius shimmers to its
+   * own corners rather than through them.
+   */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background-color: var(--color-surface-tint);
+    border-radius: var(--radius-sm);
+  }
+
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--color-surface) 50%,
+      transparent 100%
+    );
+    animation: shimmer 1.8s var(--ease-out) infinite;
+  }
+
+  /* The button spinner. A ring with a quarter of it in the accent, turning.
+   *
+   * `currentColor` for the track and the head, at two alphas, so one class
+   * works on the primary button, a plain button and a menu row without three
+   * variants — a spinner that has to be told what colour it is is a spinner
+   * that will be the wrong colour somewhere.
+   *
+   * Sized in `em` so it matches whatever text it sits beside. Under
+   * `prefers-reduced-motion` the blanket rule above stops the rotation, which
+   * would leave a static ring saying nothing; `.spinner` is therefore always
+   * accompanied by `aria-busy` and a `sr-only` word, and the disabled state of
+   * the button carries the meaning visually.
+   */
+  .spinner {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    border: 2px solid currentColor;
+    border-radius: 50%;
+    opacity: 0.35;
+    border-top-color: transparent;
+    animation: spin 600ms linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
   .btn {
     border: 1px solid var(--color-rule-strong);
     background-color: var(--color-surface);
@@ -583,9 +755,9 @@
     text-transform: uppercase;
     cursor: pointer;
     transition:
-      color 150ms,
-      border-color 150ms,
-      background-color 150ms;
+      color var(--dur-state) var(--ease-out),
+      border-color var(--dur-state) var(--ease-out),
+      background-color var(--dur-state) var(--ease-out);
   }
 
   .btn:hover:not(:disabled) {
@@ -642,8 +814,8 @@
     text-transform: uppercase;
     cursor: pointer;
     transition:
-      background-color 150ms,
-      box-shadow 150ms;
+      background-color var(--dur-state) var(--ease-out),
+      box-shadow var(--dur-state) var(--ease-out);
   }
 
   .btn-primary:hover:not(:disabled) {
@@ -721,14 +893,14 @@
     letter-spacing: 0;
     color: var(--color-ink-2);
     transition:
-      color 120ms ease-out,
-      background-color 120ms ease-out;
+      color var(--dur-state) var(--ease-out),
+      background-color var(--dur-state) var(--ease-out);
   }
 
   .nav-item svg {
     flex-shrink: 0;
     color: var(--color-ink-3);
-    transition: color 120ms ease-out;
+    transition: color var(--dur-state) var(--ease-out);
   }
 
   .nav-item:hover {

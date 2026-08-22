@@ -65,7 +65,7 @@ export function ParticleToggle({
 
          Anchored right, so the label expands leftward into the gutter rather
          than pushing the dot off the edge of the window. */
-      className="group pointer-events-auto fixed right-1.5 bottom-1.5 z-20 flex items-center gap-1.5 rounded-full border border-rule-strong bg-surface p-[2px] opacity-45 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+      className="group pointer-events-auto fixed right-1.5 bottom-1.5 z-20 flex items-center gap-1.5 rounded-full border border-rule-strong bg-surface p-[2px] opacity-45 transition-opacity duration-(--dur-state) ease-(--ease-out) hover:opacity-100 focus-visible:opacity-100"
     >
       <span className="meta-label hidden pl-2 whitespace-nowrap group-hover:inline group-focus:inline">
         {on ? "particles on" : "particles off"}
