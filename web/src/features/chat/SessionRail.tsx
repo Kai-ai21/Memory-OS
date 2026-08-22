@@ -21,6 +21,7 @@ import { api, type ChatSession } from "../../api/client";
 import { Button, Failure } from "../../components/primitives";
 import { RelativeTime } from "../../components/RelativeTime";
 import { count } from "../../lib/format";
+import { useToast } from "../../lib/toast";
 
 export function SessionRail({
   current,
@@ -90,14 +91,27 @@ function Row({
   onSelect: (id: string) => void;
 }) {
   const client = useQueryClient();
+  const toast = useToast();
+  const archiving = session.archived_at === null;
   const archive = useMutation({
-    mutationFn: () => api.archiveSession(session.id, session.archived_at === null),
-    onSuccess: () => void client.invalidateQueries({ queryKey: ["chat-sessions"] }),
+    /* The mutation takes the state to move *to*, so undo is the same call with
+       the flag inverted. That is the whole reason archiving is undoable and
+       deletion is not: one is a boolean on a row that already exists, and the
+       other has nothing to call. */
+    mutationFn: (archived: boolean) => api.archiveSession(session.id, archived),
+    onSuccess: (_data, archived) => {
+      void client.invalidateQueries({ queryKey: ["chat-sessions"] });
+      // The row leaves the list, which is a change you notice only if you were
+      // watching that corner of the screen.
+      toast.show(archived ? "Conversation archived" : "Conversation restored", {
+        undo: () => archive.mutate(!archived),
+      });
+    },
   });
 
   return (
     <li
-      className={`flex min-w-0 items-baseline gap-2 border-b border-rule/60 py-1.5 ${
+      className={`flex min-w-0 items-baseline gap-2 border-b border-rule/60 py-(--row-py) ${
         active ? "bg-surface-tint" : ""
       }`}
       data-testid="session-row"
@@ -130,7 +144,7 @@ function Row({
             ? "Bring this conversation back into the list"
             : "Hide this conversation. Every message stays a memory and stays searchable."
         }
-        onClick={() => archive.mutate()}
+        onClick={() => archive.mutate(archiving)}
         loading={archive.isPending}
       >
         {session.archived_at ? "restore" : "archive"}

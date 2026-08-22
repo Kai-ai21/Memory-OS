@@ -53,6 +53,8 @@ import { MemoryActions } from "./MemoryActions";
 import { useAnswerStream } from "./useAnswerStream";
 import { useCommands } from "./useCommands";
 import { useLiveEvents } from "./useLiveEvents";
+import { SplitOpenButton } from "../../app/SplitPanel";
+import { MemoryPreview } from "../../components/MemoryPreview";
 
 /**
  * How often a message that is still indexing is asked about.
@@ -624,15 +626,22 @@ function Answer({ message }: { message: ChatMessage }) {
             {message.citations.map((citation) => (
               <li
                 key={`${citation.locator}-${citation.excerpt.slice(0, 24)}`}
-                className="panel flex flex-col gap-2 p-4"
+                className="panel group flex flex-col gap-2 p-4"
               >
                 {citation.memory_id ? (
-                  <Link
-                    to={`/memory/${citation.memory_id}`}
-                    className="meta font-mono text-accent hover:underline"
-                  >
-                    {citation.locator}
-                  </Link>
+                  <span className="flex items-baseline gap-1">
+                    <MemoryPreview memoryId={citation.memory_id}>
+                      <Link
+                        to={`/memory/${citation.memory_id}`}
+                        className="meta font-mono text-accent hover:underline"
+                      >
+                        {citation.locator}
+                      </Link>
+                    </MemoryPreview>
+                    {/* The whole argument for the split, in one control: read
+                        the source without losing the answer that cited it. */}
+                    <SplitOpenButton memoryId={citation.memory_id} label={citation.locator} />
+                  </span>
                 ) : (
                   <span className="meta font-mono text-accent">{citation.locator}</span>
                 )}

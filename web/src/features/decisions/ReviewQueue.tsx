@@ -215,7 +215,7 @@ function SuggestionRow({
             type="button"
             disabled={busy}
             onClick={() => onReview("accept")}
-            className="meta-label border border-edge px-3 py-1 text-affirm"
+            className="meta-label border border-edge px-3 py-(--row-py) text-affirm"
           >
             accept
           </button>
@@ -227,7 +227,7 @@ function SuggestionRow({
             type="button"
             disabled={busy}
             onClick={onEdit}
-            className="meta-label border border-rule px-3 py-1 text-accent"
+            className="meta-label border border-rule px-3 py-(--row-py) text-accent"
           >
             edit
           </button>
@@ -235,7 +235,7 @@ function SuggestionRow({
             type="button"
             disabled={busy}
             onClick={() => onReview("reject")}
-            className="meta-label border border-rule px-3 py-1 text-deny"
+            className="meta-label border border-rule px-3 py-(--row-py) text-deny"
           >
             reject
           </button>

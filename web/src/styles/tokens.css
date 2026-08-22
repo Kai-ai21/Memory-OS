@@ -281,6 +281,30 @@
   --dur-state: 150ms;
   --dur-travel: 200ms;
 
+  /* --- Density ------------------------------------------------------------
+   * The four numbers a density setting actually changes.
+   *
+   * Declared here as the comfortable values and redefined once, in `index.css`,
+   * under `[data-density="compact"]`. Every row, list item and result in the
+   * application spends these rather than a literal, so the setting needs no
+   * component to know it exists — see `lib/density` for why that matters.
+   *
+   * Three, not four. A `--stack-gap` was declared here and spent by nothing,
+   * which is worse than it sounds: Tailwind's `@theme` only emits a variable
+   * something references, while the compact override below is a plain rule that
+   * always emits — so the token resolved to empty at comfortable and to a real
+   * value at compact. A token no component uses is a trap for the first one
+   * that does.
+   *
+   * **Roughly a third off, and only off the vertical.** Horizontal padding is
+   * what keeps text off an edge and is not surplus at any density; vertical
+   * padding between repeated rows is. The type scale is untouched: compact
+   * means less space between things, not smaller text, and a test says so.
+   */
+  --row-py: 0.375rem;
+  --result-py: 1.25rem;
+  --nav-h: 2.375rem;
+
   /* --- Space ------------------------------------------------------------- */
   --space-1: 0.25rem;
   --space-2: 0.5rem;

@@ -129,7 +129,7 @@ export function CorpusPage() {
                 // stayed invisible through two full replays.
                 const note = finding.advisory && finding.count > 0;
                 return (
-                <li key={finding.check} className="border-b border-rule/60 py-1.5">
+                <li key={finding.check} className="border-b border-rule/60 py-(--row-py)">
                   <div className="flex items-baseline gap-3">
                     <span
                       className={`meta ${

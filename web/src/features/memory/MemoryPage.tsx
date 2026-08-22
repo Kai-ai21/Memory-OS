@@ -12,7 +12,7 @@
  * chunks share text and the seams would not be where the rules are.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
@@ -23,9 +23,17 @@ import { Evolution } from "./Evolution";
 import { CopyButton, Empty, Failure, Loading, Meta, SectionHeading, Tag } from "../../components/primitives";
 import { count, isCode, range, shortHash } from "../../lib/format";
 import { VersionTimeline } from "./VersionTimeline";
+import { recordRecent } from "../../lib/recents";
+import { PinButton } from "../../components/PinButton";
 
-export function MemoryPage() {
-  const { id = "" } = useParams();
+export function MemoryPage({ id: given }: { id?: string } = {}) {
+  /* The route's id, unless one was handed in. The split panel renders this
+     same component beside another page — see `app/SplitPanel` — where there is
+     no route parameter to read, and forking a second memory view so the two
+     could drift is exactly what should not happen to the most detailed screen
+     in the application. */
+  const { id: routeId = "" } = useParams();
+  const id = given ?? routeId;
   // `?offset=` is where a citation points. Landing on the cited span rather than
   // at the top of the file is the difference between a reference and a
   // suggestion to go looking.
@@ -33,6 +41,17 @@ export function MemoryPage() {
   const offset = Number(params.get("offset"));
   const target = Number.isFinite(offset) && params.has("offset") ? offset : null;
   const memory = useQuery({ queryKey: ["memory", id], queryFn: () => api.memory(id) });
+
+  /* Opened memories are the half of `recents` the palette cannot record for
+     itself — a memory reached by clicking a search result never goes through
+     the palette, and a path is exactly the kind of address nobody can retype.
+     Keyed on the id rather than on the object, so a background refetch does not
+     re-record the same visit. */
+  const externalKey = memory.data?.external_key;
+  useEffect(() => {
+    if (!id || !externalKey) return;
+    recordRecent({ to: `/memory/${id}`, label: externalKey, kind: "memory" });
+  }, [id, externalKey]);
 
   if (memory.isLoading) return <Loading rows={6} />;
   if (memory.isError) return <Failure error={memory.error} />;
@@ -52,6 +71,7 @@ export function MemoryPage() {
           <span className="group flex items-baseline gap-1.5">
             <h1 className="font-mono text-base break-all text-ink">{detail.external_key}</h1>
             <CopyButton value={detail.external_key} label="path" />
+            <PinButton memoryId={detail.id} label={detail.external_key} />
           </span>
           <Tag>{detail.kind}</Tag>
           {detail.deleted_at ? <Tag>deleted</Tag> : null}
@@ -142,7 +162,7 @@ export function MemoryPage() {
             <tr className="border-b border-rule">
               {["#", "range", "tokens", "chunker", "model", "embedded", "definition"].map(
                 (heading) => (
-                  <th key={heading} className="meta-label py-1 pr-4 font-normal">
+                  <th key={heading} className="meta-label py-(--row-py) pr-4 font-normal">
                     {heading}
                   </th>
                 ),
@@ -152,15 +172,15 @@ export function MemoryPage() {
           <tbody>
             {detail.chunks.map((chunk) => (
               <tr key={chunk.id} className="border-b border-rule/60">
-                <td className="meta py-1 pr-4 text-ink">{chunk.ordinal}</td>
-                <td className="meta py-1 pr-4">{range(chunk.char_start, chunk.char_end)}</td>
-                <td className="meta py-1 pr-4">{chunk.token_count}</td>
-                <td className="meta py-1 pr-4 text-ink-3">{chunk.chunker_version}</td>
-                <td className="meta py-1 pr-4 text-ink-3">{chunk.embedding_model ?? "—"}</td>
-                <td className="meta py-1 pr-4">
+                <td className="meta py-(--row-py) pr-4 text-ink">{chunk.ordinal}</td>
+                <td className="meta py-(--row-py) pr-4">{range(chunk.char_start, chunk.char_end)}</td>
+                <td className="meta py-(--row-py) pr-4">{chunk.token_count}</td>
+                <td className="meta py-(--row-py) pr-4 text-ink-3">{chunk.chunker_version}</td>
+                <td className="meta py-(--row-py) pr-4 text-ink-3">{chunk.embedding_model ?? "—"}</td>
+                <td className="meta py-(--row-py) pr-4">
                   {chunk.embedded ? <RelativeTime value={chunk.embedded_at} /> : "not embedded"}
                 </td>
-                <td className="meta py-1 pr-4 text-accent">
+                <td className="meta py-(--row-py) pr-4 text-accent">
                   {typeof chunk.metadata?.definition === "string"
                     ? chunk.metadata.definition
                     : "—"}

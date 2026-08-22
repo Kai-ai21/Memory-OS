@@ -100,7 +100,7 @@ export function VersionTimeline({ versions }: { versions: MemoryVersion[] }) {
         {ordered.map((version) => (
           <li
             key={version.id}
-            className="flex flex-wrap items-baseline gap-x-4 border-b border-rule/60 py-1"
+            className="flex flex-wrap items-baseline gap-x-4 border-b border-rule/60 py-(--row-py)"
           >
             <span className="meta w-8 text-ink">v{version.version}</span>
             <span className="w-44 shrink-0">

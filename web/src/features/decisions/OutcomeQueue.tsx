@@ -230,7 +230,7 @@ function CandidateRow({
             type="button"
             disabled={busy}
             onClick={() => onReview("accept")}
-            className="meta-label border border-edge px-3 py-1 text-affirm"
+            className="meta-label border border-edge px-3 py-(--row-py) text-affirm"
           >
             accept as inferred
           </button>
@@ -238,7 +238,7 @@ function CandidateRow({
             type="button"
             disabled={busy}
             onClick={() => onReview("reject")}
-            className="meta-label border border-rule px-3 py-1 text-deny"
+            className="meta-label border border-rule px-3 py-(--row-py) text-deny"
           >
             not an outcome
           </button>

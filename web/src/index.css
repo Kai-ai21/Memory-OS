@@ -159,6 +159,21 @@
     }
   }
 
+  /* The toast's arrival. Rise and fade, 150ms — the `--dur-state` distance,
+   * because a confirmation appearing is a state change and not a journey.
+   * `motion-safe:` on the element means this never runs for anybody who asked
+   * for stillness; the toast still appears, it just does not travel. */
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
   @keyframes drift {
     0% {
       transform: translate(0, 0) scale(1);
@@ -190,6 +205,21 @@
       scroll-behavior: auto !important;
     }
   }
+}
+
+/* The one place the compact values exist.
+ *
+ * Outside `@layer` so it is not competing with Tailwind's cascade layers for
+ * specificity — an attribute selector on `:root` should win over the bare
+ * `:root` in `@theme` on specificity alone, and putting it in a layer makes
+ * that depend on layer order instead.
+ *
+ * About a third off each, which is what "compact" has to mean to be worth a
+ * setting: 20% is invisible and 50% is a spreadsheet. */
+:root[data-density="compact"] {
+  --row-py: 0.25rem;
+  --result-py: 0.8125rem;
+  --nav-h: 1.875rem;
 }
 
 @layer components {
@@ -247,6 +277,24 @@
     box-shadow:
       0 1px 2px 0 rgb(15 23 42 / 5%),
       0 16px 40px -12px rgb(15 23 42 / 12%);
+  }
+
+  /* The hover preview, and the second raised object in the application.
+   *
+   * **Not `.panel-raised`.** That shadow is tuned for a 420px sign-in card
+   * floating over a moving canvas — two layers, one of them 40px wide — and at
+   * the size of a tooltip it reads as a smudge rather than as a lift. Rule 2 in
+   * `tokens.css` permits a shadow on anything that genuinely floats over the
+   * page rather than sitting on it, which a preview card does by definition;
+   * what it forbids is shadows on things that are already on paper.
+   *
+   * Ink at low alpha rather than black, for the reason every shadow here is:
+   * a neutral shadow on a warm white ground goes grey and dirty.
+   */
+  .popover {
+    box-shadow:
+      0 1px 2px 0 rgb(15 23 42 / 6%),
+      0 8px 24px -8px rgb(15 23 42 / 14%);
   }
 
   /* --- The send button ------------------------------------------------------
@@ -884,7 +932,7 @@
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    height: 2.375rem;
+    height: var(--nav-h);
     padding: 0 0.75rem;
     border-radius: var(--radius-md);
     font-family: var(--font-prose);

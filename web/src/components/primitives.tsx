@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useToast } from "../lib/toast";
 
 /** A labelled metadata pair. The workhorse of the whole interface. */
 export function Meta({ label, children }: { label: string; children: ReactNode }) {
@@ -208,6 +209,7 @@ export function CopyButton({
 }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const toast = useToast();
 
   // A component unmounted inside the 1.5s window — a row that scrolled out of a
   // virtualised list, a panel closed straight after a copy — would otherwise
@@ -238,6 +240,11 @@ export function CopyButton({
         setCopied(true);
         clearTimeout(timer.current);
         timer.current = setTimeout(() => setCopied(false), COPIED_MS);
+        /* Both, and they are not redundant. The tick is the confirmation for
+           somebody watching the button; the toast is for somebody whose eyes
+           had already moved on, and it names *what* was copied, which the tick
+           cannot. */
+        toast.show(`Copied ${what}`);
       }}
     >
       {copied ? <CheckGlyph /> : <ClipboardGlyph />}

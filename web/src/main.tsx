@@ -4,7 +4,13 @@ import { BrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "./App";
+import { applyDensity, readDensity } from "./lib/density";
 import "./index.css";
+
+/* Before the first render rather than in an effect. Applied from an effect the
+   page paints once at comfortable and then reflows, which is the flash of
+   wrong layout every stored theme setting has to avoid. */
+applyDensity(readDensity());
 
 /**
  * TanStack Query is the only state management here, and that is the whole point:
