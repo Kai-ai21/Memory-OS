@@ -162,7 +162,7 @@ export function MemoryPage({ id: given }: { id?: string } = {}) {
             <tr className="border-b border-rule">
               {["#", "range", "tokens", "chunker", "model", "embedded", "definition"].map(
                 (heading) => (
-                  <th key={heading} className="meta-label py-1 pr-4 font-normal">
+                  <th key={heading} className="meta-label py-(--row-py) pr-4 font-normal">
                     {heading}
                   </th>
                 ),
@@ -172,15 +172,15 @@ export function MemoryPage({ id: given }: { id?: string } = {}) {
           <tbody>
             {detail.chunks.map((chunk) => (
               <tr key={chunk.id} className="border-b border-rule/60">
-                <td className="meta py-1 pr-4 text-ink">{chunk.ordinal}</td>
-                <td className="meta py-1 pr-4">{range(chunk.char_start, chunk.char_end)}</td>
-                <td className="meta py-1 pr-4">{chunk.token_count}</td>
-                <td className="meta py-1 pr-4 text-ink-3">{chunk.chunker_version}</td>
-                <td className="meta py-1 pr-4 text-ink-3">{chunk.embedding_model ?? "—"}</td>
-                <td className="meta py-1 pr-4">
+                <td className="meta py-(--row-py) pr-4 text-ink">{chunk.ordinal}</td>
+                <td className="meta py-(--row-py) pr-4">{range(chunk.char_start, chunk.char_end)}</td>
+                <td className="meta py-(--row-py) pr-4">{chunk.token_count}</td>
+                <td className="meta py-(--row-py) pr-4 text-ink-3">{chunk.chunker_version}</td>
+                <td className="meta py-(--row-py) pr-4 text-ink-3">{chunk.embedding_model ?? "—"}</td>
+                <td className="meta py-(--row-py) pr-4">
                   {chunk.embedded ? <RelativeTime value={chunk.embedded_at} /> : "not embedded"}
                 </td>
-                <td className="meta py-1 pr-4 text-accent">
+                <td className="meta py-(--row-py) pr-4 text-accent">
                   {typeof chunk.metadata?.definition === "string"
                     ? chunk.metadata.definition
                     : "—"}

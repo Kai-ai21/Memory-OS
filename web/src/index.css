@@ -207,6 +207,21 @@
   }
 }
 
+/* The one place the compact values exist.
+ *
+ * Outside `@layer` so it is not competing with Tailwind's cascade layers for
+ * specificity — an attribute selector on `:root` should win over the bare
+ * `:root` in `@theme` on specificity alone, and putting it in a layer makes
+ * that depend on layer order instead.
+ *
+ * About a third off each, which is what "compact" has to mean to be worth a
+ * setting: 20% is invisible and 50% is a spreadsheet. */
+:root[data-density="compact"] {
+  --row-py: 0.25rem;
+  --result-py: 0.8125rem;
+  --nav-h: 1.875rem;
+}
+
 @layer components {
   /* --- The panel -----------------------------------------------------------
    * The most repeated element in the interface, and now the plainest: white,
@@ -917,7 +932,7 @@
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    height: 2.375rem;
+    height: var(--nav-h);
     padding: 0 0.75rem;
     border-radius: var(--radius-md);
     font-family: var(--font-prose);

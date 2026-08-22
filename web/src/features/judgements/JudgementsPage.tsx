@@ -59,7 +59,7 @@ export function JudgementsPage() {
               <tr className="border-b border-rule-strong">
                 {["query", "relevant", "not relevant", "missing", "last judged", ""].map(
                   (heading) => (
-                    <th key={heading} className="meta-label py-1 pr-4 font-normal">
+                    <th key={heading} className="meta-label py-(--row-py) pr-4 font-normal">
                       {heading}
                     </th>
                   ),
@@ -69,16 +69,16 @@ export function JudgementsPage() {
             <tbody>
               {rows.map((row) => (
                 <tr key={row.query_text} className="border-b border-rule/60">
-                  <td className="py-1.5 pr-4">
+                  <td className="py-(--row-py) pr-4">
                     <span className="prose-content text-sm">{row.query_text}</span>
                   </td>
-                  <td className="meta py-1.5 pr-4 text-affirm">{row.relevant}</td>
-                  <td className="meta py-1.5 pr-4 text-deny">{row.not_relevant}</td>
-                  <td className="meta py-1.5 pr-4 text-accent">{row.missing}</td>
-                  <td className="meta py-1.5 pr-4 text-ink-3">
+                  <td className="meta py-(--row-py) pr-4 text-affirm">{row.relevant}</td>
+                  <td className="meta py-(--row-py) pr-4 text-deny">{row.not_relevant}</td>
+                  <td className="meta py-(--row-py) pr-4 text-accent">{row.missing}</td>
+                  <td className="meta py-(--row-py) pr-4 text-ink-3">
                     <RelativeTime value={row.last_judged_at} />
                   </td>
-                  <td className="py-1.5">
+                  <td className="py-(--row-py)">
                     <Link
                       className="meta text-accent underline"
                       to={`/search?q=${encodeURIComponent(row.query_text)}`}

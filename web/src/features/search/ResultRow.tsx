@@ -94,7 +94,7 @@ export function ResultRow({
        ink. The expanded state takes an ink inset bar, not the accent: an
        opened row is a position, not an action. */
     <article
-      className={`border-b border-rule py-5 last:border-b-0 ${
+      className={`border-b border-rule py-(--result-py) last:border-b-0 ${
         expanded !== null ? "-mx-4 border-l-2 border-l-ink bg-surface px-4" : ""
       }`}
       data-testid="result"

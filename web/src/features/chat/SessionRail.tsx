@@ -111,7 +111,7 @@ function Row({
 
   return (
     <li
-      className={`flex min-w-0 items-baseline gap-2 border-b border-rule/60 py-1.5 ${
+      className={`flex min-w-0 items-baseline gap-2 border-b border-rule/60 py-(--row-py) ${
         active ? "bg-surface-tint" : ""
       }`}
       data-testid="session-row"

@@ -171,7 +171,7 @@ function ReflectionRow({
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
             type="button"
-            className="meta-label border border-rule px-3 py-1 text-ink-2 disabled:opacity-40"
+            className="meta-label border border-rule px-3 py-(--row-py) text-ink-2 disabled:opacity-40"
             disabled={busy || reflection.acknowledged_at !== null}
             onClick={onAcknowledge}
           >
@@ -186,7 +186,7 @@ function ReflectionRow({
           />
           <button
             type="button"
-            className="meta-label border border-rule px-3 py-1 text-deny disabled:opacity-40"
+            className="meta-label border border-rule px-3 py-(--row-py) text-deny disabled:opacity-40"
             // A reason is required by the API and by a CHECK constraint.
             disabled={busy || reason.trim().length === 0}
             onClick={() => onDismiss(reason.trim())}

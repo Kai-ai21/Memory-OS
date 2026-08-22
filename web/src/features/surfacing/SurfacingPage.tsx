@@ -166,7 +166,7 @@ function DecisionRow({
         <div className="mt-1.5 flex items-center gap-2">
           <button
             type="button"
-            className="meta-label border border-rule px-3 py-1 text-affirm disabled:opacity-40"
+            className="meta-label border border-rule px-3 py-(--row-py) text-affirm disabled:opacity-40"
             disabled={busy}
             onClick={() => onRate(true)}
           >
@@ -174,7 +174,7 @@ function DecisionRow({
           </button>
           <button
             type="button"
-            className="meta-label border border-rule px-3 py-1 text-deny disabled:opacity-40"
+            className="meta-label border border-rule px-3 py-(--row-py) text-deny disabled:opacity-40"
             disabled={busy}
             onClick={() => onRate(false)}
           >

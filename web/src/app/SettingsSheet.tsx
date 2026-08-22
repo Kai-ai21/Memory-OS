@@ -15,13 +15,12 @@
  * offering to forget it. Nothing here is sent anywhere, which is the first
  * thing the sheet says.
  *
- * It holds the search history, the recents list and pins. The density control
- * arrives with the feature that creates it, in its own commit, so that any one
- * of them can be reverted without taking this sheet apart.
+ * It holds the density control, the search history, the recents list and pins.
  */
 
 import { useEffect, useRef, useState } from "react";
 
+import { readDensity, writeDensity, type Density } from "../lib/density";
 import { clearHistory, readHistory } from "../lib/history";
 import { clearPins, getPins } from "../lib/pins";
 import { clearRecents, readRecents } from "../lib/recents";
@@ -68,6 +67,7 @@ export function SettingsSheet({ open, onClose }: { open: boolean; onClose: () =>
       </div>
 
       <div className="flex flex-col gap-5 px-4 py-4">
+        <DensityControl />
         <StoredLocally />
       </div>
 
@@ -76,6 +76,45 @@ export function SettingsSheet({ open, onClose }: { open: boolean; onClose: () =>
         API.
       </p>
     </dialog>
+  );
+}
+
+/**
+ * Comfortable or compact.
+ *
+ * A pair of named buttons rather than a switch: two options with a visible
+ * current value beat a toggle whose meaning depends on which way it points, and
+ * "compact: off" is a worse label than "comfortable".
+ */
+function DensityControl() {
+  const [density, setDensity] = useState<Density>(readDensity);
+
+  return (
+    <fieldset className="flex flex-col gap-1.5">
+      <legend className="meta-label text-ink-2">density</legend>
+      <p className="meta max-w-prose text-ink-3">
+        Compact takes about a third off the vertical padding of rows, results and list
+        items. Type sizes do not change — this is space between things, not smaller text.
+      </p>
+      <div className="mt-1 flex gap-2">
+        {(["comfortable", "compact"] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            className={`btn ${density === option ? "btn-on" : ""}`}
+            aria-pressed={density === option}
+            onClick={() => {
+              // Writes the preference and puts the attribute on `<html>` in one
+              // call, so the layout responds before this handler returns.
+              writeDensity(option);
+              setDensity(option);
+            }}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+    </fieldset>
   );
 }
 

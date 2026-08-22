@@ -130,7 +130,7 @@ export function DecisionsPage() {
             <tr className="border-b border-rule-strong">
               {["question", "chosen", "status", "conf", "opts", "assum", "evid", "decided"].map(
                 (heading) => (
-                  <th key={heading} className="meta-label py-1 pr-4 font-normal">
+                  <th key={heading} className="meta-label py-(--row-py) pr-4 font-normal">
                     {heading}
                   </th>
                 ),
@@ -140,28 +140,28 @@ export function DecisionsPage() {
           <tbody>
             {rows.map((row) => (
               <tr key={row.id} className="border-b border-rule/60 align-top">
-                <td className="py-1.5 pr-4">
+                <td className="py-(--row-py) pr-4">
                   <Link className="prose-content text-sm text-accent" to={`/decisions/${row.id}`}>
                     {row.question}
                   </Link>
                 </td>
-                <td className="prose-content py-1.5 pr-4 text-sm">{row.chosen}</td>
-                <td className="meta py-1.5 pr-4 text-ink-2">{row.status}</td>
-                <td className="meta py-1.5 pr-4 text-ink">
+                <td className="prose-content py-(--row-py) pr-4 text-sm">{row.chosen}</td>
+                <td className="meta py-(--row-py) pr-4 text-ink-2">{row.status}</td>
+                <td className="meta py-(--row-py) pr-4 text-ink">
                   {/* Never rounded away and never defaulted: an absent confidence
                       is a different claim from a low one. */}
                   {row.confidence === null ? "—" : row.confidence.toFixed(2)}
                 </td>
-                <td className="meta py-1.5 pr-4 text-ink-3">{row.options}</td>
+                <td className="meta py-(--row-py) pr-4 text-ink-3">{row.options}</td>
                 <td
-                  className={`meta py-1.5 pr-4 ${
+                  className={`meta py-(--row-py) pr-4 ${
                     row.assumptions === 0 ? "text-deny" : "text-ink-3"
                   }`}
                 >
                   {row.assumptions}
                 </td>
-                <td className="meta py-1.5 pr-4 text-ink-3">{row.evidence}</td>
-                <td className="py-1.5">
+                <td className="meta py-(--row-py) pr-4 text-ink-3">{row.evidence}</td>
+                <td className="py-(--row-py)">
                   <DateStamp value={row.decided_at} provenance={row.decided_at_source} />
                 </td>
               </tr>

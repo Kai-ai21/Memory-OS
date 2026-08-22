@@ -192,7 +192,7 @@ function PatternRow({
           />
           <button
             type="button"
-            className="meta-label border border-rule px-3 py-1 text-deny disabled:opacity-40"
+            className="meta-label border border-rule px-3 py-(--row-py) text-deny disabled:opacity-40"
             // A reason is required by the API and by a CHECK constraint, so the
             // button refuses rather than sending something the server rejects.
             disabled={busy || reason.trim().length === 0}
@@ -265,7 +265,7 @@ function CalibrationTable({
         <thead>
           <tr className="border-b border-rule-strong">
             {["band", "n", "stated", "actual", "95% CI", ""].map((heading) => (
-              <th key={heading} className="meta-label py-1 pr-4 font-normal">
+              <th key={heading} className="meta-label py-(--row-py) pr-4 font-normal">
                 {heading}
               </th>
             ))}
@@ -274,16 +274,16 @@ function CalibrationTable({
         <tbody>
           {bands.map((band) => (
             <tr key={`${band.low}`} className="border-b border-rule/60">
-              <td className="meta py-1 pr-4 text-ink">
+              <td className="meta py-(--row-py) pr-4 text-ink">
                 {band.low.toFixed(2)}–{band.high.toFixed(2)}
               </td>
-              <td className="meta py-1 pr-4 text-ink-3">{band.n}</td>
-              <td className="meta py-1 pr-4 text-ink">{band.stated.toFixed(2)}</td>
-              <td className="meta py-1 pr-4 text-ink">{percent(band.observed)}</td>
-              <td className="meta py-1 pr-4 text-ink-3">
+              <td className="meta py-(--row-py) pr-4 text-ink-3">{band.n}</td>
+              <td className="meta py-(--row-py) pr-4 text-ink">{band.stated.toFixed(2)}</td>
+              <td className="meta py-(--row-py) pr-4 text-ink">{percent(band.observed)}</td>
+              <td className="meta py-(--row-py) pr-4 text-ink-3">
                 {percent(band.interval_low)}–{percent(band.interval_high)}
               </td>
-              <td className="meta py-1">
+              <td className="meta py-(--row-py)">
                 {band.miscalibrated ? (
                   <span className="text-deny">outside the interval</span>
                 ) : (

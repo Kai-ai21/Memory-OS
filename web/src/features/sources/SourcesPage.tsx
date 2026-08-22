@@ -81,7 +81,7 @@ function Registered({ sources }: { sources: Source[] }) {
                 "sync",
                 "manage",
               ].map((heading) => (
-                <th key={heading} className="meta-label py-1 pr-4 font-normal">
+                <th key={heading} className="meta-label py-(--row-py) pr-4 font-normal">
                   {heading}
                 </th>
               ))}
@@ -117,17 +117,17 @@ function Row({ source }: { source: Source }) {
 
   return (
     <tr className="border-b border-rule/60" data-testid="source-row">
-      <td className="meta py-1 pr-4 text-ink">{source.name}</td>
-      <td className="meta py-1 pr-4 text-ink-3">{source.kind}</td>
-      <td className="meta py-1 pr-4">{count(source.memories)}</td>
-      <td className="meta py-1 pr-4">{count(source.chunks)}</td>
-      <td className="meta py-1 pr-4 text-ink-3">
+      <td className="meta py-(--row-py) pr-4 text-ink">{source.name}</td>
+      <td className="meta py-(--row-py) pr-4 text-ink-3">{source.kind}</td>
+      <td className="meta py-(--row-py) pr-4">{count(source.memories)}</td>
+      <td className="meta py-(--row-py) pr-4">{count(source.chunks)}</td>
+      <td className="meta py-(--row-py) pr-4 text-ink-3">
         <RelativeTime value={source.last_sync_at} />
       </td>
-      <td className="meta py-1 pr-4 text-ink-3">
+      <td className="meta py-(--row-py) pr-4 text-ink-3">
         <RelativeTime value={source.last_full_sync_at} />
       </td>
-      <td className="py-1">
+      <td className="py-(--row-py)">
         {walkable ? (
           <span className="flex gap-2">
             {/* Both are disabled while either is in flight — they hit the same
@@ -164,7 +164,7 @@ function Row({ source }: { source: Source }) {
           </span>
         ) : null}
       </td>
-      <td className="py-1">
+      <td className="py-(--row-py)">
         <SourceOperations source={source} />
       </td>
     </tr>

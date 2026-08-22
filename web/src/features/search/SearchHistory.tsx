@@ -38,7 +38,7 @@ export function SearchHistory({ onPick }: { onPick: (query: string) => void }) {
           >
             <button
               type="button"
-              className="min-w-0 flex-1 truncate py-1 text-left font-mono text-xs text-ink-2 hover:text-accent"
+              className="min-w-0 flex-1 truncate py-(--row-py) text-left font-mono text-xs text-ink-2 hover:text-accent"
               onClick={() => onPick(query)}
             >
               {query}
