@@ -94,12 +94,18 @@ function Row({
   const toast = useToast();
   const archiving = session.archived_at === null;
   const archive = useMutation({
-    mutationFn: () => api.archiveSession(session.id, archiving),
-    onSuccess: () => {
+    /* The mutation takes the state to move *to*, so undo is the same call with
+       the flag inverted. That is the whole reason archiving is undoable and
+       deletion is not: one is a boolean on a row that already exists, and the
+       other has nothing to call. */
+    mutationFn: (archived: boolean) => api.archiveSession(session.id, archived),
+    onSuccess: (_data, archived) => {
       void client.invalidateQueries({ queryKey: ["chat-sessions"] });
       // The row leaves the list, which is a change you notice only if you were
       // watching that corner of the screen.
-      toast.show(archiving ? "Conversation archived" : "Conversation restored");
+      toast.show(archived ? "Conversation archived" : "Conversation restored", {
+        undo: () => archive.mutate(!archived),
+      });
     },
   });
 
@@ -138,7 +144,7 @@ function Row({
             ? "Bring this conversation back into the list"
             : "Hide this conversation. Every message stays a memory and stays searchable."
         }
-        onClick={() => archive.mutate()}
+        onClick={() => archive.mutate(archiving)}
         loading={archive.isPending}
       >
         {session.archived_at ? "restore" : "archive"}

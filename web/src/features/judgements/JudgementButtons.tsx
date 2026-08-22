@@ -64,6 +64,12 @@ export function JudgementButtons({
   const client = useQueryClient();
   const toast = useToast();
 
+  /* The verdict on screen before this click, captured per render. Read inside
+     `onSuccess` it would already be the new one — `current` is a prop, and by
+     the time the mutation settles the parent has re-rendered with the value
+     just recorded. */
+  const previous = current;
+
   const mutation = useMutation({
     mutationFn: (verdict: Verdict) => {
       const body: JudgementIn = {
@@ -89,8 +95,17 @@ export function JudgementButtons({
       /* The button does take an active state, so this is the borderline case
          for a toast — it earns one because judging is the one act here whose
          *effect* is somewhere else entirely: a row on `/judgements` and a
-         number in the golden set, neither of them on this screen. */
-      toast.show(`Judged ${verdict.replace("_", " ")}`);
+         number in the golden set, neither of them on this screen.
+
+         **Undo restores the previous verdict, and only when there was one.**
+         `POST /judgements` upserts, so re-posting the verdict this replaced is
+         a real reversal rather than a repaint. Where nothing was judged before
+         there is nothing to restore — the API has no delete, and offering an
+         undo that silently left the judgement in place would be worse than
+         offering none. */
+      toast.show(`Judged ${verdict.replace("_", " ")}`, {
+        undo: previous && previous !== verdict ? () => mutation.mutate(previous) : undefined,
+      });
       onRecorded?.(verdict);
     },
   });

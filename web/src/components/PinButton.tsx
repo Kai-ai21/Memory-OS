@@ -12,7 +12,7 @@
 
 import { Pin as PinIcon } from "lucide-react";
 
-import { togglePin, usePins } from "../lib/pins";
+import { indexOfPin, restorePin, togglePin, usePins } from "../lib/pins";
 import { useToast } from "../lib/toast";
 
 export function PinButton({
@@ -44,12 +44,25 @@ export function PinButton({
         // Nearly always inside a link or an expander.
         event.preventDefault();
         event.stopPropagation();
+        /* Read the position *before* toggling. Undo has to put a pin back
+           where it was, not on the front — a list that silently reorders
+           itself when you take an action back has not undone anything. */
+        const wasAt = indexOfPin(memoryId);
         const nowPinned = togglePin({ id: memoryId, label });
+
         /* Pinning moves something into a sidebar you may not be looking at,
            and unpinning removes it from one — neither has a visible result
            where the click happened, which is the whole test for whether an
-           action deserves a toast. */
-        toast.show(nowPinned ? "Pinned" : "Unpinned");
+           action deserves a toast.
+
+           Only the removal gets an undo. Pinning is undone by clicking the
+           same button again, which is right there and already means that;
+           offering both would be two ways to do one thing. */
+        toast.show(nowPinned ? "Pinned" : "Unpinned", {
+          undo: nowPinned
+            ? undefined
+            : () => restorePin({ id: memoryId, label }, Math.max(0, wasAt)),
+        });
         onToggled?.(nowPinned);
       }}
     >
