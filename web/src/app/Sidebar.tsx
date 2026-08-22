@@ -48,6 +48,7 @@ import {
   Compass,
   HelpCircle,
   Keyboard,
+  Settings,
   LogOut,
   MoreHorizontal,
   PanelLeft,
@@ -113,12 +114,15 @@ export function Sidebar({
   onNavigate,
   onCollapse,
   onShortcuts,
+  onSettings,
 }: {
   onNavigate?: () => void;
   /** Hide the panel. The shell owns the state; this is the handle for it. */
   onCollapse?: () => void;
   /** Open the shortcuts sheet. The shell owns it, for the same reason. */
   onShortcuts?: () => void;
+  /** Open the settings sheet. Same again. */
+  onSettings?: () => void;
 }) {
   return (
     /* No horizontal padding on the panel itself: the two hairlines — under the
@@ -163,7 +167,7 @@ export function Sidebar({
       </nav>
 
       <Promoted onNavigate={onNavigate} />
-      <Footer onNavigate={onNavigate} onShortcuts={onShortcuts} />
+      <Footer onNavigate={onNavigate} onShortcuts={onShortcuts} onSettings={onSettings} />
     </div>
   );
 }
@@ -316,9 +320,11 @@ function Promoted({ onNavigate }: { onNavigate?: () => void }) {
 function Footer({
   onNavigate,
   onShortcuts,
+  onSettings,
 }: {
   onNavigate?: () => void;
   onShortcuts?: () => void;
+  onSettings?: () => void;
 }) {
   const [open, setOpen] = useState(readDetails);
 
@@ -375,7 +381,7 @@ function Footer({
         </div>
       ) : null}
 
-      <More onNavigate={onNavigate} onShortcuts={onShortcuts} />
+      <More onNavigate={onNavigate} onShortcuts={onShortcuts} onSettings={onSettings} />
     </div>
   );
 }
@@ -392,9 +398,11 @@ function Footer({
 function More({
   onNavigate,
   onShortcuts,
+  onSettings,
 }: {
   onNavigate?: () => void;
   onShortcuts?: () => void;
+  onSettings?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -463,6 +471,23 @@ function More({
             <Keyboard {...GLYPH} />
             <span>Shortcuts</span>
             <span className="shortcut ml-auto">?</span>
+          </button>
+          {/* Settings is where the locally-stored state can be seen and
+              cleared. M9.8 declined to invent a settings page for preferences
+              that did not exist; M9.11 created five of them, and a search
+              history with no surface admitting it exists is not shippable. */}
+          <button
+            type="button"
+            role="menuitem"
+            className="nav-item w-full text-left"
+            onClick={() => {
+              setOpen(false);
+              onNavigate?.();
+              onSettings?.();
+            }}
+          >
+            <Settings {...GLYPH} />
+            <span>Settings</span>
           </button>
           <button
             type="button"

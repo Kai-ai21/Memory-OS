@@ -40,6 +40,7 @@ import { PanelLeft } from "lucide-react";
 import { Icon } from "../components/Icon";
 import { BackgroundLayer } from "./BackgroundLayer";
 import { CommandPalette } from "./CommandPalette";
+import { SettingsSheet } from "./SettingsSheet";
 import { ShortcutsSheet } from "./ShortcutsSheet";
 import { SplitPanel } from "./SplitPanel";
 import { SplitProvider } from "./SplitProvider";
@@ -64,6 +65,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 function ShellFrame({ children }: { children: React.ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   /* Session state rather than a stored preference, deliberately. Hiding the
      nav is something you do to get a wide view of one page for a minute, not a
@@ -82,6 +84,7 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
   useCloseSplitOnDuplicate(location.pathname);
   const splitOpen = useSplit().memoryId !== null;
   const closeShortcuts = useCallback(() => setShortcutsOpen(false), []);
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
   // Navigating from the drawer closes it. Without this the nav stays over the
   // page you just asked for, which reads as a click that did nothing.
@@ -136,6 +139,7 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
         if (drawerOpen) setDrawerOpen(false);
         setPaletteOpen(false);
         setShortcutsOpen(false);
+        setSettingsOpen(false);
       }
     }
 
@@ -215,6 +219,7 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
           <Sidebar
             onNavigate={() => setDrawerOpen(false)}
             onShortcuts={() => setShortcutsOpen(true)}
+            onSettings={() => setSettingsOpen(true)}
             onCollapse={() => {
               setDrawerOpen(false);
               setCollapsed(true);
@@ -269,6 +274,7 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
 
       <CommandPalette open={paletteOpen} onClose={closePalette} />
       <ShortcutsSheet open={shortcutsOpen} onClose={closeShortcuts} />
+      <SettingsSheet open={settingsOpen} onClose={closeSettings} />
     </div>
   );
 }

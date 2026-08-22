@@ -16,6 +16,8 @@ import { Empty, Failure, Loading } from "../../components/primitives";
 import { count } from "../../lib/format";
 import { Filters } from "./Filters";
 import { ResultRow } from "./ResultRow";
+import { SearchHistory } from "./SearchHistory";
+import { recordQuery } from "../../lib/history";
 import {
   DEFAULT_K,
   isRunnable,
@@ -131,7 +133,12 @@ export function SearchPage() {
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          update({ q: draft.trim() });
+          const query = draft.trim();
+          // Recorded on submit rather than on every keystroke or on every
+          // `state.q` change: a history of what you typed on the way to a
+          // query is not a history of your queries.
+          recordQuery(query);
+          update({ q: query });
         }}
         className="flex flex-col gap-1"
         role="search"
@@ -165,6 +172,18 @@ export function SearchPage() {
           results
         </span>
       </form>
+
+      {/* Only when the box is empty, which is when it is the only thing that
+          could help. Under a query in progress it would be a list of near
+          misses competing with the results the reader is actually reading. */}
+      {draft.trim().length === 0 ? (
+        <SearchHistory
+          onPick={(query) => {
+            setDraft(query);
+            update({ q: query });
+          }}
+        />
+      ) : null}
 
       <Filters state={state} onChange={update} />
 
