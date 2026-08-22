@@ -1,0 +1,51 @@
+/**
+ * Pin a memory to the top of the sidebar.
+ *
+ * Visible at all times when pinned, and on hover of its row otherwise — the
+ * same reveal as the copy and split controls. A pinned thing has to advertise
+ * itself: the whole value is knowing at a glance that this is one of the four
+ * you keep, and a state you can only see by hovering is not a state.
+ *
+ * `aria-pressed` rather than a label that changes, so the control is one thing
+ * in two states rather than two controls that swap places.
+ */
+
+import { Pin as PinIcon } from "lucide-react";
+
+import { togglePin, usePins } from "../lib/pins";
+
+export function PinButton({
+  memoryId,
+  label,
+  onToggled,
+}: {
+  memoryId: string;
+  /** The path. Stored with the pin so the sidebar needs no fetch to draw it. */
+  label: string;
+  /** Told what the new state is, so a toast can say which way it went. */
+  onToggled?: (pinned: boolean) => void;
+}) {
+  const pins = usePins();
+  const pinned = pins.some((pin) => pin.id === memoryId);
+
+  return (
+    <button
+      type="button"
+      data-testid="pin"
+      aria-pressed={pinned}
+      aria-label={pinned ? `Unpin ${label}` : `Pin ${label}`}
+      title={pinned ? "Unpin" : "Pin to the sidebar"}
+      className={`inline-flex shrink-0 items-center justify-center rounded-sm p-0.5 transition-opacity duration-(--dur-state) ease-(--ease-out) group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 ${
+        pinned ? "text-accent opacity-100" : "text-ink-3 opacity-0 hover:text-accent"
+      }`}
+      onClick={(event) => {
+        // Nearly always inside a link or an expander.
+        event.preventDefault();
+        event.stopPropagation();
+        onToggled?.(togglePin({ id: memoryId, label }));
+      }}
+    >
+      <PinIcon size={12} strokeWidth={2} fill={pinned ? "currentColor" : "none"} />
+    </button>
+  );
+}

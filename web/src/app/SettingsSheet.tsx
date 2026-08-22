@@ -15,15 +15,15 @@
  * offering to forget it. Nothing here is sent anywhere, which is the first
  * thing the sheet says.
  *
- * It holds the search history and the recents list at M9.11.4. Pins and the
- * density control arrive with the features that create them, each in its own
- * commit, so that any one of them can be reverted without taking this sheet
- * apart.
+ * It holds the search history, the recents list and pins. The density control
+ * arrives with the feature that creates it, in its own commit, so that any one
+ * of them can be reverted without taking this sheet apart.
  */
 
 import { useEffect, useRef, useState } from "react";
 
 import { clearHistory, readHistory } from "../lib/history";
+import { clearPins, getPins } from "../lib/pins";
 import { clearRecents, readRecents } from "../lib/recents";
 
 export function SettingsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -83,6 +83,7 @@ export function SettingsSheet({ open, onClose }: { open: boolean; onClose: () =>
 function StoredLocally() {
   const [history, setHistory] = useState(() => readHistory().length);
   const [recents, setRecents] = useState(() => readRecents().length);
+  const [pins, setPins] = useState(() => getPins().length);
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -104,6 +105,17 @@ function StoredLocally() {
           onClear={() => {
             clearRecents();
             setRecents(0);
+          }}
+        />
+        <StoredRow
+          label="pinned memories"
+          detail={`${pins} pinned`}
+          disabled={pins === 0}
+          onClear={() => {
+            // `clearPins` notifies its subscribers, so the sidebar's list
+            // empties as this runs rather than on the next navigation.
+            clearPins();
+            setPins(0);
           }}
         />
       </ul>

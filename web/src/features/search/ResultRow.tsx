@@ -27,6 +27,7 @@ import { ExplanationPanel } from "./Explanation";
 import type { Verdict } from "../../api/client";
 import { SplitOpenButton } from "../../app/SplitPanel";
 import { MemoryPreview } from "../../components/MemoryPreview";
+import { PinButton } from "../../components/PinButton";
 
 interface Props {
   hit: MemoryHit;
@@ -141,6 +142,7 @@ export function ResultRow({
               of it. The comparison between hit three and hit four is the whole
               reason somebody is on this page. */}
           <SplitOpenButton memoryId={hit.memory_id} label={hit.external_key} />
+          <PinButton memoryId={hit.memory_id} label={hit.external_key} />
         </span>
         <Tag>{hit.kind}</Tag>
         <span className="hidden shrink-0 sm:inline">

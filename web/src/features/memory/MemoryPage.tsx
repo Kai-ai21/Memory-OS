@@ -24,6 +24,7 @@ import { CopyButton, Empty, Failure, Loading, Meta, SectionHeading, Tag } from "
 import { count, isCode, range, shortHash } from "../../lib/format";
 import { VersionTimeline } from "./VersionTimeline";
 import { recordRecent } from "../../lib/recents";
+import { PinButton } from "../../components/PinButton";
 
 export function MemoryPage({ id: given }: { id?: string } = {}) {
   /* The route's id, unless one was handed in. The split panel renders this
@@ -70,6 +71,7 @@ export function MemoryPage({ id: given }: { id?: string } = {}) {
           <span className="group flex items-baseline gap-1.5">
             <h1 className="font-mono text-base break-all text-ink">{detail.external_key}</h1>
             <CopyButton value={detail.external_key} label="path" />
+            <PinButton memoryId={detail.id} label={detail.external_key} />
           </span>
           <Tag>{detail.kind}</Tag>
           {detail.deleted_at ? <Tag>deleted</Tag> : null}

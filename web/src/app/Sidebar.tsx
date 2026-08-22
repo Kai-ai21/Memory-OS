@@ -52,6 +52,7 @@ import {
   LogOut,
   MoreHorizontal,
   PanelLeft,
+  Pin as PinIcon,
   Plus,
   Search,
   SlidersHorizontal,
@@ -60,6 +61,7 @@ import {
 import { api } from "../api/client";
 import { count } from "../lib/format";
 import { Button } from "../components/primitives";
+import { usePins } from "../lib/pins";
 import { TOGGLE_DETAILS_EVENT } from "./CommandPalette";
 import { GROUPS, HOME, inGroup, type ViewRoute } from "./routes";
 
@@ -139,6 +141,8 @@ export function Sidebar({
         className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 py-3"
         aria-label="Views"
       >
+        <Pinned onNavigate={onNavigate} />
+
         <div className="nav-group flex flex-col">
           <NewConversation onNavigate={onNavigate} />
           <Item route={HOME} onNavigate={onNavigate} />
@@ -170,6 +174,105 @@ export function Sidebar({
       <Footer onNavigate={onNavigate} onShortcuts={onShortcuts} onSettings={onSettings} />
     </div>
   );
+}
+
+
+/**
+ * Pinned memories, above everything.
+ *
+ * **Above New chat, which is the only place it can go.** The point of a pin is
+ * that it is the first thing you see; put below the nav it becomes a fifth
+ * group nobody scrolls to, and the feature is a list you have to go and find —
+ * which is what pinning was supposed to replace.
+ *
+ * Collapsible and remembered, because four pins is a useful list and twelve is
+ * a nav that has been pushed off the bottom of the panel. Absent entirely when
+ * nothing is pinned: an empty "pinned" heading on every screen of a fresh
+ * install is a permanent advertisement for a feature, and the nav is not the
+ * place for one.
+ *
+ * The labels come from `localStorage`, not from a fetch. A pin list that has to
+ * resolve four ids before it can paint is not the instant thing it was for.
+ */
+function Pinned({ onNavigate }: { onNavigate?: () => void }) {
+  const pins = usePins();
+  const [open, setOpen] = useState(readPinsOpen);
+
+  if (pins.length === 0) return null;
+
+  return (
+    <div className="nav-group flex flex-col">
+      <button
+        type="button"
+        className="nav-item w-full text-left"
+        aria-expanded={open}
+        aria-controls="sidebar-pins"
+        data-testid="pins-toggle"
+        onClick={() => {
+          setOpen((current) => {
+            writePinsOpen(!current);
+            return !current;
+          });
+        }}
+      >
+        <PinIcon {...GLYPH} />
+        <span>Pinned</span>
+        <span className="shortcut ml-auto">{pins.length}</span>
+        <ChevronDown
+          size={16}
+          strokeWidth={1.5}
+          aria-hidden
+          className={`transition-transform duration-(--dur-state) ease-(--ease-out) ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+
+      {open ? (
+        <div id="sidebar-pins" className="flex flex-col" data-testid="pins-list">
+          {pins.map((pin) => (
+            <NavLink
+              key={pin.id}
+              to={`/memory/${pin.id}`}
+              onClick={onNavigate}
+              title={pin.label}
+              className={({ isActive }) => `nav-item ${isActive ? "nav-item-on" : ""}`}
+            >
+              {/* Indented past the glyph column rather than given a glyph of
+                  its own. Fourteen identical pin icons down the panel is a
+                  column of noise; the indent says "these belong to the row
+                  above" using space instead. */}
+              <span className="w-[18px] shrink-0" aria-hidden />
+              <span className="truncate font-mono text-xs">{basename(pin.label)}</span>
+            </NavLink>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** The last path segment. A sidebar 264px wide cannot show `src/a/b/c/d.py`. */
+function basename(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
+const PINS_OPEN_KEY = "memo:sidebar-pins-open";
+
+/** Defaults to open: a collapsed pin list on first use looks like no pins. */
+function readPinsOpen(): boolean {
+  try {
+    return window.localStorage.getItem(PINS_OPEN_KEY) !== "closed";
+  } catch {
+    return true;
+  }
+}
+
+function writePinsOpen(open: boolean): void {
+  try {
+    window.localStorage.setItem(PINS_OPEN_KEY, open ? "open" : "closed");
+  } catch {
+    // Still a preference for this session.
+  }
 }
 
 /**
