@@ -631,10 +631,19 @@
     font-family: var(--font-mono);
   }
 
+  /* **The ring is the one in the base layer, and this rule no longer removes
+   * it.** It used to read `outline: none` plus a 3px `accent-soft` box-shadow,
+   * which is the single most common way a design system ends up with two focus
+   * treatments: the fields get one look and every button, link and menu item
+   * gets another, and neither is wrong on its own. Worse, it hung off `:focus`
+   * rather than `:focus-visible`, so the soft ring appeared on mouse clicks
+   * too — and the outline it suppressed was the one keyboard users needed.
+   *
+   * What is left is the border colour, which is not a ring and is worth
+   * keeping on plain `:focus`: it says "you are typing in here" to somebody who
+   * clicked, without competing with the ring drawn for somebody who tabbed. */
   .field:focus {
     border-color: var(--color-accent);
-    box-shadow: 0 0 0 3px var(--color-accent-soft);
-    outline: none;
   }
 
   /* The search box: the primary act of the application. A panel rather than a
@@ -655,10 +664,9 @@
     color: var(--color-ink-3);
   }
 
+  /* The same correction as `.field` above, for the same reason. */
   .field-prominent:focus {
     border-color: var(--color-accent);
-    box-shadow: 0 0 0 3px var(--color-accent-soft);
-    outline: none;
   }
 
   /* Secondary, and deliberately unchanged by M9.8: flat, a hairline, no blur

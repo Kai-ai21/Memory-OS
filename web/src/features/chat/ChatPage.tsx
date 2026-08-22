@@ -717,7 +717,17 @@ function Composer({
       /* `surface` with a hairline, and an accent focus ring when you are typing
          into it. Flat: the composer is the one thing on the chat screen that is
          a control rather than content, and the border is what says so. */
-      className={`panel sticky bottom-4 relative flex flex-col gap-2 p-4 transition-shadow duration-(--dur-state) ease-(--ease-out) focus-within:border-accent focus-within:shadow-[0_0_0_3px_var(--color-accent-soft)] ${
+      /* **The panel carries the focus ring, and the textarea inside it does
+         not.** The composer is one control that happens to be built out of a
+         form, a textarea and two buttons; ringing the inner textarea would draw
+         a rectangle inside a box that is already outlined, and ringing both is
+         how a focus treatment starts looking like an error state.
+
+         The ring here is the same one the base layer draws on everything else —
+         2px accent, 2px offset — rather than the 3px `accent-soft` shadow this
+         replaced, so there is exactly one focus treatment in the application
+         and this is it, moved out one element. */
+      className={`panel sticky bottom-4 relative flex flex-col gap-2 p-4 transition-shadow duration-(--dur-state) ease-(--ease-out) focus-within:border-accent focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent ${
         over ? "border-accent" : ""
       }`}
       onSubmit={(event) => {
@@ -829,6 +839,7 @@ function Composer({
             ? "say something about these files, or just send them"
             : "postgres full-text search is faster than I expected"
         }
+        // No ring of its own: the panel above draws it. See the note there.
         className="w-full resize-y bg-transparent pr-14 font-prose text-base text-ink placeholder:font-mono placeholder:text-sm placeholder:text-ink-3 focus:outline-none"
         aria-label="Message"
         spellCheck={false}
