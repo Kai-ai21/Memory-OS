@@ -18,6 +18,7 @@ import { Filters } from "./Filters";
 import { ResultRow } from "./ResultRow";
 import { SearchHistory } from "./SearchHistory";
 import { recordQuery } from "../../lib/history";
+import { Arrive } from "../../components/Arrive";
 import {
   DEFAULT_K,
   isRunnable,
@@ -227,8 +228,11 @@ export function SearchPage() {
       ) : (
         <div ref={list} onKeyDown={onArrow} className="flex flex-col">
           {results.data?.hits.map((hit, index) => (
+            /* Staggered, capped at eight — see `Arrive`. The wrapper is a
+               plain div in a plain div, so it adds no semantics the list did
+               not already have. */
+            <Arrive key={hit.memory_id} index={index}>
             <ResultRow
-              key={hit.memory_id}
               hit={hit}
               rank={index + 1}
               queryText={state.q}
@@ -242,6 +246,7 @@ export function SearchPage() {
                 setVerdicts((current) => ({ ...current, [key]: verdict }))
               }
             />
+            </Arrive>
           ))}
         </div>
       )}

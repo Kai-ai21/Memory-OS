@@ -55,6 +55,7 @@ import { useCommands } from "./useCommands";
 import { useLiveEvents } from "./useLiveEvents";
 import { SplitOpenButton } from "../../app/SplitPanel";
 import { MemoryPreview } from "../../components/MemoryPreview";
+import { useArrive } from "../../lib/motion";
 
 /**
  * How often a message that is still indexing is asked about.
@@ -249,8 +250,11 @@ export function ChatPage() {
         ) : null}
 
         <ol className="flex flex-col gap-5" data-testid="messages">
-          {(messages.data ?? []).map((message) => (
-            <Turn key={message.id} message={message} />
+          {(messages.data ?? []).map((message, index) => (
+            /* The stagger is passed to `Turn` rather than wrapped around it:
+               `Turn` renders its own `<li>`, and an `<li>` inside an `<li>` is
+               invalid and changes what a screen reader counts. */
+            <Turn key={message.id} message={message} index={index} />
           ))}
         </ol>
 
@@ -359,10 +363,14 @@ function Preamble() {
  * the answer larger would say it matters more than what you wrote, which is
  * backwards — the answer is derived and the message is the corpus.
  */
-function Turn({ message }: { message: ChatMessage }) {
+function Turn({ message, index = 0 }: { message: ChatMessage; index?: number }) {
+  // Staggered by position, capped — see `lib/motion`. Applied to the `<li>`
+  // this already renders rather than to a wrapper.
+  const arrive = useArrive(index);
+
   if (message.role === "assistant") {
     return (
-      <li data-testid="message">
+      <li data-testid="message" {...arrive}>
         <Answer message={message} />
       </li>
     );
@@ -374,7 +382,11 @@ function Turn({ message }: { message: ChatMessage }) {
   const superseded = message.superseded_by !== null;
 
   return (
-    <li className="flex flex-col gap-2" data-testid="message">
+    <li
+      className={`flex flex-col gap-2 ${arrive.className ?? ""}`}
+      style={arrive.style}
+      data-testid="message"
+    >
       <div className="flex flex-wrap items-baseline gap-3">
         <span className="meta-label text-ink-2">you</span>
         <RelativeTime value={message.created_at} className="meta text-ink-3" />

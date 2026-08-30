@@ -278,6 +278,10 @@
    * nowhere, which is what reads as sluggish at any duration.
    */
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  /* M9.12's two arrival durations. Both under 200ms — see the note on
+   * `--dur-travel`; the same argument applies to something appearing. */
+  --dur-route: 180ms;
+  --dur-arrive: 180ms;
   --dur-state: 150ms;
   --dur-travel: 200ms;
 

@@ -148,7 +148,7 @@
    *
    * `transform` on a pseudo-element rather than `background-position` on the
    * block itself: a moving gradient repaints the element every frame, and a
-   * translated overlay is composited. Slow — 1.8s — because a fast shimmer on
+   * translated overlay is composited. Slow — 1.6s — because a fast shimmer on
    * a screen full of skeleton rows is a strobe. */
   @keyframes shimmer {
     from {
@@ -163,6 +163,62 @@
    * because a confirmation appearing is a state change and not a journey.
    * `motion-safe:` on the element means this never runs for anybody who asked
    * for stillness; the toast still appears, it just does not travel. */
+  /* --- M9.12: the arrival keyframes -----------------------------------------
+   * Three, and between them they are every animation this milestone adds.
+   *
+   * **Only `opacity` and `transform`.** Both are composited — the browser can
+   * run them off the main thread and without touching layout — so a staggered
+   * list of fifty rows costs the same as one row. `height`, `top` and `width`
+   * force layout on every frame, and a list that reflows fifty times while it
+   * arrives is the thing that makes an animated interface feel slower than a
+   * static one. There is a test that reads this file and fails on any keyframe
+   * touching a layout property.
+   *
+   * All three are collapsed to nothing by the `prefers-reduced-motion` block
+   * further up; none of them needs its own guard.
+   */
+
+  /* A route change. The outgoing screen is gone before this runs — see
+   * `RouteTransition` for why there is no exit animation. */
+  @keyframes route-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* One item of a list arriving. 8px rather than the route's 4px: a single row
+   * has to read as *arriving* against its neighbours, where a whole screen only
+   * has to read as settling. */
+  @keyframes arrive {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* The caret at the end of a streaming answer. A hard on/off at 1.06s, which
+   * is roughly a terminal cursor — a smooth fade reads as a pulsing dot rather
+   * than as a cursor waiting for the next token. */
+  @keyframes caret {
+    0%,
+    49% {
+      opacity: 1;
+    }
+    50%,
+    100% {
+      opacity: 0;
+    }
+  }
+
   @keyframes toast-in {
     from {
       opacity: 0;
@@ -295,6 +351,34 @@
     box-shadow:
       0 1px 2px 0 rgb(15 23 42 / 6%),
       0 8px 24px -8px rgb(15 23 42 / 14%);
+  }
+
+  /* The entering screen and the entering row.
+   *
+   * `backwards` fill on the staggered one so an item with a 240ms delay is
+   * *invisible* during the wait rather than drawn at full opacity and then
+   * yanked back to zero when its animation starts — which is the flicker that
+   * makes most hand-rolled staggers look broken.
+   */
+  .route-in {
+    animation: route-in var(--dur-route) var(--ease-out) both;
+  }
+
+  .arrive {
+    animation: arrive var(--dur-arrive) var(--ease-out) backwards;
+  }
+
+  /* The streaming caret. An inline block rather than a pseudo-element on the
+   * paragraph, because it has to sit after the last character of a wrapping
+   * run of text and follow it as the text grows. */
+  .caret {
+    display: inline-block;
+    width: 0.5ch;
+    height: 1em;
+    margin-left: 0.1em;
+    vertical-align: text-bottom;
+    background-color: var(--color-ink-2);
+    animation: caret 1.06s step-end infinite;
   }
 
   /* --- The send button ------------------------------------------------------
@@ -758,7 +842,7 @@
       var(--color-surface) 50%,
       transparent 100%
     );
-    animation: shimmer 1.8s var(--ease-out) infinite;
+    animation: shimmer 1.6s var(--ease-out) infinite;
   }
 
   /* The button spinner. A ring with a quarter of it in the accent, turning.
