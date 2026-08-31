@@ -148,7 +148,7 @@
    *
    * `transform` on a pseudo-element rather than `background-position` on the
    * block itself: a moving gradient repaints the element every frame, and a
-   * translated overlay is composited. Slow — 1.8s — because a fast shimmer on
+   * translated overlay is composited. Slow — 1.6s — because a fast shimmer on
    * a screen full of skeleton rows is a strobe. */
   @keyframes shimmer {
     from {
@@ -163,6 +163,62 @@
    * because a confirmation appearing is a state change and not a journey.
    * `motion-safe:` on the element means this never runs for anybody who asked
    * for stillness; the toast still appears, it just does not travel. */
+  /* --- M9.12: the arrival keyframes -----------------------------------------
+   * Three, and between them they are every animation this milestone adds.
+   *
+   * **Only `opacity` and `transform`.** Both are composited — the browser can
+   * run them off the main thread and without touching layout — so a staggered
+   * list of fifty rows costs the same as one row. `height`, `top` and `width`
+   * force layout on every frame, and a list that reflows fifty times while it
+   * arrives is the thing that makes an animated interface feel slower than a
+   * static one. There is a test that reads this file and fails on any keyframe
+   * touching a layout property.
+   *
+   * All three are collapsed to nothing by the `prefers-reduced-motion` block
+   * further up; none of them needs its own guard.
+   */
+
+  /* A route change. The outgoing screen is gone before this runs — see
+   * `RouteTransition` for why there is no exit animation. */
+  @keyframes route-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* One item of a list arriving. 8px rather than the route's 4px: a single row
+   * has to read as *arriving* against its neighbours, where a whole screen only
+   * has to read as settling. */
+  @keyframes arrive {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* The caret at the end of a streaming answer. A hard on/off at 1.06s, which
+   * is roughly a terminal cursor — a smooth fade reads as a pulsing dot rather
+   * than as a cursor waiting for the next token. */
+  @keyframes caret {
+    0%,
+    49% {
+      opacity: 1;
+    }
+    50%,
+    100% {
+      opacity: 0;
+    }
+  }
+
   @keyframes toast-in {
     from {
       opacity: 0;
@@ -295,6 +351,58 @@
     box-shadow:
       0 1px 2px 0 rgb(15 23 42 / 6%),
       0 8px 24px -8px rgb(15 23 42 / 14%);
+  }
+
+  /* The press on the send button.
+   *
+   * A CSS transition on `:active` rather than a keyframe, so the scale tracks
+   * the pointer being held rather than firing a fixed animation and finishing
+   * while the button is still down. `transform` only — a button that changed
+   * `width` on press would reflow the composer under it on every send.
+   *
+   * `:active` is the correct selector here even though `:focus` is not for
+   * rings: this is the button being pressed, which is exactly what `:active`
+   * means, and it fires for a keyboard Enter as well as a click.
+   */
+  .press {
+    transition: transform var(--dur-state) var(--ease-out);
+  }
+
+  .press:active:not(:disabled) {
+    transform: scale(0.92);
+    /* No duration on the way down: the response to a press has to be
+     * immediate, and 150ms of easing into a pressed state is the thing that
+     * makes a button feel unresponsive. The transition above still runs on the
+     * way back up, which is the half that should be eased. */
+    transition-duration: 0s;
+  }
+
+  /* The entering screen and the entering row.
+   *
+   * `backwards` fill on the staggered one so an item with a 240ms delay is
+   * *invisible* during the wait rather than drawn at full opacity and then
+   * yanked back to zero when its animation starts — which is the flicker that
+   * makes most hand-rolled staggers look broken.
+   */
+  .route-in {
+    animation: route-in var(--dur-route) var(--ease-out) both;
+  }
+
+  .arrive {
+    animation: arrive var(--dur-arrive) var(--ease-out) backwards;
+  }
+
+  /* The streaming caret. An inline block rather than a pseudo-element on the
+   * paragraph, because it has to sit after the last character of a wrapping
+   * run of text and follow it as the text grows. */
+  .caret {
+    display: inline-block;
+    width: 0.5ch;
+    height: 1em;
+    margin-left: 0.1em;
+    vertical-align: text-bottom;
+    background-color: var(--color-ink-2);
+    animation: caret 1.06s step-end infinite;
   }
 
   /* --- The send button ------------------------------------------------------
@@ -758,7 +866,7 @@
       var(--color-surface) 50%,
       transparent 100%
     );
-    animation: shimmer 1.8s var(--ease-out) infinite;
+    animation: shimmer 1.6s var(--ease-out) infinite;
   }
 
   /* The button spinner. A ring with a quarter of it in the accent, turning.
@@ -943,12 +1051,40 @@
     transition:
       color var(--dur-state) var(--ease-out),
       background-color var(--dur-state) var(--ease-out);
+    /* Leaving is immediate — see the hover rule below for why only one
+     * direction is delayed. */
+    transition-delay: 0s;
   }
 
   .nav-item svg {
     flex-shrink: 0;
     color: var(--color-ink-3);
     transition: color var(--dur-state) var(--ease-out);
+    transition-delay: 0s;
+  }
+
+  /* --- Hover intent, in one property ---------------------------------------
+   * Dragging the cursor diagonally across the panel used to light up every row
+   * it crossed, which is fourteen highlights nobody asked for on the way to a
+   * scrollbar.
+   *
+   * **A `transition-delay`, not a JavaScript timer.** A transition takes its
+   * delay from the state being entered: hovering uses the 60ms below, and
+   * un-hovering uses the `0s` on the base rule. So the highlight waits 60ms
+   * before it begins, and leaves the instant the cursor does — which is exactly
+   * "cancelled if the cursor leaves", for free, with no timer per row, nothing
+   * to clean up on unmount, and no state.
+   *
+   * A timer would also have been *wrong* in a way this is not: it would gate
+   * the `:hover` state itself, so a row could be hovered-but-not-highlighted
+   * and the CSS would disagree with the DOM about what the cursor is on.
+   *
+   * 60ms is under the ~100ms that reads as lag, and above the time a moving
+   * cursor spends over any one 38px row.
+   */
+  .nav-item:hover,
+  .nav-item:hover svg {
+    transition-delay: 60ms;
   }
 
   .nav-item:hover {

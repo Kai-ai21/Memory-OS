@@ -55,6 +55,9 @@ import { useCommands } from "./useCommands";
 import { useLiveEvents } from "./useLiveEvents";
 import { SplitOpenButton } from "../../app/SplitPanel";
 import { MemoryPreview } from "../../components/MemoryPreview";
+import { useArrive } from "../../lib/motion";
+import { useStickToBottom } from "../../lib/scroll";
+import { useReducedMotion } from "../../lib/motion";
 
 /**
  * How often a message that is still indexing is asked about.
@@ -190,13 +193,16 @@ export function ChatPage() {
     },
   });
 
-  useEffect(() => {
-    // Optional-called, because jsdom has no layout and therefore no
-    // `scrollIntoView`. Guarding here rather than shimming it in the test setup:
-    // this is a nicety of a conversation view, and a missing scroll must never
-    // be the reason a test about what was stored fails.
-    bottom.current?.scrollIntoView?.({ block: "end" });
-  }, [messages.data?.length, send.isPending]);
+  /* **Follows the bottom only while the reader is already there.** This used to
+     be an unconditional `scrollIntoView`, which meant scrolling up to re-read
+     an earlier answer was undone by the next token of the one still streaming.
+     See `lib/scroll` — the flag is set by the reader's own scrolling and by
+     nothing else.
+
+     `answer.state.text` is in the list now as well as the message count: a
+     streaming answer grows without the transcript changing length, and that is
+     precisely the case where the old effect never fired at all. */
+  useStickToBottom(bottom, [messages.data?.length, send.isPending, answer.state.text]);
 
   function open(id: string) {
     setParams((was) => {
@@ -249,8 +255,11 @@ export function ChatPage() {
         ) : null}
 
         <ol className="flex flex-col gap-5" data-testid="messages">
-          {(messages.data ?? []).map((message) => (
-            <Turn key={message.id} message={message} />
+          {(messages.data ?? []).map((message, index) => (
+            /* The stagger is passed to `Turn` rather than wrapped around it:
+               `Turn` renders its own `<li>`, and an `<li>` inside an `<li>` is
+               invalid and changes what a screen reader counts. */
+            <Turn key={message.id} message={message} index={index} />
           ))}
         </ol>
 
@@ -258,7 +267,19 @@ export function ChatPage() {
             a question takes seconds to come back — so the typed text is drawn
             immediately and the answer replaces it when it arrives. */}
         {send.isPending ? <Pending text={send.variables} /> : null}
-        {send.isError ? <Failure error={send.error} /> : null}
+        {/* **The failed message replaces the generic `Failure` panel.** A
+            `Failure` said the request broke and dropped the words on the floor;
+            this keeps them, says which message did not send, and offers the
+            one action that helps. The error text is still available — it is on
+            the retry path, and a second failure shows the same row again. */}
+        {send.isError ? (
+          <Pending
+            text={send.variables ?? ""}
+            failed
+            onRetry={() => send.mutate(send.variables ?? "")}
+            onDismiss={() => send.reset()}
+          />
+        ) : null}
         {answer.state.question !== null ? (
           <StreamingAnswer state={answer.state} />
         ) : null}
@@ -359,10 +380,14 @@ function Preamble() {
  * the answer larger would say it matters more than what you wrote, which is
  * backwards — the answer is derived and the message is the corpus.
  */
-function Turn({ message }: { message: ChatMessage }) {
+function Turn({ message, index = 0 }: { message: ChatMessage; index?: number }) {
+  // Staggered by position, capped — see `lib/motion`. Applied to the `<li>`
+  // this already renders rather than to a wrapper.
+  const arrive = useArrive(index);
+
   if (message.role === "assistant") {
     return (
-      <li data-testid="message">
+      <li data-testid="message" {...arrive}>
         <Answer message={message} />
       </li>
     );
@@ -374,7 +399,11 @@ function Turn({ message }: { message: ChatMessage }) {
   const superseded = message.superseded_by !== null;
 
   return (
-    <li className="flex flex-col gap-2" data-testid="message">
+    <li
+      className={`flex flex-col gap-2 ${arrive.className ?? ""}`}
+      style={arrive.style}
+      data-testid="message"
+    >
       <div className="flex flex-wrap items-baseline gap-3">
         <span className="meta-label text-ink-2">you</span>
         <RelativeTime value={message.created_at} className="meta text-ink-3" />
@@ -661,8 +690,76 @@ function Answer({ message }: { message: ChatMessage }) {
   );
 }
 
-/** The message that has been sent and not yet come back. */
-function Pending({ text }: { text: string }) {
+/**
+ * The message that has been sent, in the two states it can be in before it is
+ * a real row in the transcript.
+ *
+ * **In flight, it is your own words at 60%.** Waiting for a round trip before
+ * showing somebody their own message makes a fast system feel slow, and the
+ * dimming is what distinguishes "shown because you typed it" from "shown
+ * because the server has it".
+ *
+ * **Failed, it turns `warn` and offers a retry.** This is the state that
+ * matters and the one an optimistic UI usually gets wrong: a message that was
+ * drawn immediately and then silently disappeared is worse than one that never
+ * appeared, because the reader believes it was sent. It stays on screen, in the
+ * colour this palette reserves for "this needs you", with the text preserved
+ * and one button.
+ *
+ * `warn` rather than `deny`: the message is not lost and nothing is broken —
+ * it did not send, and it can be sent again. `deny` is for a refusal or a
+ * destructive act, and spending it here would make a flaky connection look
+ * like a rejection.
+ *
+ * Not a toast. A failure belongs inline where the problem is — see the header
+ * of `lib/toast`, which is the rule this follows.
+ */
+function Pending({
+  text,
+  failed = false,
+  onRetry,
+  onDismiss,
+}: {
+  text: string;
+  failed?: boolean;
+  onRetry?: () => void;
+  onDismiss?: () => void;
+}) {
+  if (failed) {
+    return (
+      <div
+        className="flex flex-col gap-2 border-l-2 border-warn pl-3"
+        data-testid="pending-failed"
+        role="alert"
+      >
+        <span className="meta-label text-ink-2">you</span>
+        {/* The words are kept. Losing what somebody typed because the network
+            dropped is the actual damage here; the failure is recoverable and
+            retyping is not. */}
+        <p className="whitespace-pre-wrap text-ink">{text}</p>
+        <div className="flex items-baseline gap-3">
+          <p className="meta text-warn">not sent</p>
+          <button
+            type="button"
+            className="meta text-accent hover:underline"
+            data-testid="pending-retry"
+            onClick={onRetry}
+          >
+            retry
+          </button>
+          <button
+            type="button"
+            className="meta text-ink-3 hover:text-ink"
+            data-testid="pending-discard"
+            onClick={onDismiss}
+          >
+            discard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-2 opacity-60" data-testid="pending">
       <span className="meta-label text-ink-2">you</span>
@@ -680,6 +777,9 @@ function Pending({ text }: { text: string }) {
  * the way any long document is — and a single-line field would silently flatten
  * it.
  */
+/** How long the composer's text takes to fade out on send. */
+const CLEAR_FADE_MS = 100;
+
 function Composer({
   onSend,
   busy,
@@ -694,7 +794,9 @@ function Composer({
   onRemove: (index: number) => void;
 }) {
   const [text, setText] = useState("");
+  const [clearing, setClearing] = useState(false);
   const [over, setOver] = useState(false);
+  const reduced = useReducedMotion();
   const picker = useRef<HTMLInputElement>(null);
   const limits = useQuery({
     queryKey: ["attach-limits"],
@@ -718,7 +820,25 @@ function Composer({
   function submit() {
     if (!sendable) return;
     onSend(text.trim());
-    setText("");
+
+    /* **The text fades out over 100ms rather than vanishing.** The most-used
+       interaction in the application, and the one where an instant swap reads
+       as a glitch — the words are there and then they are not, with nothing
+       connecting the two states.
+
+       The value is cleared when the fade ends rather than immediately, so the
+       text is still on screen while it fades. Under reduced motion the fade
+       class is never applied and the clear happens on the same tick, because a
+       100ms wait with nothing visibly happening is just latency. */
+    if (reduced) {
+      setText("");
+      return;
+    }
+    setClearing(true);
+    window.setTimeout(() => {
+      setText("");
+      setClearing(false);
+    }, CLEAR_FADE_MS);
   }
 
   return (
@@ -849,7 +969,9 @@ function Composer({
             : "postgres full-text search is faster than I expected"
         }
         // No ring of its own: the panel above draws it. See the note there.
-        className="w-full resize-y bg-transparent pr-14 font-prose text-base text-ink placeholder:font-mono placeholder:text-sm placeholder:text-ink-3 focus:outline-none"
+        className={`w-full resize-y bg-transparent pr-14 font-prose text-base text-ink transition-opacity duration-(--dur-clear) ease-(--ease-out) placeholder:font-mono placeholder:text-sm placeholder:text-ink-3 focus:outline-none ${
+          clearing ? "opacity-0" : "opacity-100"
+        }`}
         aria-label="Message"
         spellCheck={false}
         autoFocus
@@ -877,7 +999,7 @@ function Composer({
           that was already empty. */}
       <Button
         type="submit"
-        className="pearl absolute right-4 bottom-4 flex size-9 items-center justify-center"
+        className="pearl press absolute right-4 bottom-4 flex size-9 items-center justify-center"
         /* `sendable` is already false while `busy` — see above — so the
            disabling is not doubled up here. `loading` is what swaps the arrow
            for the spinner, and it is the whole visible difference between "you

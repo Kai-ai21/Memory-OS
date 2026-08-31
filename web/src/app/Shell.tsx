@@ -40,6 +40,7 @@ import { PanelLeft } from "lucide-react";
 import { Icon } from "../components/Icon";
 import { BackgroundLayer } from "./BackgroundLayer";
 import { CommandPalette } from "./CommandPalette";
+import { RouteTransition } from "./RouteTransition";
 import { SettingsSheet } from "./SettingsSheet";
 import { ShortcutsSheet } from "./ShortcutsSheet";
 import { SplitPanel } from "./SplitPanel";
@@ -268,7 +269,10 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
             `lib/mask`, so this stays true when the column changes width and
             nothing has to be told about it. */}
         <div className="mx-auto max-w-300" data-particle-shelter>
-          {children}
+          {/* Inside the shelter and inside `main`, so the sidebar, the
+              background layer and the split panel are all outside it. Chrome
+              that did not change must not animate as though it did. */}
+          <RouteTransition>{children}</RouteTransition>
         </div>
       </main>
 

@@ -20,8 +20,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type ChatSession } from "../../api/client";
 import { Button, Failure } from "../../components/primitives";
 import { RelativeTime } from "../../components/RelativeTime";
-import { count } from "../../lib/format";
+
 import { useToast } from "../../lib/toast";
+import { Count } from "../../components/Count";
 
 export function SessionRail({
   current,
@@ -132,7 +133,7 @@ function Row({
           {session.title ?? <span className="text-ink-3 italic">untitled</span>}
         </span>
         <span className="meta text-ink-3">
-          <RelativeTime value={session.last_activity} /> · {count(session.message_count)}{" "}
+          <RelativeTime value={session.last_activity} /> · <Count value={session.message_count} />{" "}
           {session.message_count === 1 ? "message" : "messages"}
           {session.archived_at ? " · archived" : ""}
         </span>

@@ -83,6 +83,12 @@ export function StreamingAnswer({ state }: { state: AnswerStream }) {
             data-testid="answer-text"
           >
             {state.text}
+            {/* Only while tokens are still arriving. A caret left blinking on a
+                finished answer says the interface is still working, which is
+                the one thing it must not say once it has stopped. */}
+            {state.running && !state.done && !state.interrupted ? (
+              <span className="caret" data-testid="caret" aria-hidden />
+            ) : null}
           </p>
         ) : null}
 
