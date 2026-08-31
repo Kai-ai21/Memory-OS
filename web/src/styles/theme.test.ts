@@ -150,6 +150,47 @@ describe("hairlines, not shadows", () => {
     }
   });
 
+  it("animates only opacity and transform, never a layout property", () => {
+    /* **The constraint that makes the motion affordable.** `opacity` and
+     * `transform` are composited — the browser runs them off the main thread
+     * without touching layout — so a staggered list of fifty rows costs about
+     * what one row costs. `width`, `height`, `top` and friends force layout on
+     * every frame, and a list that reflows fifty times while it arrives is
+     * exactly what makes an animated interface feel *slower* than a static one.
+     *
+     * Read off the keyframes rather than trusted, because this is the kind of
+     * rule that survives review and dies to one convenient `height` six months
+     * later.
+     */
+    const FORBIDDEN =
+      /^\s*(width|height|top|left|right|bottom|margin|padding|inset)[-a-z]*\s*:/gm;
+
+    const blocks = [...INDEX_CSS.matchAll(/@keyframes\s+([\w-]+)\s*\{/g)].map((match) => {
+      // Brace-match from the opening brace so nested percentage steps are
+      // included rather than cut at the first `}`.
+      const start = match.index + match[0].length - 1;
+      let depth = 0;
+      let end = start;
+      for (let i = start; i < INDEX_CSS.length; i += 1) {
+        if (INDEX_CSS[i] === "{") depth += 1;
+        if (INDEX_CSS[i] === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            end = i;
+            break;
+          }
+        }
+      }
+      return { name: match[1], body: INDEX_CSS.slice(start, end) };
+    });
+
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      const offenders = block.body.match(FORBIDDEN) ?? [];
+      expect(offenders, `@keyframes ${block.name} animates a layout property`).toEqual([]);
+    }
+  });
+
   it("uses the hairline token for panel edges", () => {
     expect(rule(".panel")).toMatch(/--color-rule/);
   });

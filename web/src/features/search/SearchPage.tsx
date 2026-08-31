@@ -19,6 +19,7 @@ import { ResultRow } from "./ResultRow";
 import { SearchHistory } from "./SearchHistory";
 import { recordQuery } from "../../lib/history";
 import { Arrive } from "../../components/Arrive";
+import { Count } from "../../components/Count";
 import {
   DEFAULT_K,
   isRunnable,
@@ -196,7 +197,9 @@ export function SearchPage() {
             embed {results.data.timing.embed_ms}ms · search {results.data.timing.search_ms}ms ·
             total {results.data.timing.total_ms}ms
           </span>
-          <span>{count(results.data.hits.length)} memories</span>
+          <span>
+            <Count value={results.data.hits.length} /> memories
+          </span>
           <span>
             {count(results.data.hits.reduce((sum, hit) => sum + hit.matched_chunks.length, 0))}{" "}
             chunks matched

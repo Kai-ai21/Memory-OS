@@ -282,6 +282,8 @@
    * `--dur-travel`; the same argument applies to something appearing. */
   --dur-route: 180ms;
   --dur-arrive: 180ms;
+  /* The composer emptying itself on send. */
+  --dur-clear: 100ms;
   --dur-state: 150ms;
   --dur-travel: 200ms;
 

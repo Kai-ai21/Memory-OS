@@ -59,11 +59,12 @@ import {
 } from "lucide-react";
 
 import { api } from "../api/client";
-import { count } from "../lib/format";
+
 import { Button } from "../components/primitives";
 import { usePins } from "../lib/pins";
 import { TOGGLE_DETAILS_EVENT } from "./CommandPalette";
 import { GROUPS, HOME, inGroup, type ViewRoute } from "./routes";
+import { Count } from "../components/Count";
 
 /** Every glyph in this panel, at one size and one weight. */
 const GLYPH = { size: 18, strokeWidth: 1.5 } as const;
@@ -175,7 +176,6 @@ export function Sidebar({
     </div>
   );
 }
-
 
 /**
  * Pinned memories, above everything.
@@ -679,15 +679,18 @@ function CorpusFigures() {
 
   return (
     <dl className="flex flex-col gap-0.5" data-testid="sidebar-figures">
-      <Row label="memories" value={count(stats.data.current_memories)} />
-      <Row label="chunks" value={count(stats.data.chunks)} />
-      <Row label="entities" value={count(stats.data.entities)} />
-      <Row label="relations" value={count(stats.data.relationships)} />
+      {/* The four figures that move while you work. Ingesting a folder changes
+          chunks by thousands, which snaps; typing a note changes memories by
+          one, which counts — see `Count` for why the threshold matters. */}
+      <Row label="memories" value={stats.data.current_memories} />
+      <Row label="chunks" value={stats.data.chunks} />
+      <Row label="entities" value={stats.data.entities} />
+      <Row label="relations" value={stats.data.relationships} />
     </dl>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value }: { label: string; value: number }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
       {/* `ink-2` rather than `ink-3`, and only inside this panel. Muted
@@ -697,7 +700,9 @@ function Row({ label, value }: { label: string; value: string }) {
           cursor trail, and `ink-3` falls to 3.2:1 under the head of it. One
           step darker holds AA against everything the background can do. */}
       <dt className="meta text-ink-2">{label}</dt>
-      <dd className="meta text-ink">{value}</dd>
+      <dd className="meta text-ink">
+        <Count value={value} />
+      </dd>
     </div>
   );
 }
