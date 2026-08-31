@@ -56,6 +56,7 @@ import { useLiveEvents } from "./useLiveEvents";
 import { SplitOpenButton } from "../../app/SplitPanel";
 import { MemoryPreview } from "../../components/MemoryPreview";
 import { useArrive } from "../../lib/motion";
+import { useStickToBottom } from "../../lib/scroll";
 
 /**
  * How often a message that is still indexing is asked about.
@@ -191,13 +192,16 @@ export function ChatPage() {
     },
   });
 
-  useEffect(() => {
-    // Optional-called, because jsdom has no layout and therefore no
-    // `scrollIntoView`. Guarding here rather than shimming it in the test setup:
-    // this is a nicety of a conversation view, and a missing scroll must never
-    // be the reason a test about what was stored fails.
-    bottom.current?.scrollIntoView?.({ block: "end" });
-  }, [messages.data?.length, send.isPending]);
+  /* **Follows the bottom only while the reader is already there.** This used to
+     be an unconditional `scrollIntoView`, which meant scrolling up to re-read
+     an earlier answer was undone by the next token of the one still streaming.
+     See `lib/scroll` — the flag is set by the reader's own scrolling and by
+     nothing else.
+
+     `answer.state.text` is in the list now as well as the message count: a
+     streaming answer grows without the transcript changing length, and that is
+     precisely the case where the old effect never fired at all. */
+  useStickToBottom(bottom, [messages.data?.length, send.isPending, answer.state.text]);
 
   function open(id: string) {
     setParams((was) => {
