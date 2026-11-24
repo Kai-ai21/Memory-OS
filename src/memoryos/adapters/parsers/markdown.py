@@ -27,18 +27,28 @@ class MarkdownParser(Parser):
         self, data: bytes, *, media_type: str | None, external_key: str
     ) -> ParsedDocument:
         raw, codec = decode(data)
-        post = frontmatter.loads(raw)
-
         metadata: dict[str, Any] = {"codec": codec}
-        if post.metadata:
-            metadata["front_matter"] = _jsonable(dict(post.metadata))
+        try:
+            post = frontmatter.loads(raw)
+            front_matter: dict[str, Any] = dict(post.metadata)
+            body = post.content
+        except Exception:
+            # Malformed front matter is a typo in somebody's note, and until
+            # M12.2 it failed the whole document permanently: no chunks, never
+            # searchable. The file is kept whole instead, front matter and all,
+            # and the fact is recorded rather than hidden.
+            front_matter = {}
+            body = raw
+            metadata["front_matter_error"] = True
+        if front_matter:
+            metadata["front_matter"] = _jsonable(front_matter)
 
         # The markdown source is kept as-is. Stripping it to plain prose would
         # discard heading syntax, list markers, and code fences — all of which
         # an embedding model reads as signal about what kind of text this is.
-        text = normalize_text(post.content)
+        text = normalize_text(body)
 
-        title = _title_from(post.metadata) or _first_h1(text)
+        title = _title_from(front_matter) or _first_h1(text)
 
         return ParsedDocument(
             text=text,

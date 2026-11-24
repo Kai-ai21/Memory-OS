@@ -879,6 +879,11 @@ class ExtractedEntity:
     confidence: float
     char_start: int
     char_end: int
+    # M12.2. True when the extractor found the *name* for certain but not what
+    # kind of thing it names — a `[[wiki link]]` says "this is a thing", never
+    # "this is a person". Storage then resolves the type against entities that
+    # already exist by that name, and uses `type` only when none does.
+    type_is_guess: bool = False
 
 
 @dataclass(frozen=True, slots=True)

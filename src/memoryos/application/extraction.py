@@ -30,7 +30,7 @@ from enum import StrEnum, auto
 from uuid import UUID
 
 import structlog
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -277,6 +277,14 @@ class ExtractEntities:
         """
         canonical = canonical_entity_name(candidate.name)
         entity_type = candidate.type.value
+        if candidate.type_is_guess:
+            # The name is certain and the type is not (M12.2: a `[[link]]`). An
+            # entity this name already resolves to — of any type, merges
+            # followed — is what the author meant; only a name never seen
+            # before gets the guessed type.
+            existing_id = await _existing_by_name(session, canonical)
+            if existing_id is not None:
+                return existing_id, False
 
         inserted = await session.execute(
             insert(models.Entity)
@@ -348,6 +356,35 @@ async def _follow_merge(session: AsyncSession, entity_id: UUID, depth: int = 8) 
         current = row.merged_into_id
     logger.warning("extract.merge_chain_too_deep", entity_id=str(entity_id))
     return current
+
+
+async def _existing_by_name(session: AsyncSession, canonical: str) -> UUID | None:
+    """The entity a type-less name resolves to, or None if the name is new.
+
+    Of every entity with this canonical name, the one most mentioned — the
+    name's established meaning in this corpus — and if that one was merged
+    away by M3.2, its winner.
+    """
+    mentioned = (
+        select(func.count(models.EntityMention.id))
+        .where(models.EntityMention.entity_id == models.Entity.id)
+        .correlate(models.Entity)
+        .scalar_subquery()
+    )
+    row = (
+        await session.execute(
+            select(models.Entity.id, models.Entity.merged_into_id)
+            .where(models.Entity.canonical_name == canonical)
+            .order_by(mentioned.desc(), models.Entity.id)
+            .limit(1)
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    entity_id, merged_into = row
+    if merged_into is None:
+        return entity_id  # type: ignore[no-any-return]
+    return await _follow_merge(session, merged_into)
 
 
 def _offsets_hold(chunk_text: str, candidate: ExtractedEntity) -> bool:

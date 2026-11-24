@@ -12,6 +12,8 @@ from memoryos.adapters.auth.argon2_hasher import Argon2PasswordHasher
 from memoryos.adapters.blobs.filesystem import FilesystemBlobStore
 from memoryos.adapters.chunking.structural import StructuralChunker
 from memoryos.adapters.connectors.filesystem import FilesystemConnector
+from memoryos.adapters.connectors.registry import ConnectorsByKind
+from memoryos.adapters.connectors.vault import VaultConnector
 from memoryos.adapters.db.embedding_cache import PostgresEmbeddingCache
 from memoryos.adapters.db.engine import Database
 from memoryos.adapters.db.job_queue import PostgresJobQueue
@@ -22,6 +24,7 @@ from memoryos.adapters.embedding.sentence_transformers import (
     SentenceTransformerEmbedder,
     build_embedder,
 )
+from memoryos.adapters.extraction.links import LinkedExtractor
 from memoryos.adapters.extraction.llm import LlmEntityExtractor
 from memoryos.adapters.graph.neo4j_store import Neo4jGraphStore
 from memoryos.adapters.llm.errors import MissingApiKey
@@ -70,6 +73,7 @@ from memoryos.application.sync import SyncSource
 from memoryos.config import Settings
 from memoryos.crypto import Cipher, load_master_key
 from memoryos.domain.events import Event
+from memoryos.domain.values import SourceKind
 
 logger = structlog.get_logger(__name__)
 
@@ -79,7 +83,8 @@ class Container:
     settings: Settings
     database: Database
     blobs: FilesystemBlobStore
-    connector: FilesystemConnector
+    # One connector per walkable kind (M12.2); `SyncSource` sees only the port.
+    connector: ConnectorsByKind
     queue: PostgresJobQueue
     parsers: ParserRegistry
     embedder: SentenceTransformerEmbedder
@@ -117,7 +122,12 @@ class Container:
             settings=settings,
             database=database,
             blobs=blobs,
-            connector=FilesystemConnector(blobs),
+            connector=ConnectorsByKind(
+                {
+                    SourceKind.FILESYSTEM: FilesystemConnector(blobs),
+                    SourceKind.VAULT: VaultConnector(blobs),
+                }
+            ),
             queue=PostgresJobQueue(database.session_factory),
             parsers=build_parser_registry(),
             embedder=embedder,
@@ -229,7 +239,7 @@ class Container:
             ]
         )
 
-    def optional_extractor(self) -> LlmEntityExtractor | None:
+    def optional_extractor(self) -> LinkedExtractor:
         """The extractor, or None when no API key is configured.
 
         The worker builds the whole registry at startup, so a raising
@@ -242,20 +252,26 @@ class Container:
         try:
             return self.extractor()
         except MissingApiKey as exc:
+            # Still not None (M12.2): `[[links]]` need no model, so a keyless
+            # deployment extracts the entities its author marked by hand.
             logger.warning("container.extraction_unavailable", error=str(exc))
-            return None
+            return LinkedExtractor(None)
 
-    def extractor(self) -> LlmEntityExtractor:
+    def extractor(self) -> LinkedExtractor:
         """Entity extraction over whichever provider is configured.
 
         Built here rather than at `build` for the reason `answer` is: it
         constructs a language model, which raises without an API key, and a
         deployment with no key must still have working ingestion and search.
         """
-        return LlmEntityExtractor(
-            self.language_model(),
-            batch_size=self.settings.extraction_batch_size,
-            max_tokens=self.settings.extraction_max_tokens,
+        # Wrapped so `[[links]]` in notes become mentions alongside the model's
+        # (M12.2). One extractor, one version per memory: see `LinkedExtractor`.
+        return LinkedExtractor(
+            LlmEntityExtractor(
+                self.language_model(),
+                batch_size=self.settings.extraction_batch_size,
+                max_tokens=self.settings.extraction_max_tokens,
+            )
         )
 
     def relationships(self) -> ExtractRelationships:

@@ -3526,7 +3526,7 @@ export interface components {
          *     performed, arriving by way of the reconciliation that exists to be correct.
          * @enum {string}
          */
-        SourceKind: "filesystem" | "chat" | "upload";
+        SourceKind: "filesystem" | "chat" | "upload" | "vault";
         /** SourceOut */
         SourceOut: {
             /**

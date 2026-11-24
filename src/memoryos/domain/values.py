@@ -105,6 +105,11 @@ class SourceKind(StrEnum):
     FILESYSTEM = auto()
     CHAT = auto()
     UPLOAD = auto()
+    # M12.2. A notes vault (Obsidian, Logseq, or a plain folder of Markdown).
+    # Walked by the filesystem machinery, so it is a directory like FILESYSTEM;
+    # its own kind because what a vault *means* differs — front matter states
+    # when a note was written, and a daily note's file name is its date.
+    VAULT = auto()
 
 
 class MemoryKind(StrEnum):
