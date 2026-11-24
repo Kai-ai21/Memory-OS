@@ -1,5 +1,5 @@
 .PHONY: up down install test test-unit test-slow lint fmt typecheck check run worker \
-        phase1-check types web web-install test-web dev restore full-check
+        phase1-check types web web-install test-web dev stop reset restore full-check
 
 up:        ; docker compose up -d
 down:      ; docker compose down
@@ -10,7 +10,6 @@ test-slow: ; pytest -m slow
 lint:      ; ruff check .
 fmt:       ; ruff format . && ruff check --fix .
 typecheck: ; mypy
-check: lint typecheck test
 run:       ; uvicorn "memoryos.api.app:create_app" --factory --reload
 worker:    ; memoryos worker
 
@@ -33,19 +32,31 @@ types:
 web:      ; cd web && npm run dev
 test-web: ; cd web && npm run test -- --run
 
-# API and UI together, for actually using the thing. The UI talks to the API
-# across an origin, so MEMOS_CORS_ORIGINS has to name it; that is the whole
-# reason the setting exists.
+# --------------------------------------------------------------------------
+# One command to run it, one to stop it (M12.0)
+# --------------------------------------------------------------------------
 #
-# The trap kills the API when the foreground dev server exits, so Ctrl-C does not
-# leave uvicorn holding port 8000.
-dev:
-	@MEMOS_CORS_ORIGINS='["http://localhost:5173"]' \
-	  uv run uvicorn "memoryos.api.app:create_app" --factory --port 8000 & \
-	  API=$$!; trap "kill $$API 2>/dev/null" EXIT INT TERM; \
-	  cd web && npm run dev
+# `dev` waits for the containers' healthchecks, applies pending migrations, then
+# runs the API, the worker and Vite with their output prefixed, and stops all
+# three on Ctrl-C. The containers are left running so the next start is fast;
+# `stop` brings everything down and keeps the volumes. `reset` is the
+# destructive one, and asks first. All three live in scripts/dev.sh.
+dev:   ; @bash scripts/dev.sh dev
+stop:  ; @bash scripts/dev.sh stop
+reset: ; @bash scripts/dev.sh reset
+
+# The full verification block: containers, migrations, lint, types, both test
+# suites, the build, API-type drift, doctor, verify-replay, graph verify, the
+# retrieval evaluation, and the refusal. Runs every step and prints a summary.
+# `make lint typecheck test` is the quick Python-only subset.
+check: ; @bash scripts/check.sh
 
 # Everything Phase 1 built, in one command, from an empty volume.
+#
+# **Broken since M11.1, and left as it was by M12.0.** It destroys the volume and
+# never creates an account, so the first scoped insert (`source add`) fails its
+# `user_id` NOT NULL. `restore` and `full-check` build on it and fail the same
+# way. `make reset` is the working rebuild; see "Current state" in the README.
 #
 # Ordered so that each step can only pass if the previous one really worked: the
 # corpus has to ingest before `doctor` can find nothing wrong with it, and it has
