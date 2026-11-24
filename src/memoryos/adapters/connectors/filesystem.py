@@ -147,7 +147,7 @@ class FilesystemConnector(Connector):
         self._blobs = blob_store
 
     async def observe(self, source: Source, *, full: bool) -> AsyncIterator[ObservedItem]:
-        config = FilesystemConfig.from_dict(source.config)
+        config = self._config(source.config)
         seen: dict[str, list[Any]] = dict(source.cursor.get(CURSOR_SEEN) or {})
 
         log = logger.bind(source=source.name, root=str(config.root), full=full)
@@ -172,19 +172,32 @@ class FilesystemConnector(Connector):
                 log.warning("file.skipped", key=external_key, reason=str(exc))
                 continue
 
+            occurred_at, provenance = await self._dated(path, external_key, stat)
             yield ObservedItem(
                 external_key=external_key,
                 content_hash=content_hash,
                 byte_size=byte_size,
                 media_type=mimetypes.guess_type(path.name)[0],
-                # mtime is weak evidence of when something happened, but it is
-                # evidence. Recorded honestly with its provenance rather than
-                # defaulted to now(), which would be a fabrication.
-                occurred_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
-                occurred_at_source=TimeProvenance.FILESYSTEM,
+                occurred_at=occurred_at,
+                occurred_at_source=provenance,
                 read_bytes=_reader(path),
                 fingerprint=fingerprint(stat),
             )
+
+    async def _dated(
+        self, path: Path, external_key: str, stat: os.stat_result
+    ) -> tuple[datetime | None, TimeProvenance]:
+        """When this item happened, and how that is known.
+
+        mtime is weak evidence of when something happened, but it is evidence.
+        Recorded honestly with its provenance rather than defaulted to now(),
+        which would be a fabrication. The one place a walk of a different kind
+        of tree may know better (M12.2's vault reads front matter).
+        """
+        return datetime.fromtimestamp(stat.st_mtime, tz=UTC), TimeProvenance.FILESYSTEM
+
+    def _config(self, raw: dict[str, Any]) -> FilesystemConfig:
+        return FilesystemConfig.from_dict(raw)
 
     def _collect(
         self, config: FilesystemConfig, log: structlog.BoundLogger

@@ -15,6 +15,7 @@ from memoryos.adapters.connectors.filesystem import (
     DEFAULT_INCLUDE,
     DEFAULT_MAX_FILE_BYTES,
 )
+from memoryos.adapters.connectors.vault import VAULT_EXCLUDE, VAULT_INCLUDE
 from memoryos.adapters.db import models
 from memoryos.adapters.db.job_queue import enqueue_in
 from memoryos.adapters.db.repositories import SqlAlchemySourceRepository
@@ -98,8 +99,12 @@ async def create_source(body: CreateSource, container: ContainerDep) -> models.S
             name=body.name,
             config={
                 "root": str(Path(body.root).expanduser().resolve()),
-                "include": body.include or DEFAULT_INCLUDE,
-                "exclude": body.exclude or DEFAULT_EXCLUDE,
+                # Each walkable kind's own defaults (M12.2): a vault takes only
+                # Markdown and leaves out `.obsidian/` and the trash.
+                "include": body.include
+                or (VAULT_INCLUDE if body.kind is SourceKind.VAULT else DEFAULT_INCLUDE),
+                "exclude": body.exclude
+                or (VAULT_EXCLUDE if body.kind is SourceKind.VAULT else DEFAULT_EXCLUDE),
                 "max_file_bytes": body.max_file_bytes or DEFAULT_MAX_FILE_BYTES,
                 "follow_symlinks": body.follow_symlinks,
             },

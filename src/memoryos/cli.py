@@ -32,6 +32,7 @@ from memoryos.adapters.connectors.filesystem import (
     DEFAULT_MAX_FILE_BYTES,
     FilesystemConfig,
 )
+from memoryos.adapters.connectors.vault import default_config as vault_default_config
 from memoryos.adapters.db import models
 from memoryos.adapters.db.engine import Database
 from memoryos.adapters.db.job_queue import enqueue_in
@@ -245,12 +246,55 @@ def _job_types_or_exit(raw: str | None) -> frozenset[JobType]:
     return frozenset(wanted)
 
 
-async def add_source(settings: Settings, *, kind: str, name: str, root: Path) -> int:
+#: The kinds a connector walks, and therefore the kinds `source add` and
+#: `sync` accept. Chat and uploads are pushed, never synced.
+WALKABLE_KINDS = (SourceKind.FILESYSTEM, SourceKind.VAULT)
+
+
+async def add_source(
+    settings: Settings,
+    *,
+    kind: str,
+    name: str,
+    root: Path,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+) -> int:
+    source_kind = SourceKind(kind)
+    if source_kind not in WALKABLE_KINDS:
+        print(
+            f"a {source_kind.value} source is not walked, so it cannot be added "
+            f"with a root; walkable kinds: {', '.join(k.value for k in WALKABLE_KINDS)}"
+        )
+        return 1
+    resolved = Path(root).expanduser().resolve()
+    if not resolved.is_dir():
+        print(f"not a directory: {resolved}")
+        return 1
+    # Each kind's own defaults: a vault leaves out `.obsidian/` and the trash
+    # and takes only Markdown, where a repository takes code too.
+    config = (
+        vault_default_config(resolved)
+        if source_kind is SourceKind.VAULT
+        else {
+            "root": str(resolved),
+            "include": DEFAULT_INCLUDE,
+            "exclude": DEFAULT_EXCLUDE,
+            "max_file_bytes": DEFAULT_MAX_FILE_BYTES,
+            "follow_symlinks": False,
+        }
+    )
+    # Given patterns replace the defaults rather than adding to them, so what is
+    # stored is exactly the rule the walk will apply.
+    if include:
+        config["include"] = list(include)
+    if exclude:
+        config["exclude"] = list(exclude)
+
     container = Container.build(settings)
     try:
         async with container.database.session_factory.begin() as session:
             repository = SqlAlchemySourceRepository(session)
-            source_kind = SourceKind(kind)
             if await repository.get_by_name(source_kind, name) is not None:
                 print(f"source {name!r} already exists")
                 return 1
@@ -259,13 +303,7 @@ async def add_source(settings: Settings, *, kind: str, name: str, root: Path) ->
                 id=new_id(),
                 kind=source_kind,
                 name=name,
-                config={
-                    "root": str(Path(root).expanduser().resolve()),
-                    "include": DEFAULT_INCLUDE,
-                    "exclude": DEFAULT_EXCLUDE,
-                    "max_file_bytes": DEFAULT_MAX_FILE_BYTES,
-                    "follow_symlinks": False,
-                },
+                config=config,
             )
             await repository.add(source)
         print(f"added source {name!r} ({source.id}) at {source.config['root']}")
@@ -2765,11 +2803,14 @@ async def run_sync(settings: Settings, *, name: str, full: bool) -> int:
     container = Container.build(settings)
     try:
         async with container.database.session_factory() as session:
-            source = await SqlAlchemySourceRepository(session).get_by_name(
-                SourceKind.FILESYSTEM, name
-            )
+            repository = SqlAlchemySourceRepository(session)
+            source = None
+            for kind in WALKABLE_KINDS:
+                source = await repository.get_by_name(kind, name)
+                if source is not None:
+                    break
         if source is None:
-            print(f"no source named {name!r}")
+            print(f"no walkable source named {name!r}")
             return 1
 
         report = await container.sync()(source.id, full=full)
@@ -5903,9 +5944,23 @@ def build_parser() -> argparse.ArgumentParser:
     source_commands = source.add_subparsers(dest="source_command", required=True)
 
     source_add = source_commands.add_parser("add", help="register a source")
-    source_add.add_argument("--kind", default=SourceKind.FILESYSTEM.value)
+    source_add.add_argument(
+        "--kind",
+        default=SourceKind.FILESYSTEM.value,
+        choices=[kind.value for kind in WALKABLE_KINDS],
+    )
     source_add.add_argument("--name", required=True)
     source_add.add_argument("--root", required=True, type=Path)
+    source_add.add_argument(
+        "--include",
+        action="append",
+        help="glob to include (repeatable); replaces the kind's defaults",
+    )
+    source_add.add_argument(
+        "--exclude",
+        action="append",
+        help="glob to exclude (repeatable); replaces the kind's defaults",
+    )
 
     source_commands.add_parser("list", help="list registered sources")
 
@@ -7452,7 +7507,14 @@ def _dispatch(args: argparse.Namespace, settings: Settings) -> int:
     if args.command == "source":
         if args.source_command == "add":
             return asyncio.run(
-                add_source(settings, kind=args.kind, name=args.name, root=args.root)
+                add_source(
+                    settings,
+                    kind=args.kind,
+                    name=args.name,
+                    root=args.root,
+                    include=args.include,
+                    exclude=args.exclude,
+                )
             )
         if args.source_command == "delete":
             return asyncio.run(

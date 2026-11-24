@@ -4888,7 +4888,8 @@
         "enum": [
           "filesystem",
           "chat",
-          "upload"
+          "upload",
+          "vault"
         ],
         "title": "SourceKind",
         "type": "string"

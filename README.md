@@ -125,8 +125,20 @@ uv run memoryos stats
 `--only` matters with an LLM key configured: embedding also queues one entity
 extraction per memory, and those are live model calls against a rate-limited free
 tier. Left to the background worker they finish eventually; drained in the
-foreground they can take hours. Point `--root` at any other directory to ingest
-your own notes, and drop files into the chat to add them one at a time.
+foreground they can take hours. Drop files into the chat to add them one at a
+time.
+
+**A notes vault** (Obsidian, Logseq, or any folder of Markdown) is its own source
+kind, because a note usually knows when it was written:
+
+```bash
+uv run memoryos source add --kind vault --name notes --root ~/path/to/vault
+uv run memoryos sync --source notes --full
+```
+
+See [Vaults](#vaults) for how notes are dated and what `[[links]]` become. Any other
+directory works as `--kind filesystem`; either kind takes repeatable `--include` and
+`--exclude` globs, which replace that kind's defaults.
 
 ### When something is in the way
 
@@ -156,6 +168,7 @@ M12.1 fixed them.
 | `memoryos ask "what is our AWS billing setup"` | Fails as configured: `.env` pins a Groq model that no longer exists (404). With the default `openai/gpt-oss-120b` it declines, and it answers an in-corpus question from the passages. But that model cites as `【n】`, which the verifier does not parse, and its decline cited a passage, so the verifier does not label it a refusal and `make check` fails this step. |
 | `memoryos verify-replay` | Fails, unrelated to encryption: the rebuild aborts on a scanned PDF attachment that cannot be parsed. |
 | `memoryos graph verify` | Diverged: the graph is empty and Postgres has 320 memories. `memoryos graph rebuild` is the documented fix. |
+| Phases 4–8 on this corpus | Still starved. M12.2 built a vault connector to feed them, but no real vault has been ingested yet, so the timeline is one month, there are no gaps or patterns, and every user-model dimension reports insufficient evidence. See [Vaults](#vaults) for what a vault would and would not change. |
 | `make phase1-check`, `make restore`, `make full-check` | Start with `docker compose down -v` and never create an account, so on a fresh volume the first insert fails the `user_id` NOT NULL. `make reset` is the working path. |
 
 ## What genuinely works
@@ -325,7 +338,7 @@ retrospective are in the sections below, in the order they were built.
 | **9 — Interface** | M9.0–M9.6, M9.8–M9.12 | The UI in `web/`. Documented in its commit messages rather than here. |
 | **10 — Chat** | M10.0–M10.4 | Chat as the front door, sessions, attachments, streaming answers, removing a memory from chat. Commit messages. |
 | **11 — Accounts** | M11.0–M11.2 | [Authentication](#authentication), [User scoping](#user-scoping), [Encryption at rest](#encryption-at-rest) |
-| **12 — Operations** | M12.0–M12.1 | [Running MEMO](#running-memo), [Current state](#current-state), [How reads and writes see it](#how-reads-and-writes-see-it) |
+| **12 — Operations** | M12.0–M12.2 | [Running MEMO](#running-memo), [Current state](#current-state), [How reads and writes see it](#how-reads-and-writes-see-it), [Vaults](#vaults) |
 
 Not merged: M9.7 (branch `m9.7-polish`, superseded by M9.8 onward). Not built:
 M9.13 (density and reading) and M9.14 (responsive and accessibility); a density
@@ -6561,6 +6574,81 @@ Bytes live in a content-addressed blob store under `MEMOS_BLOB_ROOT` (default `.
 fanned out as `ab/cd/abcdef…`. Writes go to a temp file and are moved into place with
 `os.replace`, so a crash can never leave a partial file at a path that claims to be a specific
 hash.
+
+## Vaults
+
+M12.2. A second walkable source: a notes vault, meaning an Obsidian or Logseq
+vault or a plain folder of Markdown. It exists because this corpus is one codebase
+whose files all carry the same checkout mtime, and every feature from Phase 4 on
+needs dates, people and decisions that a repository does not have.
+
+### Built behind the one port, and what that took
+
+`VaultConnector` is a `FilesystemConnector` that answers one question differently.
+The walk, the `(mtime, size)` cursor, content addressing, include/exclude and the
+full-sweep deletion are the filesystem's, unchanged. **Nothing downstream of the
+`Connector` port needed a special case for it.** `SyncSource`, ingestion,
+normalization, chunking, embedding and search never ask what kind of source they
+are handling.
+
+The coupling was above the port. The container gave `SyncSource` one hard-wired
+`FilesystemConnector`, so the choice of connector now happens in `ConnectorsByKind`,
+keyed by `Source.kind`. Three entry points assumed filesystem: `memoryos sync` looked
+sources up by that kind only, and `source add` and `POST /sources` wrote filesystem
+defaults (code files included) whatever kind was asked for. The schema needed one
+CHECK widened (migration 0035).
+
+### How a note is dated
+
+| Evidence | Provenance |
+| --- | --- |
+| Front matter `date`, else `created`, else `updated` | `declared`: the author wrote it. `date` comes first because it is what a note says it is about; `updated` is last because the date someone last touched a file is the weakest of the three. |
+| A daily note's file name: `2024-03-15.md`, or Logseq's `journals/2024_03_15.md` | `parsed`: read from a name the author chose on purpose, not stated in the note. |
+| Neither | `filesystem`: the mtime, as for any directory. |
+
+A declared date with no time zone is taken as UTC midnight: the note said which day,
+not which instant. Years outside 1900–2100 are treated as typos. Malformed front matter
+falls through to the next rule, and the Markdown parser now keeps such a note whole
+instead of failing it. Until M12.2 one YAML typo meant a note was never chunked, in
+any source.
+
+A vault's defaults include only Markdown and exclude `.obsidian/`, `.trash/` and
+Logseq's backups.
+
+### `[[links]]` are entity mentions
+
+A link is a property of the text, so it is read where entities are read, not in the
+connector. `LinkedExtractor` wraps the configured extractor and adds every `[[Target]]`,
+`[[Target|alias]]`, `[[Target#heading]]` and `![[embed]]` in a note. It skips code
+fences, and `[[1, 2]]` in Python is not a note, so code is never scanned. It wraps
+rather than runs alongside because a memory holds one extractor version's mentions,
+and a second extractor would delete the first's. Wrapping changes the extractor
+version, so memories extracted before M12.2 are extracted again.
+
+A link states a name but not a type: `[[Alice]]` may be a person or the title of
+another note. So link entities are marked `type_is_guess`, and storage resolves them
+against the entities that already exist (by canonical name, any type, M3.2 merges
+followed). The type falls back to `concept` only for a name nothing has typed yet.
+Links cost no model call, so a deployment without an API key still extracts them.
+
+### What it does not do, yet
+
+No real vault has been ingested, because there is none on the development machine.
+On this corpus the starved features are therefore unchanged. From what each one
+reports it needs:
+
+- **The timeline and gaps** need real dates. A vault with front matter or daily notes
+  gives them, and this is the one change a vault guarantees.
+- **The user model's habits** need three distinct observations over dated items. It
+  currently has 39 dated items and one candidate, so declared dates are what it is
+  waiting for.
+- **Workflows** need entity extraction over half the corpus. Links reach that without
+  the free tier's rate limit, but only for what notes actually link.
+- **Patterns** need three decisions sharing an assumption. A vault adds memories, not
+  decisions: they still come from `memoryos decide`, or from `decisions suggest`
+  proposing them out of passages for review. A vault full of decisions gives that
+  extractor something to propose from, and nothing is recorded until someone accepts
+  a proposal.
 
 ## Endpoints
 
