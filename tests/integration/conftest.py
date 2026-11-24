@@ -28,6 +28,7 @@ from memoryos.application.replay import ReplayCorpus
 from memoryos.application.sync import SyncSource
 from memoryos.application.verification import Snapshot, snapshot
 from memoryos.config import Settings
+from memoryos.crypto import Cipher, load_master_key
 from memoryos.domain.entities import Memory, RawArtifact, Source
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobType
@@ -286,7 +287,11 @@ def build_harness(
             # to stand in for, and a rebuild enqueues a model call per memory.
             enqueue_followup=False,
         ),
-        make_shadow=lambda: PostgresShadowSchema(settings.database_url),
+        # With the cipher, as the container builds it: a shadow rebuild
+        # normalizes, and normalizing encrypts (M12.1).
+        make_shadow=lambda: PostgresShadowSchema(
+            settings.database_url, cipher=Cipher(master_key=load_master_key())
+        ),
         blobs=blobs,
     )
     return Harness(

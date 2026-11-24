@@ -13,12 +13,13 @@ from typing import Any, cast
 from uuid import UUID
 
 import structlog
-from sqlalchemy import CursorResult, delete, select, update
+from sqlalchemy import CursorResult, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memoryos.adapters.db import models
 from memoryos.adapters.db.job_queue import enqueue_in
 from memoryos.adapters.parsers.registry import ParserRegistry
+from memoryos.application.encryption import Sealer, sealer_for
 from memoryos.application.ports import BlobStore, Chunker, ParsedDocument, TextChunk
 from memoryos.domain.ids import new_id
 from memoryos.domain.jobs import JobSpec, JobType, PermanentError
@@ -212,25 +213,54 @@ class NormalizeMemory:
                 # version needs either.
                 return None
 
-            moved = cast(
-                "CursorResult[Any]",
-                await session.execute(
-                    update(models.MemoryChunk)
-                    .where(models.MemoryChunk.memory_id == previous.id)
-                    .values(memory_id=memory.id)
-                ),
-            ).rowcount
+            sealer = await sealer_for(session, memory.id)
+            if sealer.active:
+                # **Encrypted chunks cannot simply change owner.** Each one is
+                # sealed under its memory's data key with that memory's id bound
+                # in, so a chunk moved to a new memory id no longer
+                # authenticates. They are read (decrypted by the session) and
+                # sealed again under this version's key; the embedding and the
+                # search vector travel with the row untouched.
+                adopted = (
+                    (
+                        await session.execute(
+                            select(models.MemoryChunk).where(
+                                models.MemoryChunk.memory_id == previous.id
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                for chunk in adopted:
+                    plaintext = chunk.content
+                    chunk.memory_id = memory.id
+                    chunk.content = sealer.seal(plaintext)
+                moved = len(adopted)
+            else:
+                moved = cast(
+                    "CursorResult[Any]",
+                    await session.execute(
+                        update(models.MemoryChunk)
+                        .where(models.MemoryChunk.memory_id == previous.id)
+                        .values(memory_id=memory.id)
+                    ),
+                ).rowcount
 
             row = await session.get(models.Memory, memory.id)
             if row is None:
                 raise PermanentError(f"memory vanished during normalization: {memory.id}")
-            self._apply_document(row, document, fresh_hash)
+            self._apply_document(row, document, fresh_hash, sealer)
             return moved
 
     def _apply_document(
-        self, row: models.Memory, document: ParsedDocument, fresh_hash: ContentHash
+        self,
+        row: models.Memory,
+        document: ParsedDocument,
+        fresh_hash: ContentHash,
+        sealer: Sealer,
     ) -> None:
-        row.content = document.text
+        row.content = sealer.seal(document.text)
         row.normalized_hash = fresh_hash.value
         # The connector guessed the kind from a file suffix; the parser that
         # actually read the bytes knows better.
@@ -261,7 +291,11 @@ class NormalizeMemory:
             if row is None:
                 raise PermanentError(f"memory vanished during normalization: {memory.id}")
 
-            self._apply_document(row, document, fresh_hash)
+            # Encrypted here, as it is written, rather than by a later pass:
+            # until M12.1 nothing on this path encrypted, so every memory
+            # ingested after `encrypt-existing` was stored in plaintext.
+            sealer = await sealer_for(session, memory.id)
+            self._apply_document(row, document, fresh_hash, sealer)
 
             # This memory's chunks, and those of any superseded version of the
             # same item. A version nobody can retrieve leaving chunks behind is
@@ -284,7 +318,15 @@ class NormalizeMemory:
                         id=new_id(),
                         memory_id=memory.id,
                         ordinal=chunk.ordinal,
-                        content=chunk.text,
+                        content=sealer.seal(chunk.text),
+                        # From the plaintext still in hand. The trigger derives
+                        # the vector itself for plaintext and keeps this one for
+                        # ciphertext, because it cannot read the envelope.
+                        search_vector=(
+                            func.to_tsvector("english", chunk.text)
+                            if sealer.active
+                            else None
+                        ),
                         token_count=chunk.token_count,
                         char_start=chunk.char_start,
                         char_end=chunk.char_end,

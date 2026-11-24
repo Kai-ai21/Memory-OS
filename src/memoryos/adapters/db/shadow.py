@@ -77,6 +77,7 @@ from sqlalchemy.schema import (
 )
 
 from memoryos.adapters.db.models import Base
+from memoryos.adapters.db.plaintext import session_info
 from memoryos.application.ports import ShadowWorkspace
 from memoryos.application.replay import (
     CACHE_TABLE,
@@ -85,6 +86,7 @@ from memoryos.application.replay import (
     SOURCE_OF_TRUTH_TABLES,
     USER_AUTHORED_TABLES,
 )
+from memoryos.crypto import Cipher
 
 logger = structlog.get_logger(__name__)
 
@@ -102,9 +104,13 @@ class UnclassifiedTable(RuntimeError):
 
 
 class PostgresShadowSchema(ShadowWorkspace):
-    def __init__(self, url: str, *, echo: bool = False) -> None:
+    def __init__(
+        self, url: str, *, echo: bool = False, cipher: Cipher | None = None
+    ) -> None:
         self._url = url
         self._echo = echo
+        # A rebuild normalizes into these sessions, and normalizing encrypts.
+        self._cipher = cipher
         # Two engines: one on the default search path for the DDL that moves
         # tables between schemas, one pinned to the workspace for the rebuild.
         self._engine: AsyncEngine | None = None
@@ -144,7 +150,9 @@ class PostgresShadowSchema(ShadowWorkspace):
                 },
             )
             self._shadow_engine = engine
-            self._sessions = async_sessionmaker(engine, expire_on_commit=False)
+            self._sessions = async_sessionmaker(
+                engine, expire_on_commit=False, info=session_info(self._cipher)
+            )
         return self._sessions
 
     async def build_indexes(self) -> None:

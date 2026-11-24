@@ -137,25 +137,26 @@ your own notes, and drop files into the chat to add them one at a time.
 | `MEMOS_MASTER_KEY is not set` | Step 1. |
 | `port is already allocated` from Docker | Something else holds 5433, 7474 or 7687, often a local Postgres or Neo4j. |
 | `/health/ready` shows a null `pgvector_version` | The volume predates the init script: `make reset`, or see [Tests](#tests). |
+| Keyword search finds nothing, or excerpts read `enc:v1:…` | A corpus encrypted before M12.1. Run `uv run memoryos encrypt-existing --confirm` once; it is resumable and safe to repeat. |
 
 ## Current state
 
-The M12.0 audit, 2026-11-24, on the development corpus (320 memories, 3,587 chunks,
-one account). Everything here was found by running `make check`'s steps; none of
-it is fixed yet.
+Re-measured 2026-11-24 after M12.1, on the development corpus (320 memories,
+3,587 chunks, one account). The M12.0 audit found the first four rows broken;
+M12.1 fixed them.
 
 | Check | Result |
 | --- | --- |
-| ruff, mypy, pytest, vitest, `tsc -b`, build, `alembic check`, API types | **Pass.** One vitest case (`particles.test.tsx`, "never draws a particle above its own ceiling") takes ~2.6 s against a 5 s timeout and timed out once under load. |
-| **Encryption is applied only by `encrypt-existing`** | Nothing on the ingestion path encrypts: a fresh `make reset` corpus has 0 of 4,511 chunks encrypted. New memories, chat messages and uploads are stored in plaintext until `memoryos encrypt-existing --confirm` is run again. |
-| **Once encrypted, the read path returns ciphertext** | This development database *has* been through `encrypt-existing`. Search excerpts, reranker input and the passages sent to the model are `enc:v1:…` rather than text; nothing outside `application/encryption.py` decrypts. Vector search still works because the embeddings were computed from plaintext. |
-| **Keyword search is empty on the encrypted corpus** | 0 of 3,587 chunks have a `search_vector`, so hybrid retrieval is vector-only. On a fresh, unencrypted corpus all 4,511 chunks have one. |
-| `memoryos evaluate --compare var/baseline-hybrid.json` | On the development database: recall@10 **0.479** (baseline 0.863), MRR **0.443** (0.762), nDCG@10 **0.373** (0.744); 40 judged items point at the root `README.md`, which that corpus does not contain. On a fresh `make reset` corpus: recall@10 **0.595**, MRR **0.704**, nDCG@10 **0.547**, close to the M8.2 figures below. |
-| `memoryos ask "what is our AWS billing setup"` | **Did not refuse.** It failed: `.env` pins a Groq model that no longer exists (404). With the default model it does refuse, but the model only received ciphertext passages, so the refusal shows nothing about grounding. |
-| `memoryos doctor` | Fails, falsely: it tokenizes ciphertext, so it reports 2,815 chunks over the model window and 22 empty files with "no chunks". |
-| `memoryos verify-replay` | Fails. A chat upload's blob was in `web/var/blobs` (the M10.3 cwd bug); with that copied back, the rebuild aborts on a scanned PDF attachment that cannot be parsed. |
+| ruff, mypy, pytest, vitest, `tsc -b`, build, `alembic check`, API types | **Pass.** Two tests are timing-sensitive: `test_user_model.py::test_diff_reports_added_superseded_and_dismissed_between_two_dates` compares the host clock with the database's and failed once in a full run; `particles.test.tsx` ("never draws a particle above its own ceiling") takes ~2.6 s of a 5 s timeout and timed out once under load. |
+| Encryption on write | **Fixed in M12.1.** Content is sealed as `NormalizeMemory` writes it, before the insert. Until then only `encrypt-existing` encrypted, so new memories were stored in plaintext. |
+| Decryption on read | **Fixed in M12.1.** Every application session decrypts what it reads (`adapters/db/plaintext.py`). Before, search excerpts, reranker input and the passages sent to the model were `enc:v1:…`. |
+| Keyword search | **Repaired.** All 3,587 chunks have a `search_vector` again, rebuilt from plaintext by `memoryos encrypt-existing --confirm`; before, none did. |
+| `memoryos doctor` | **Healthy.** It had reported 2,815 oversized chunks and 22 "empty" files by measuring ciphertext. |
+| `memoryos evaluate --compare var/baseline-hybrid.json` | recall@10 **0.622**, MRR **0.635**, nDCG@10 **0.542** (0.479 / 0.443 / 0.373 before M12.1). 39 judged items point at the root `README.md`, which was permanently deleted on 2026-08-19 while M11.2 verified shredding; `memoryos sync --source self --full` brings it back. |
+| `memoryos ask "what is our AWS billing setup"` | Fails as configured: `.env` pins a Groq model that no longer exists (404). With the default `openai/gpt-oss-120b` it declines, and it answers an in-corpus question from the passages. But that model cites as `【n】`, which the verifier does not parse, and its decline cited a passage, so the verifier does not label it a refusal and `make check` fails this step. |
+| `memoryos verify-replay` | Fails, unrelated to encryption: the rebuild aborts on a scanned PDF attachment that cannot be parsed. |
 | `memoryos graph verify` | Diverged: the graph is empty and Postgres has 320 memories. `memoryos graph rebuild` is the documented fix. |
-| `make phase1-check`, `make restore`, `make full-check` | Start with `docker compose down -v` and never create an account, so on a fresh volume the first insert fails the `user_id` NOT NULL. Not run, because they destroy the volume. `make reset` is the working path. |
+| `make phase1-check`, `make restore`, `make full-check` | Start with `docker compose down -v` and never create an account, so on a fresh volume the first insert fails the `user_id` NOT NULL. `make reset` is the working path. |
 
 ## What genuinely works
 
@@ -324,7 +325,7 @@ retrospective are in the sections below, in the order they were built.
 | **9 — Interface** | M9.0–M9.6, M9.8–M9.12 | The UI in `web/`. Documented in its commit messages rather than here. |
 | **10 — Chat** | M10.0–M10.4 | Chat as the front door, sessions, attachments, streaming answers, removing a memory from chat. Commit messages. |
 | **11 — Accounts** | M11.0–M11.2 | [Authentication](#authentication), [User scoping](#user-scoping), [Encryption at rest](#encryption-at-rest) |
-| **12 — Operations** | M12.0 | [Running MEMO](#running-memo), [Current state](#current-state) |
+| **12 — Operations** | M12.0–M12.1 | [Running MEMO](#running-memo), [Current state](#current-state), [How reads and writes see it](#how-reads-and-writes-see-it) |
 
 Not merged: M9.7 (branch `m9.7-polish`, superseded by M9.8 onward). Not built:
 M9.13 (density and reading) and M9.14 (responsive and accessibility); a density
@@ -4119,10 +4120,11 @@ M1.1's resolution was crypto-shredding. This is it.
 
 ### The shape
 
-**As built, encryption is applied by `memoryos encrypt-existing --confirm`, not on
-write.** New memories are stored in plaintext until that command is run again, and
-once content is encrypted the search and answer paths do not decrypt it. See
-[Current state](#current-state).
+**Since M12.1, content is encrypted as it is written and decrypted as it is
+read.** `NormalizeMemory` seals each memory and its chunks before inserting them,
+and every application session decrypts the two columns transparently, the way
+M11.1 scopes them. Before M12.1, neither happened: only `encrypt-existing`
+encrypted, and nothing decrypted. See [How reads and writes see it](#how-reads-and-writes-see-it).
 
 Envelope encryption. Each memory gets a random 256-bit data key; content is
 encrypted with it; the key is encrypted under a master key from
@@ -4167,6 +4169,7 @@ Encrypted: `memories.content`, `memory_chunks.content`.
 | Titles, paths, `external_key` | Used for identity and dedupe | File names and folder structure are often the whole story. |
 | Hashes, sizes, timestamps | Identity, dedupe, ordering | When you worked, how much, on what cadence. |
 | **Blob contents** | Not implemented | The original bytes of every ingested file, in `var/blobs`. |
+| **Chat messages** (`chat_messages.content`) | Not implemented | Every turn of every conversation, as typed, including statements that also became memories. |
 
 **The last row is the largest gap and it is not a small one.** `raw_artifacts`
 blobs are plaintext on disk. Anyone with the filesystem has the corpus, and
@@ -4179,6 +4182,40 @@ Put plainly: **somebody with database access and no master key cannot read your
 sentences, and can still learn what you think about, who with, when, and roughly
 in what terms.** Encrypting content is worth doing and it is not the same as
 being opaque.
+
+### How reads and writes see it
+
+M12.1. **Reads:** an ORM `do_orm_execute` hook (`adapters/db/plaintext.py`)
+decrypts `memories.content` and `memory_chunks.content` in every result: whole
+entities, the columns on their own, refreshes. It looks up the data keys for a
+page of results in one query and caches them for the session. A `TypeDecorator`
+could not do this, because it has no session; the hook does, and under asyncio
+it can run that second query. Two consequences for anyone writing a query:
+
+- **Select an id beside content.** `Memory.id` with `Memory.content`, and
+  `MemoryChunk.memory_id` (or `.id`) with `MemoryChunk.content`. Without one it
+  still works, by looking the ciphertext up (every envelope has a random nonce),
+  but that is a table scan.
+- **Do not compute on content in SQL.** `length(content)`, `content ~* …` and
+  `ORDER BY length(content)` run over ciphertext. M12.1 moved the two that
+  existed (decision suggestion and `doctor`) into Python.
+
+`KEEP_CIPHERTEXT` as an execution option returns the stored form, for code whose
+subject is the stored bytes: encrypting, shredding, rotating.
+
+**Writes:** content enters the database in one place, `NormalizeMemory`, which
+seals the memory's text and every chunk under the memory's data key before the
+insert. The plaintext never reaches a row, so it never reaches a dead tuple or
+the WAL either. The search vector is derived from the plaintext on the same
+statement. When unchanged text is adopted from an earlier version, its chunks
+are resealed under the new memory, because the seal binds the memory id. A
+`before_flush` guard refuses a plaintext write from any application session, so
+a second write path that forgets to encrypt fails at its first flush.
+
+A corpus encrypted before M12.1 may have no keyword index (migration 0034 could
+not derive one from ciphertext). `memoryos encrypt-existing --confirm` repairs
+it, along with encrypting anything stored in the meantime, and it is safe to
+re-run.
 
 ### The tsvector stopped being a generated column
 

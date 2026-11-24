@@ -17,9 +17,11 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from memoryos.adapters.db.models import Base
+from memoryos.adapters.db.plaintext import session_info
 from memoryos.adapters.db.scoping import CURRENT_USER_ID
 from memoryos.api.app import create_app
 from memoryos.config import Settings, get_settings
+from memoryos.crypto import Cipher, load_master_key
 
 # The account the signed-in `client` fixture uses. Not a secret and not
 # pretending to be one: it exists only inside a database that is truncated
@@ -268,8 +270,20 @@ async def sessions(
     """A session factory over a freshly emptied database.
 
     Code under test owns its own transactions; nothing here wraps them.
+
+    With the cipher the container gives every application session, so the suite
+    reads and writes through the same decryption the application does (M12.1).
+    Plaintext writes are allowed because many fixtures seed content directly,
+    the way a corpus from before encryption holds it; the application's own
+    sessions refuse them, and `test_encryption_path.py` tests that refusal.
     """
-    yield async_sessionmaker(engine, expire_on_commit=False)
+    yield async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+        info=session_info(
+            Cipher(master_key=load_master_key()), allow_plaintext_writes=True
+        ),
+    )
 
 
 @pytest.fixture

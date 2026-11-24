@@ -157,7 +157,14 @@ async def run_doctor(
         # tokenizer only confirms the suspects.
         candidates = (
             await session.execute(
-                select(models.MemoryChunk.id, models.MemoryChunk.content)
+                select(
+                    models.MemoryChunk.id,
+                    models.MemoryChunk.content,
+                    # Whose chunk it is, so the session can decrypt the text.
+                    # Tokenizing the ciphertext is what made this check report
+                    # 2,815 oversized chunks on an encrypted corpus (M12.1).
+                    models.MemoryChunk.memory_id,
+                )
                 .join(models.Memory, models.Memory.id == models.MemoryChunk.memory_id)
                 .where(
                     models.Memory.is_current.is_(True),
@@ -168,7 +175,7 @@ async def run_doctor(
 
         oversized = [
             str(chunk_id)
-            for chunk_id, content in candidates
+            for chunk_id, content, _memory_id in candidates
             if embedder.count_tokens(content) > window
         ]
         findings.append(
@@ -222,9 +229,17 @@ async def run_doctor(
             )
         )
 
-        empty = (
+        # Whether the text is blank is decided in Python: the content is
+        # encrypted, and the envelope of an empty file is not empty, so
+        # `length(trim(content)) > 0` in SQL flagged every empty `__init__.py`
+        # (M12.1).
+        unchunked = (
             await session.execute(
-                select(models.Memory.external_key)
+                select(
+                    models.Memory.external_key,
+                    models.Memory.content,
+                    models.Memory.id,
+                )
                 .outerjoin(
                     models.MemoryChunk,
                     models.MemoryChunk.memory_id == models.Memory.id,
@@ -233,12 +248,12 @@ async def run_doctor(
                     models.Memory.is_current.is_(True),
                     models.Memory.deleted_at.is_(None),
                     models.Memory.content.is_not(None),
-                    func.length(func.trim(models.Memory.content)) > 0,
                 )
                 .group_by(models.Memory.id, models.Memory.external_key)
                 .having(func.count(models.MemoryChunk.id) == 0)
             )
         ).all()
+        empty = [row for row in unchunked if (row[1] or "").strip()]
         findings.append(
             Finding(
                 check="memories_with_content_but_no_chunks",

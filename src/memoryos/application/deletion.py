@@ -998,13 +998,20 @@ async def _previews(
     limit = 5
     rows = (
         await session.execute(
-            select(models.Memory.title, models.Memory.content, models.Memory.external_key)
+            select(
+                models.Memory.title,
+                models.Memory.content,
+                models.Memory.external_key,
+                # Unused here, but it is how the read path knows whose content
+                # this is and therefore which key decrypts it.
+                models.Memory.id,
+            )
             .where(_matches_any(items[:limit]), models.Memory.is_current.is_(True))
             .order_by(models.Memory.external_key)
         )
     ).all()
     previews: list[str] = []
-    for title, content, key in rows:
+    for title, content, key, _id in rows:
         first = (content or "").strip().splitlines()
         text = title or (first[0] if first else key)
         previews.append(text[:120])
