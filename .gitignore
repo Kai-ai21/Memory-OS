@@ -55,3 +55,7 @@ var/*
 web/node_modules/
 web/dist/
 design/
+
+# M12.3: production secrets and backups never enter the repository.
+.env.production
+/backups/

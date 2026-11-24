@@ -1,0 +1,37 @@
+# MEMO's front door (M12.3).
+#
+# MEMO_DOMAIN is the public hostname. Caddy obtains and renews its certificate
+# from Let's Encrypt without an account email; port 80 only redirects. For a
+# local rehearsal set MEMO_DOMAIN=localhost and Caddy issues itself a
+# certificate from its own CA.
+#
+# No `email` global option: an empty one is a parse error, and the address is
+# optional to Let's Encrypt anyway (it only sends expiry notices).
+
+{$MEMO_DOMAIN} {
+	encode zstd gzip
+
+	# The API, under /api with the prefix stripped: its routes (/search,
+	# /memories, /auth/...) share names with the UI's pages.
+	handle_path /api/* {
+		reverse_proxy api:8000 {
+			# Streams (answers, live events) must not wait in a buffer.
+			flush_interval -1
+		}
+	}
+
+	# The UI: files if they exist, the app shell for every client-side route.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+		-Server
+	}
+}

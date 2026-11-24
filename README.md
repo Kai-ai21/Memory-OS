@@ -140,6 +140,13 @@ See [Vaults](#vaults) for how notes are dated and what `[[links]]` become. Any o
 directory works as `--kind filesystem`; either kind takes repeatable `--include` and
 `--exclude` globs, which replace that kind's defaults.
 
+### Deploying it
+
+[`deploy/README.md`](deploy/README.md) covers deploying to a single server with
+Docker Compose and HTTPS: environment variables, backups and restore, and what a
+deployment does and does not protect. Production refuses to start with a missing
+or default secret.
+
 ### When something is in the way
 
 | Symptom | Fix |
@@ -169,6 +176,7 @@ M12.1 fixed them.
 | `memoryos verify-replay` | Fails, unrelated to encryption: the rebuild aborts on a scanned PDF attachment that cannot be parsed. |
 | `memoryos graph verify` | Diverged: the graph is empty and Postgres has 320 memories. `memoryos graph rebuild` is the documented fix. |
 | Phases 4–8 on this corpus | Still starved. M12.2 built a vault connector to feed them, but no real vault has been ingested yet, so the timeline is one month, there are no gaps or patterns, and every user-model dimension reports insufficient evidence. See [Vaults](#vaults) for what a vault would and would not change. |
+| Deployment | Built and rehearsed (M12.3): production images, compose stack, backups, and a restore tested by destroying the volumes. **Not yet deployed to a public server.** See [deploy/README.md](deploy/README.md#what-was-verified). |
 | `make phase1-check`, `make restore`, `make full-check` | Start with `docker compose down -v` and never create an account, so on a fresh volume the first insert fails the `user_id` NOT NULL. `make reset` is the working path. |
 
 ## What genuinely works
@@ -338,7 +346,7 @@ retrospective are in the sections below, in the order they were built.
 | **9 — Interface** | M9.0–M9.6, M9.8–M9.12 | The UI in `web/`. Documented in its commit messages rather than here. |
 | **10 — Chat** | M10.0–M10.4 | Chat as the front door, sessions, attachments, streaming answers, removing a memory from chat. Commit messages. |
 | **11 — Accounts** | M11.0–M11.2 | [Authentication](#authentication), [User scoping](#user-scoping), [Encryption at rest](#encryption-at-rest) |
-| **12 — Operations** | M12.0–M12.2 | [Running MEMO](#running-memo), [Current state](#current-state), [How reads and writes see it](#how-reads-and-writes-see-it), [Vaults](#vaults) |
+| **12 — Operations** | M12.0–M12.3 | [Running MEMO](#running-memo), [Current state](#current-state), [How reads and writes see it](#how-reads-and-writes-see-it), [Vaults](#vaults), [deploy/README.md](deploy/README.md) |
 
 Not merged: M9.7 (branch `m9.7-polish`, superseded by M9.8 onward). Not built:
 M9.13 (density and reading) and M9.14 (responsive and accessibility); a density

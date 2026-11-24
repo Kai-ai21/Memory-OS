@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from memoryos.adapters.embedding.sentence_transformers import (
@@ -44,16 +44,40 @@ def _project_root() -> Path:
 PROJECT_ROOT = _project_root()
 
 
+#: The URLs a laptop uses. A production process given one of them was not
+#: configured; it fell through to the defaults.
+_DEVELOPMENT_DATABASE_URLS = frozenset(
+    {
+        "postgresql+asyncpg://memos_app:memos_app@localhost:5433/memos",
+        "postgresql+asyncpg://memos:memos@localhost:5433/memos",
+    }
+)
+
+
 class Settings(BaseSettings):
     # `env_file` is anchored for the same reason the paths below are, and the two
     # halves of the M10.3 failure were both here: run from `web/`, this file was
     # not found at all, so `MEMOS_BLOB_ROOT` went unread *and* the default it fell
     # back to resolved somewhere else.
     model_config = SettingsConfigDict(
-        env_file=PROJECT_ROOT / ".env", env_prefix="MEMOS_", extra="ignore"
+        env_file=PROJECT_ROOT / ".env",
+        env_prefix="MEMOS_",
+        extra="ignore",
+        # So `Settings(environment=...)` works beside the `MEMOS_ENV` alias.
+        populate_by_name=True,
     )
 
-    environment: str = "local"
+    # Where this process is running. `MEMOS_ENV` is the name the deployment
+    # uses (M12.3); `MEMOS_ENVIRONMENT` is the original and still works.
+    #
+    # `local` and `development` are a laptop: cookies without `Secure`, because
+    # browsers drop `Secure` cookies over plain HTTP. `test` is the suite's own
+    # database. `production` turns on every refusal in `_refuse_an_unsafe_
+    # production` below. Anything else is not a place this runs, and is refused
+    # at startup rather than treated as one of the others.
+    environment: Literal["local", "development", "test", "staging", "production"] = Field(
+        default="local", validation_alias=AliasChoices("MEMOS_ENV", "MEMOS_ENVIRONMENT")
+    )
 
     # **The application connects as `memos_app`, which is not a superuser, and
     # that is not cosmetic.** Row-level security is skipped entirely for
@@ -333,7 +357,11 @@ class Settings(BaseSettings):
     # something that follows, and a settable one is a way to be wrong.
     @property
     def session_cookie_secure(self) -> bool:
-        return self.environment not in ("local", "test")
+        return self.environment not in ("local", "development", "test")
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
 
     @model_validator(mode="after")
     def _anchor_relative_paths(self) -> "Settings":
@@ -352,6 +380,58 @@ class Settings(BaseSettings):
             self.blob_root = (PROJECT_ROOT / self.blob_root).resolve()
         if not self.hf_home.is_absolute():
             self.hf_home = (PROJECT_ROOT / self.hf_home).resolve()
+        return self
+
+    @model_validator(mode="after")
+    def _refuse_an_unsafe_production(self) -> "Settings":
+        """In production, a missing or default secret stops the process. (M12.3)
+
+        **A refusal, not a warning.** A warning is a line in a log nobody reads
+        until after the breach; a process that will not start is noticed by the
+        person deploying it, in the minute they deploy it. Every problem is
+        listed at once, so fixing them is one round trip rather than one each.
+
+        There is no session secret to require: sessions are 32 random bytes
+        stored as a SHA-256 (M11.0), so nothing signs them and nothing can be
+        forged by knowing a key. The secrets that do exist are below.
+        """
+        if not self.is_production:
+            return self
+        problems: list[str] = []
+        if not self.master_key.get_secret_value().strip():
+            problems.append(
+                "MEMOS_MASTER_KEY is not set; every memory is encrypted with it"
+            )
+        for name, url in (
+            ("MEMOS_DATABASE_URL", self.database_url),
+            ("MEMOS_DATABASE_ADMIN_URL", self.database_admin_url),
+        ):
+            if url in _DEVELOPMENT_DATABASE_URLS:
+                problems.append(f"{name} is the development default, password and all")
+            elif "@localhost" in url or "@127.0.0.1" in url:
+                problems.append(f"{name} points at localhost, which in a container is itself")
+        if self.neo4j_password in ("", "memoryos"):
+            problems.append("MEMOS_NEO4J_PASSWORD is the development default")
+        if not self.cors_origins:
+            problems.append(
+                "MEMOS_CORS_ORIGINS is empty; it must name the deployed frontend's origin"
+            )
+        for origin in self.cors_origins:
+            if not origin.startswith("https://"):
+                problems.append(
+                    f"MEMOS_CORS_ORIGINS includes {origin!r}; in production every "
+                    "origin is https"
+                )
+        if self.db_echo:
+            problems.append(
+                "MEMOS_DB_ECHO is on; it logs every statement, parameters included"
+            )
+        if problems:
+            raise ValueError(
+                "refusing to start in production:\n  - " + "\n  - ".join(problems)
+            )
+        # Structured logs are not optional where somebody else reads them.
+        self.log_json = True
         return self
 
     @model_validator(mode="after")

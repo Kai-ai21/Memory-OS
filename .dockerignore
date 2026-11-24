@@ -1,0 +1,16 @@
+# The build context is the repository; none of this belongs in an image.
+.git
+.venv
+.env
+.env.*
+**/__pycache__
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.hypothesis
+var
+web/node_modules
+web/dist
+clients/*/node_modules
+design
+*.dump
