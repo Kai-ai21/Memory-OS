@@ -9,24 +9,158 @@ plans several dependent retrievals and verifies every claim it makes against
 what it actually retrieved. Everything derived can be thrown away and rebuilt
 from the log, and the rebuild is proved identical rather than assumed.
 
-**Eight phases, one corpus: this repository, ingesting itself.** 282 memories,
-3,833 chunks, 12 recorded decisions. That last number is the single most
-important fact about everything below, and the rest of this section is organised
-around being honest about it.
+**Eight phases, one corpus: this repository, ingesting itself.** At the M8.2
+close-out (August 2026): 282 memories, 3,833 chunks, 12 recorded decisions. That
+last number is the single most important fact about everything below, and the
+rest of this section is organised around being honest about it.
+
+The measurements in the next three sections were produced by `make full-check`
+and `memoryos report --full` at M8.2. **They are a record, not the current state**:
+`make full-check` predates accounts (M11.1) and cannot complete today, and several
+of the numbers have since regressed. [Current state](#current-state) says which.
+
+## Running MEMO
+
+From a clean clone, on macOS or Linux.
+
+### Prerequisites
+
+- **Docker** (Docker Desktop on macOS), running. Postgres 17 + pgvector and Neo4j 5
+  run in containers on host ports **5433**, **7474** and **7687**.
+- **Python 3.12+** and **[uv](https://docs.astral.sh/uv/)**.
+- **Node 20.19+ or 22.12+** with npm (the UI is Vite 8).
+- About 2 GB of disk: the virtualenv is roughly 900 MB because of `torch`, and the
+  first run downloads ~90 MB of model weights into `var/hf`.
+
+### 1. `.env`
 
 ```bash
-make full-check        # from a destroyed volume, and it is the only claim here
-uv run memoryos report --full
+cp .env.example .env
 ```
 
-Every number on this page is what those two commands print. `make full-check`
-destroys the Docker volume, ingests, embeds, replays, proves the rebuild
-identical, restores the four tables no rebuild can reproduce, and then runs every
-check. It takes about forty minutes on a laptop.
+Every setting is a `MEMOS_` environment variable or a line in `.env`; the defaults
+point at the containers. Two matter on day one:
+
+- **`MEMOS_MASTER_KEY` — required.** Content is encrypted at rest and nothing starts
+  without it. Generate one and put it in `.env`:
+
+  ```bash
+  python3 -c "import os,base64; print(base64.b64encode(os.urandom(32)).decode())"
+  ```
+
+  **Keep a copy somewhere else.** There is no recovery: lose it and every encrypted
+  memory is unreadable. See [Encryption at rest](#encryption-at-rest).
+- **`MEMOS_GROQ_API_KEY`** (or `MEMOS_LLM_PROVIDER=gemini` with
+  `MEMOS_GEMINI_API_KEY`) — optional. Without one, search and ingestion work and
+  `ask`/chat say they need a key. If you set `MEMOS_GROQ_MODEL`, it must be a model
+  Groq still serves; the default is `openai/gpt-oss-120b`.
+
+### 2. Start it
+
+```bash
+make dev
+```
+
+One terminal, one command. It:
+
+1. checks that Docker is running, that ports 8000 and 5173 are free (and names the
+   command to free them if not), and that `MEMOS_MASTER_KEY` is usable;
+2. installs dependencies if `.venv` or `web/node_modules` is missing;
+3. starts Postgres and Neo4j and waits for their **healthchecks**, not a fixed sleep;
+4. applies pending migrations;
+5. runs the **API** (:8000, auto-reloading on changes under `src/`), the **worker**
+   and the **UI** (:5173), each line prefixed `api |`, `worker|` or `web |`;
+6. prints `MEMO is up in Ns → http://localhost:5173` once both answer.
+
+Ctrl-C stops the API, worker and UI, including uvicorn's reloader children, and
+checks that both ports are free again. If any one of the three dies on its own,
+the other two are stopped with it. The containers are left running so the next
+start is quick; `make stop` brings them down.
+
+Typical time to usable: about 6–9 seconds with the containers already up, about
+13 seconds when they have to start (images already pulled). The very first run
+also pulls the images and installs dependencies, which takes minutes.
+
+| Command | What it does |
+| --- | --- |
+| `make dev` | Everything above. |
+| `make stop` | Stops MEMO processes started from this checkout, then `docker compose down`. **Volumes are kept.** |
+| `make reset` | **Destroys both volumes** (asks you to type `reset` first), then migrates, creates an account, re-ingests this repository and re-embeds it. Several minutes. |
+| `make check` | The full verification block: containers, migrations, ruff, mypy, pytest, vitest, `tsc -b`, the build, API-type drift, `doctor`, `verify-replay`, `graph verify`, the retrieval evaluation, and an out-of-corpus question that must be refused. Runs every step and prints a pass/fail table. |
+| `make lint typecheck test` | The quick Python-only subset `make check` used to be. |
+
+### 3. Create an account
+
+Every row belongs to an account ([User scoping](#user-scoping)), so there is nothing
+to sign in to, and nothing can be ingested, until one exists:
+
+```bash
+uv run memoryos auth create-user --email you@example.com
+```
+
+It prompts for the password twice (twelve characters minimum; there is deliberately
+no `--password` flag). Sign in at http://localhost:5173 with that address. More
+accounts can be created the same way; with more than one, every CLI command needs
+`--user EMAIL`, and each account needs its own worker (see
+[The worker is per account](#the-worker-is-per-account)). Self-service registration
+in the UI is off unless `MEMOS_ALLOW_REGISTRATION=true`.
+
+### 4. First ingestion
+
+The UI starts empty. To ingest this repository, as every measurement here does:
+
+```bash
+uv run memoryos source add --kind filesystem --name self --root .
+uv run memoryos sync --source self --full
+```
+
+The worker that `make dev` runs then normalizes, chunks and embeds each file. To do
+that in the foreground instead and wait for it:
+
+```bash
+uv run memoryos worker --drain --only normalize_memory,embed_memory
+uv run memoryos stats
+```
+
+`--only` matters with an LLM key configured: embedding also queues one entity
+extraction per memory, and those are live model calls against a rate-limited free
+tier. Left to the background worker they finish eventually; drained in the
+foreground they can take hours. Point `--root` at any other directory to ingest
+your own notes, and drop files into the chat to add them one at a time.
+
+### When something is in the way
+
+| Symptom | Fix |
+| --- | --- |
+| `port 8000 (API) is already in use` | The message names the PID. `make stop` if it is an earlier MEMO, otherwise `kill <pid>`. |
+| `Docker is not running` | Start Docker Desktop (`open -a Docker`), then `make dev` again. |
+| `MEMOS_MASTER_KEY is not set` | Step 1. |
+| `port is already allocated` from Docker | Something else holds 5433, 7474 or 7687, often a local Postgres or Neo4j. |
+| `/health/ready` shows a null `pgvector_version` | The volume predates the init script: `make reset`, or see [Tests](#tests). |
+
+## Current state
+
+The M12.0 audit, 2026-11-24, on the development corpus (320 memories, 3,587 chunks,
+one account). Everything here was found by running `make check`'s steps; none of
+it is fixed yet.
+
+| Check | Result |
+| --- | --- |
+| ruff, mypy, pytest, vitest, `tsc -b`, build, `alembic check`, API types | **Pass.** One vitest case (`particles.test.tsx`, "never draws a particle above its own ceiling") takes ~2.6 s against a 5 s timeout and timed out once under load. |
+| **Encryption is applied only by `encrypt-existing`** | Nothing on the ingestion path encrypts: a fresh `make reset` corpus has 0 of 4,511 chunks encrypted. New memories, chat messages and uploads are stored in plaintext until `memoryos encrypt-existing --confirm` is run again. |
+| **Once encrypted, the read path returns ciphertext** | This development database *has* been through `encrypt-existing`. Search excerpts, reranker input and the passages sent to the model are `enc:v1:…` rather than text; nothing outside `application/encryption.py` decrypts. Vector search still works because the embeddings were computed from plaintext. |
+| **Keyword search is empty on the encrypted corpus** | 0 of 3,587 chunks have a `search_vector`, so hybrid retrieval is vector-only. On a fresh, unencrypted corpus all 4,511 chunks have one. |
+| `memoryos evaluate --compare var/baseline-hybrid.json` | On the development database: recall@10 **0.479** (baseline 0.863), MRR **0.443** (0.762), nDCG@10 **0.373** (0.744); 40 judged items point at the root `README.md`, which that corpus does not contain. On a fresh `make reset` corpus: recall@10 **0.595**, MRR **0.704**, nDCG@10 **0.547**, close to the M8.2 figures below. |
+| `memoryos ask "what is our AWS billing setup"` | **Did not refuse.** It failed: `.env` pins a Groq model that no longer exists (404). With the default model it does refuse, but the model only received ciphertext passages, so the refusal shows nothing about grounding. |
+| `memoryos doctor` | Fails, falsely: it tokenizes ciphertext, so it reports 2,815 chunks over the model window and 22 empty files with "no chunks". |
+| `memoryos verify-replay` | Fails. A chat upload's blob was in `web/var/blobs` (the M10.3 cwd bug); with that copied back, the rebuild aborts on a scanned PDF attachment that cannot be parsed. |
+| `memoryos graph verify` | Diverged: the graph is empty and Postgres has 320 memories. `memoryos graph rebuild` is the documented fix. |
+| `make phase1-check`, `make restore`, `make full-check` | Start with `docker compose down -v` and never create an account, so on a fresh volume the first insert fails the `user_id` NOT NULL. Not run, because they destroy the volume. `make reset` is the working path. |
 
 ## What genuinely works
 
-Measured, on this corpus, with the command that produces the number.
+Measured at M8.2, on this corpus, with the command that produces the number.
+The replay, retrieval and graph rows do not hold today; see [Current state](#current-state).
 
 | Capability | Evidence |
 | --- | --- |
@@ -173,7 +307,8 @@ For the full account, see [docs/RETROSPECTIVE.md](docs/RETROSPECTIVE.md).
 
 ## Status
 
-Phases 1 through 8 complete. Every milestone's design notes, measurements and
+Phases 1 through 8 complete, followed by a web interface, chat, and accounts
+(Phases 9–11, below the table). Every milestone's design notes, measurements and
 retrospective are in the sections below, in the order they were built.
 
 | Phase | Milestones | Section |
@@ -186,6 +321,15 @@ retrospective are in the sections below, in the order they were built.
 | **6 — Proactivity** | M6.0–M6.3 | [Events](#events), [Surfacing](#surfacing), [Phase 6 retrospective](#phase-6-retrospective) |
 | **7 — Agent** | M7.0–M7.3 | [Agent tools](#agent-tools), [Trajectory evaluation](#trajectory-evaluation), [Phase 7 retrospective](#phase-7-retrospective) |
 | **8 — The model of you** | M8.0–M8.2 | [The user model](#the-user-model), [Gap analysis](#gap-analysis), [Model evolution](#model-evolution) |
+| **9 — Interface** | M9.0–M9.6, M9.8–M9.12 | The UI in `web/`. Documented in its commit messages rather than here. |
+| **10 — Chat** | M10.0–M10.4 | Chat as the front door, sessions, attachments, streaming answers, removing a memory from chat. Commit messages. |
+| **11 — Accounts** | M11.0–M11.2 | [Authentication](#authentication), [User scoping](#user-scoping), [Encryption at rest](#encryption-at-rest) |
+| **12 — Operations** | M12.0 | [Running MEMO](#running-memo), [Current state](#current-state) |
+
+Not merged: M9.7 (branch `m9.7-polish`, superseded by M9.8 onward). Not built:
+M9.13 (density and reading) and M9.14 (responsive and accessibility); a density
+setting, a reading-width token, a skip link and reduced-motion handling exist from
+earlier milestones, but there are no responsive breakpoints.
 
 Point it at a directory and it walks the tree, hashes every file, stores the bytes, records
 artifacts and events, versions memories, parses each artifact into normalized text, splits that
@@ -218,14 +362,18 @@ to make that class of defect loud next time.
 
 ### End to end from a clean checkout
 
+The Phase 1 sequence, as it has to be run since accounts (M11.1) — with
+`MEMOS_MASTER_KEY` set as in [Running MEMO](#running-memo):
+
 ```bash
-docker compose up -d && sleep 8      # Postgres 17 + pgvector on host port 5433
+docker compose up -d --wait          # Postgres 17 + pgvector on host port 5433, and Neo4j
 uv sync --frozen --extra dev
 uv run alembic upgrade head
+uv run memoryos auth create-user --email you@example.com
 
 uv run memoryos source add --kind filesystem --name self --root .
 uv run memoryos sync --source self --full
-uv run memoryos worker --drain
+uv run memoryos worker --drain --only normalize_memory,embed_memory
 
 uv run memoryos stats
 uv run memoryos doctor
@@ -233,11 +381,9 @@ uv run memoryos search "how a worker takes a task and holds it" -k 5
 uv run memoryos verify-replay
 ```
 
-Or in one command, which is the same sequence plus a fresh volume and both replay modes:
-
-```bash
-make phase1-check
-```
+`make phase1-check` was the one-command version of this. It predates accounts and
+does not create one, so on its fresh volume it fails at `source add`; see
+[Current state](#current-state).
 
 First run downloads ~90MB of model weights into `MEMOS_HF_HOME` (default `./var/hf`), and the
 virtualenv is roughly 900MB because of `torch`.
@@ -774,7 +920,7 @@ uses and documented long before it became a test case.
 ## Search interface
 
 ```bash
-make dev     # API on :8000 with CORS for the UI, and Vite on :5173
+make dev     # containers, migrations, API on :8000, worker, and Vite on :5173
 make web     # just the UI
 make types   # regenerate web/src/api/schema.d.ts from the routes
 make test-web
@@ -1824,7 +1970,7 @@ M4.1 puts the temporal layer on screen. Three endpoints over `application.tempor
 else — `/timeline`, `/memories/at`, `/gaps` — and a `timeline` tab beside search.
 
 ```bash
-make dev                                   # API on :8000, UI on :5173
+make dev                                   # API on :8000, worker, UI on :5173
 open http://localhost:5173/timeline?period=day
 ```
 
@@ -3721,21 +3867,20 @@ and it is the whole of it.
 
 It is **not** multi-tenant isolation, and the distinction is not pedantic:
 
-- **Nothing is scoped to a user.** Every memory, decision, chunk and chat
-  message in the database is unowned. There is no `user_id` on any of them and
-  no query filters by one. If a second account existed it would read everything
-  the first one wrote. That is why a second account cannot be created — the
-  system is single-user because the *data model* is single-user, not because
-  nobody got around to a registration form. Scoping is M11.1 and is only worth
-  building if this is ever deployed somewhere with more than one person.
+- **When M11.0 shipped, nothing was scoped to a user.** Every row was unowned,
+  so a second account would have read everything the first one wrote, and
+  `create-user` refused to make one. M11.1 changed that: every row now has an
+  owner enforced by Postgres row-level security, and more than one account is
+  allowed. See [User scoping](#user-scoping).
 - **The CLI is not authenticated and cannot be.** `memoryos` commands open the
   database directly and never speak HTTP, so the API's gate is not on the path.
   Anybody with shell access to the machine and the connection string has the
   whole corpus, with or without a password. On a local single-user system that
   is not a gap — it is the same person — but on a shared machine the login is
   worth exactly as much as the filesystem permissions under it.
-- **The database is not encrypted at rest.** A stolen disk is a read of
-  everything. The password protects the interface, not the bytes.
+- **Encryption at rest came later, in M11.2**, and covers memory and chunk
+  content but not everything: see [Encryption at rest](#encryption-at-rest) for
+  what a stolen disk still reveals.
 - **The rate limiter is in-process.** One uvicorn worker means one counter;
   running two workers means two counters and ten attempts per window rather
   than five. Fine for this deployment, wrong for any deployment with a load
@@ -3757,8 +3902,8 @@ user on the machine for as long as the process runs. Minimum twelve characters,
 and nothing else — composition rules push people toward `Password1!`, and
 length is the only requirement that reliably buys entropy.
 
-A second `create-user` is refused, naming the account that exists. To change the
-password:
+A second `create-user` for the *same* address is refused, naming it; other
+addresses get their own account (M11.1). To change a password:
 
 ```bash
 uv run memoryos auth reset-password --email you@example.com
@@ -3973,6 +4118,11 @@ hard one — an append-only log and permanent deletion are in direct conflict, a
 M1.1's resolution was crypto-shredding. This is it.
 
 ### The shape
+
+**As built, encryption is applied by `memoryos encrypt-existing --confirm`, not on
+write.** New memories are stored in plaintext until that command is run again, and
+once content is encrypted the search and answer paths do not decrypt it. See
+[Current state](#current-state).
 
 Envelope encryption. Each memory gets a random 256-bit data key; content is
 encrypted with it; the key is encrypted under a master key from
@@ -6377,6 +6527,10 @@ hash.
 
 ## Endpoints
 
+The routes through Phase 6. Later ones (auth, chat, sessions, attachments, the
+agent, the user model) are not listed here; http://localhost:8000/docs lists every
+route the running API serves.
+
 | Endpoint                   | Purpose                                                    |
 | -------------------------- | ---------------------------------------------------------- |
 | `/health/live`             | Liveness. Never touches external dependencies.              |
@@ -6445,25 +6599,15 @@ Liveness stays dependency-free on purpose: a database blip should not cause an o
 kill otherwise-healthy containers. Readiness is the endpoint that checks dependencies, and
 returns `503` when the database is unreachable or `pgvector` is not installed.
 
-## Prerequisites
+## Prerequisites and quickstart
 
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/) (dependency resolution and virtualenv management)
-- Docker (for Postgres and Neo4j)
-
-## Quickstart
-
-```bash
-make up        # Postgres 17 + pgvector on 5433, Neo4j 5 on 7474 and 7687
-make install   # uv sync --frozen --extra dev
-make check     # ruff + mypy --strict + pytest
-make run       # uvicorn on http://localhost:8000
-```
+Moved to the top: [Running MEMO](#running-memo). In short, `cp .env.example .env`,
+set `MEMOS_MASTER_KEY`, then `make dev`.
 
 Host port `5433` is deliberate, so the container does not collide with a local Postgres on
-`5432`.
-
-Copy `.env.example` to `.env` to override defaults. All settings use the `MEMOS_` prefix.
+`5432`. The individual pieces `make dev` combines still exist on their own: `make up`
+(containers), `make install` (`uv sync`), `make run` (the API alone, reloading),
+`make worker`, `make web` (the UI alone).
 
 ## Tests
 
