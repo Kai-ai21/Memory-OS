@@ -1,0 +1,162 @@
+# MEMO in production (M12.3). One host, Docker Compose.
+#
+#   docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+#
+# `--env-file` is what fills the ${...} below; `.env.production` is created on
+# the server from `deploy/env.production.example` and never committed. Every
+# `:?` makes a missing secret stop `docker compose` before anything starts.
+#
+# Only `web` publishes ports. Postgres, Neo4j and the API are reachable only on
+# the private network, so the only way in is through Caddy and the login.
+
+name: memo
+
+x-app: &app
+  image: memo-app:${MEMO_VERSION:-latest}
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  networks: [memo]
+  volumes:
+    - blobs:/data/blobs
+  environment: &app-env
+    MEMOS_ENV: production
+    MEMOS_MASTER_KEY: ${MEMOS_MASTER_KEY:?set MEMOS_MASTER_KEY in .env.production}
+    MEMOS_DATABASE_URL: postgresql+asyncpg://memos_app:${MEMOS_APP_DB_PASSWORD:?}@postgres:5432/memos
+    MEMOS_DATABASE_ADMIN_URL: postgresql+asyncpg://memos:${POSTGRES_PASSWORD:?}@postgres:5432/memos
+    MEMOS_NEO4J_URI: bolt://neo4j:7687
+    MEMOS_NEO4J_PASSWORD: ${MEMOS_NEO4J_PASSWORD:?}
+    MEMOS_CORS_ORIGINS: '["https://${MEMO_DOMAIN:?}"]'
+    MEMOS_ALLOW_REGISTRATION: ${MEMOS_ALLOW_REGISTRATION:-false}
+    MEMOS_LLM_PROVIDER: ${MEMOS_LLM_PROVIDER:-groq}
+    MEMOS_GROQ_API_KEY: ${MEMOS_GROQ_API_KEY:-}
+    MEMOS_GROQ_MODEL: ${MEMOS_GROQ_MODEL:-openai/gpt-oss-120b}
+    MEMOS_GEMINI_API_KEY: ${MEMOS_GEMINI_API_KEY:-}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    networks: [memo]
+    environment:
+      POSTGRES_USER: memos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
+      POSTGRES_DB: memos
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Only the extension: the development init script also makes a test database.
+      - ./deploy/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memos -d memos"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  neo4j:
+    image: neo4j:5-community
+    restart: unless-stopped
+    networks: [memo]
+    environment:
+      NEO4J_AUTH: neo4j/${MEMOS_NEO4J_PASSWORD:?}
+      MEMOS_NEO4J_PASSWORD: ${MEMOS_NEO4J_PASSWORD:?}
+      NEO4J_server_memory_heap_max__size: 512M
+      NEO4J_server_memory_pagecache_size: 256M
+    volumes:
+      - neo4jdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", 'cypher-shell -u neo4j -p "$${MEMOS_NEO4J_PASSWORD}" "RETURN 1" || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # Migrations run to completion before the new version serves anything: `api`
+  # and `worker` wait on this exiting 0, and a failed migration leaves the old
+  # containers serving and the new ones never started.
+  migrate:
+    <<: *app
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *app-env
+      # Read once, by migration 0032, to create the application role.
+      MEMOS_APP_DB_PASSWORD: ${MEMOS_APP_DB_PASSWORD:?}
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    <<: *app
+    environment:
+      <<: *app-env
+      # Only Caddy's address may set X-Forwarded-For. Anyone else's header is
+      # ignored, so the login rate limiter sees real clients, not the proxy.
+      MEMOS_TRUSTED_PROXIES: 172.30.0.10
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      neo4j: { condition: service_healthy }
+
+  # A separate, supervised process: not something to remember to start.
+  worker:
+    <<: *app
+    command: ["memoryos", "worker"]
+    healthcheck:
+      disable: true
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      neo4j: { condition: service_healthy }
+
+  web:
+    image: memo-web:${MEMO_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: deploy/web.Dockerfile
+    restart: unless-stopped
+    networks:
+      memo:
+        ipv4_address: 172.30.0.10
+    ports:
+      - "${MEMO_HTTP_PORT:-80}:80"
+      - "${MEMO_HTTPS_PORT:-443}:443"
+      - "${MEMO_HTTPS_PORT:-443}:443/udp"
+    environment:
+      MEMO_DOMAIN: ${MEMO_DOMAIN:?}
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api: { condition: service_healthy }
+
+  # Nightly by default: a pg_dump and the blob store, kept for 14 days. See
+  # deploy/backup.sh, and deploy/restore.sh for the way back.
+  backup:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    networks: [memo]
+    entrypoint: ["/bin/sh", "/deploy/backup.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: memos
+      PGDATABASE: memos
+      PGPASSWORD: ${POSTGRES_PASSWORD:?}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
+    volumes:
+      - ./deploy/backup.sh:/deploy/backup.sh:ro
+      - blobs:/data/blobs:ro
+      - ${MEMO_BACKUP_DIR:-./backups}:/backups
+    depends_on:
+      postgres: { condition: service_healthy }
+
+networks:
+  memo:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  pgdata:
+  neo4jdata:
+  blobs:
+  caddy_data:
+  caddy_config:

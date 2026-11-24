@@ -74,11 +74,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # alternative — decorating each protected route — fails silently in the one
     # direction that matters, because the endpoint somebody forgets is the
     # endpoint that leaks.
+    # In production the API's description is not published (M12.3). The routes
+    # are protected either way; the schema is a map of them, and on the
+    # internet there is no reason to hand one to whoever asks. `make types`
+    # dumps it from a local app, so nothing that needs it loses it.
+    published = not resolved.is_production
     app = FastAPI(
         title="Memory Intelligence OS",
         version="0.1.0",
         lifespan=lifespan,
         dependencies=[Depends(require_session)],
+        docs_url="/docs" if published else None,
+        redoc_url="/redoc" if published else None,
+        openapi_url="/openapi.json" if published else None,
     )
     _install_cors(app, resolved)
     app.include_router(health.router)
