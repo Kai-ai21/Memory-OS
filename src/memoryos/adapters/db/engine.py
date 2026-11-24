@@ -14,6 +14,11 @@ from sqlalchemy.ext.asyncio import (
 # way to obtain one without having loaded the thing that scopes it.
 from memoryos.adapters.db import scoping as _scoping  # noqa: F401
 
+# The same, for encryption (M12.1): every session decrypts what it reads and
+# refuses to write plaintext, given the cipher below.
+from memoryos.adapters.db.plaintext import session_info
+from memoryos.crypto import Cipher
+
 
 @dataclass(slots=True)
 class Database:
@@ -21,11 +26,15 @@ class Database:
     session_factory: async_sessionmaker[AsyncSession]
 
     @classmethod
-    def from_url(cls, url: str, *, echo: bool = False) -> "Database":
+    def from_url(
+        cls, url: str, *, echo: bool = False, cipher: Cipher | None = None
+    ) -> "Database":
         engine = create_async_engine(url, echo=echo, pool_pre_ping=True)
         return cls(
             engine=engine,
-            session_factory=async_sessionmaker(engine, expire_on_commit=False),
+            session_factory=async_sessionmaker(
+                engine, expire_on_commit=False, info=session_info(cipher)
+            ),
         )
 
     async def session(self) -> AsyncIterator[AsyncSession]:

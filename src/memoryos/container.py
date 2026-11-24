@@ -101,7 +101,13 @@ class Container:
 
     @classmethod
     def build(cls, settings: Settings) -> "Container":
-        database = Database.from_url(settings.database_url, echo=settings.db_echo)
+        # The key first: nothing starts without it (M11.2), and every session the
+        # database opens carries the cipher so it can decrypt what it reads
+        # (M12.1).
+        cipher = Cipher(master_key=load_master_key(settings=settings))
+        database = Database.from_url(
+            settings.database_url, echo=settings.db_echo, cipher=cipher
+        )
         blobs = FilesystemBlobStore(settings.blob_root)
         embedder = build_embedder(settings)
         # Sized from the model's real window, not from a number somebody chose.
@@ -147,7 +153,7 @@ class Container:
             # hash, not per instance, so the CLI and the API both get one for
             # nothing even when neither will use it.
             password_hasher=Argon2PasswordHasher(),
-            cipher=Cipher(master_key=load_master_key(settings=settings)),
+            cipher=cipher,
         )
 
     def registry(self) -> HandlerRegistry:
@@ -474,7 +480,9 @@ class Container:
                 enqueue_followup=False,
             ),
             make_shadow=lambda: PostgresShadowSchema(
-                self.settings.database_url, echo=self.settings.db_echo
+                self.settings.database_url,
+                echo=self.settings.db_echo,
+                cipher=self.cipher,
             ),
             blobs=self.blobs,
             # A full replay clears the graph along with the derived tables. See

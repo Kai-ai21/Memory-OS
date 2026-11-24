@@ -16,6 +16,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from memoryos.adapters.db import models
+from memoryos.adapters.db.plaintext import KEEP_CIPHERTEXT
 from memoryos.application.encryption import (
     KeyDestroyed,
     KeyStore,
@@ -247,7 +248,10 @@ async def test_rotation_preserves_access_and_retires_the_old_key(
 
     ciphertext_before = (
         await session.execute(
-            select(models.Memory.content).where(models.Memory.id == memory_id)
+            select(models.Memory.content)
+            .where(models.Memory.id == memory_id)
+            # The stored form: what these tests are about is the ciphertext.
+            .execution_options(**{KEEP_CIPHERTEXT: True})
         )
     ).scalar_one()
 
@@ -259,7 +263,10 @@ async def test_rotation_preserves_access_and_retires_the_old_key(
     # The content is byte-identical: rotation re-wrapped the key, not the data.
     ciphertext_after = (
         await session.execute(
-            select(models.Memory.content).where(models.Memory.id == memory_id)
+            select(models.Memory.content)
+            .where(models.Memory.id == memory_id)
+            # The stored form: what these tests are about is the ciphertext.
+            .execution_options(**{KEEP_CIPHERTEXT: True})
         )
     ).scalar_one()
     assert ciphertext_after == ciphertext_before
@@ -288,7 +295,10 @@ async def test_a_tampered_ciphertext_is_refused_rather_than_decrypted(
 
     stored = (
         await session.execute(
-            select(models.Memory.content).where(models.Memory.id == memory_id)
+            select(models.Memory.content)
+            .where(models.Memory.id == memory_id)
+            # The stored form: what these tests are about is the ciphertext.
+            .execution_options(**{KEEP_CIPHERTEXT: True})
         )
     ).scalar_one()
 
@@ -314,7 +324,10 @@ async def test_encrypting_is_idempotent_and_therefore_resumable(
     await session.commit()
     once = (
         await session.execute(
-            select(models.Memory.content).where(models.Memory.id == memory_id)
+            select(models.Memory.content)
+            .where(models.Memory.id == memory_id)
+            # The stored form: what these tests are about is the ciphertext.
+            .execution_options(**{KEEP_CIPHERTEXT: True})
         )
     ).scalar_one()
 
@@ -322,7 +335,10 @@ async def test_encrypting_is_idempotent_and_therefore_resumable(
     await session.commit()
     twice = (
         await session.execute(
-            select(models.Memory.content).where(models.Memory.id == memory_id)
+            select(models.Memory.content)
+            .where(models.Memory.id == memory_id)
+            # The stored form: what these tests are about is the ciphertext.
+            .execution_options(**{KEEP_CIPHERTEXT: True})
         )
     ).scalar_one()
 

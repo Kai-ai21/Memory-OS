@@ -38,7 +38,7 @@ from uuid import UUID
 
 import structlog
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -86,6 +86,14 @@ _FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
 # it filters import blocks and one-line helpers, which cost a request each and
 # return nothing.
 MIN_PASSAGE_CHARS = 320
+#: The comparative constructions a decision is written in. Not a classifier —
+#: a way of not paying for chunks that cannot possibly match. Case-insensitive,
+#: as Postgres's `~*` was when this ran in SQL.
+COMPARATIVE = re.compile(
+    r"(rather than|instead of|in favou?r of|opted for|we chose|"
+    r"we decided|the decision to|trade-?off|over [A-Z])",
+    re.IGNORECASE,
+)
 
 _SYSTEM = """\
 You find records of DECISIONS in text. You return JSON and nothing else.
@@ -190,9 +198,14 @@ async def find_passages(
         models.DecisionSuggestion.chunk_ordinal,
     ).subquery()
 
+    # **The text filters run in Python, not in SQL (M12.1).** Chunk content is
+    # encrypted at rest, so `length(content)` and `content ~* …` in Postgres
+    # measured and matched base64 — every chunk long enough, none containing
+    # "rather than". The structural filters stay in SQL; the ones that read the
+    # words run over what the session decrypted.
     stmt = (
         select(
-            models.Memory.id,
+            models.MemoryChunk.memory_id,
             models.MemoryChunk.id,
             models.Source.name,
             models.Memory.external_key,
@@ -204,14 +217,6 @@ async def find_passages(
         .where(
             models.Memory.is_current.is_(True),
             models.Memory.deleted_at.is_(None),
-            func.length(models.MemoryChunk.content) >= MIN_PASSAGE_CHARS,
-            # The comparative constructions a decision is written in. Not a
-            # classifier — it is a way of not paying for chunks that cannot
-            # possibly match.
-            models.MemoryChunk.content.op("~*")(
-                r"(rather than|instead of|in favou?r of|opted for|we chose|"
-                r"we decided|the decision to|trade-?off|over [A-Z])"
-            ),
             ~select(1)
             .select_from(reviewed)
             .where(
@@ -221,17 +226,22 @@ async def find_passages(
             )
             .exists(),
         )
-        # Longest first. A longer passage is likelier to hold both halves of a
-        # decision, and a first run with a small limit should see the best
-        # candidates rather than an arbitrary slice.
-        .order_by(func.length(models.MemoryChunk.content).desc())
-        .limit(limit)
     )
     if source is not None:
         stmt = stmt.where(models.Source.name == source)
 
     async with session_factory() as session:
         rows = list(await session.execute(stmt))
+
+    candidates = [
+        row
+        for row in rows
+        if len(row[5]) >= MIN_PASSAGE_CHARS and COMPARATIVE.search(row[5])
+    ]
+    # Longest first. A longer passage is likelier to hold both halves of a
+    # decision, and a first run with a small limit should see the best
+    # candidates rather than an arbitrary slice.
+    candidates.sort(key=lambda row: len(row[5]), reverse=True)
 
     return [
         Passage(
@@ -242,7 +252,7 @@ async def find_passages(
             ordinal=row[4],
             text=row[5],
         )
-        for row in rows
+        for row in candidates[:limit]
     ]
 
 

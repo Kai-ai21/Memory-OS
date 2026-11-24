@@ -1,16 +1,26 @@
 """Using the keys: encrypting a memory, shredding one, rotating the master key.
 
-**Encryption here is explicit, not transparent, and that is a finding rather
-than a shortcut.** A SQLAlchemy `TypeDecorator` would make encrypted columns
-invisible to the fifty-nine modules that read them — the trick M11.1 used for
-scoping — but it cannot work here. Decrypting needs this memory's data key, the
-key lives in another table, and a type decorator runs inside result processing
-where there is no session and no way to await a lookup.
+**M11.2 concluded that decryption could not be transparent, and was half
+right.** A SQLAlchemy `TypeDecorator` cannot do it: decrypting needs this
+memory's data key, the key lives in another table, and a type decorator runs
+inside result processing with no session and no way to look anything up. So
+encryption was to happen "at named boundaries" — and none were named, which is
+how M11.2 shipped a corpus whose search excerpts, reranker input and model
+context were all base64.
 
-The alternative is to put the wrapped key in the ciphertext itself, and that
-destroys the entire point: a backup would then carry the key next to the data it
-unlocks, and shredding one row in `memory_keys` would protect nothing. So the
-lookup is unavoidable, and encryption happens at named boundaries.
+The other half is `adapters/db/plaintext.py` (M12.1). An ORM `do_orm_execute`
+hook *does* have a session, and under asyncio it runs in the greenlet that can
+issue one more query: a batched lookup of the keys for whatever the first query
+returned. Every session the application opens decrypts what it reads, the same
+way M11.1 made every session scoped. Putting the wrapped key in the ciphertext
+instead would have been simpler and would have destroyed the point — a backup
+would carry the key beside the data it unlocks, and shredding one row in
+`memory_keys` would protect nothing.
+
+What stays here is the stored form: sealing content as it is written
+(`Sealer`), encrypting an existing corpus (`encrypt_memory`), shredding, and
+rotation. Those read with `KEEP_CIPHERTEXT`, because the stored bytes are what
+they are about.
 """
 
 from dataclasses import dataclass
@@ -22,6 +32,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memoryos.adapters.db import models
+from memoryos.adapters.db.plaintext import KEEP_CIPHERTEXT, cipher_of, forget_key
 from memoryos.crypto import (
     ALGORITHM,
     Cipher,
@@ -102,6 +113,9 @@ class KeyStore:
             .returning(models.MemoryKey.memory_id)
         )
         destroyed = result.first() is not None
+        # The session caches unwrapped keys so a page of results costs one key
+        # query; a shredded key must not outlive the shred in that cache.
+        forget_key(self.session, memory_id)
         if destroyed:
             logger.info("encryption.key_destroyed", memory_id=str(memory_id))
         return destroyed
@@ -114,6 +128,43 @@ class KeyStore:
                 )
             )
         ).scalar_one_or_none()
+
+
+@dataclass(frozen=True, slots=True)
+class Sealer:
+    """Encrypts one memory's text at the moment it is written (M12.1).
+
+    M11.2 encrypted content only when somebody ran `encrypt-existing`, so every
+    memory ingested afterwards was stored in plaintext until the next run. This
+    is the write half that was missing: `NormalizeMemory` asks for one per
+    memory and seals the memory's text and every chunk before the rows are
+    inserted, so the plaintext never reaches a heap tuple or the WAL.
+
+    Inactive for a session without a cipher, which only a test or a hand-built
+    engine has; every session from the container carries one.
+    """
+
+    memory_id: UUID
+    cipher: Cipher | None
+    data_key: bytes | None
+
+    @property
+    def active(self) -> bool:
+        return self.cipher is not None and self.data_key is not None
+
+    def seal(self, plaintext: str) -> str:
+        if self.cipher is None or self.data_key is None:
+            return plaintext
+        return self.cipher.encrypt(plaintext, self.data_key, self.memory_id)
+
+
+async def sealer_for(session: AsyncSession, memory_id: UUID) -> Sealer:
+    """The sealer for one memory, creating its data key if it has none."""
+    cipher = cipher_of(session)
+    if cipher is None:
+        return Sealer(memory_id=memory_id, cipher=None, data_key=None)
+    data_key = await KeyStore(session, cipher).ensure(memory_id)
+    return Sealer(memory_id=memory_id, cipher=cipher, data_key=data_key)
 
 
 async def encrypt_memory(
@@ -133,7 +184,13 @@ async def encrypt_memory(
     store = KeyStore(session, cipher)
     memory = (
         await session.execute(
-            select(models.Memory).where(models.Memory.id == memory_id)
+            select(models.Memory)
+            .where(models.Memory.id == memory_id)
+            # The stored form, not the decrypted one the read path would hand
+            # back: this function's question is "is it encrypted yet?", and
+            # `populate_existing` stops an instance this session already
+            # decrypted from answering "no" (M12.1).
+            .execution_options(populate_existing=True, **{KEEP_CIPHERTEXT: True})
         )
     ).scalar_one_or_none()
     if memory is None or memory.content is None:
@@ -148,9 +205,9 @@ async def encrypt_memory(
     chunks = (
         (
             await session.execute(
-                select(models.MemoryChunk).where(
-                    models.MemoryChunk.memory_id == memory_id
-                )
+                select(models.MemoryChunk)
+                .where(models.MemoryChunk.memory_id == memory_id)
+                .execution_options(populate_existing=True, **{KEEP_CIPHERTEXT: True})
             )
         )
         .scalars()
